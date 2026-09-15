@@ -1,4 +1,21 @@
-# docx-fixer
+# workspace-migration-toolkit
+
+Tools for migrating Microsoft Office documents to Google Workspace without the
+formatting falling apart.
+
+Built during a UK multi-academy trust's M365 → Google Workspace migration.
+Currently one working tool, with research and plans for the rest:
+
+| Tool | Format | Status |
+|---|---|---|
+| **docx-fixer** (below) | Word → Docs | **Working**, in production use |
+| pptx media extractor | PowerPoint → Slides | Planned — [design](docs/research.md#powerpoint--google-slides) |
+| xlsx estate analyser | Excel → Sheets | Planned — [design](docs/research.md#excel--google-sheets) |
+| pub triage | Publisher → Slides/PDF | Planned — [⚠️ time-critical](docs/research.md#-time-critical-microsoft-publisher-retires-1-october-2026) |
+
+---
+
+## docx-fixer
 
 Repair `.docx` files so they survive import into Google Docs.
 
