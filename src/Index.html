@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 480px; margin: 60px auto; color: #202124; }
+    h2 { font-weight: 500; }
+    #dropzone {
+      border: 2px dashed #9aa0a6; border-radius: 8px; padding: 40px 20px;
+      text-align: center; color: #5f6368; cursor: pointer; transition: background 0.15s;
+    }
+    #dropzone.hover { background: #f1f3f4; border-color: #1a73e8; }
+    #status { margin-top: 20px; font-size: 14px; }
+    #status.error { color: #c5221f; }
+    #status a { color: #1a73e8; font-weight: 500; }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px; border: 2px solid #dadce0;
+      border-top-color: #1a73e8; border-radius: 50%; animation: spin 0.8s linear infinite;
+      vertical-align: middle; margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    input[type=file] { display: none; }
+  </style>
+</head>
+<body>
+  <h2>Docx &rarr; Google Docs Fixer</h2>
+  <p style="color:#5f6368; font-size:14px;">
+    Upload a .docx file. It'll be repaired (floating text boxes, legacy images,
+    stray page backgrounds) and opened as a clean, editable Google Doc.
+  </p>
+  <div id="dropzone">
+    <div id="dropzoneText">Click to choose a .docx file, or drag one here</div>
+    <input type="file" id="fileInput" accept=".docx">
+  </div>
+  <div id="status"></div>
+
+  <script>
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const status = document.getElementById('status');
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('hover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('hover'));
+    dropzone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropzone.classList.remove('hover');
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length) handleFile(fileInput.files[0]);
+    });
+
+    function handleFile(file) {
+      if (!file.name.toLowerCase().endsWith('.docx')) {
+        status.className = 'error';
+        status.textContent = 'Please choose a .docx file.';
+        return;
+      }
+      status.className = '';
+      status.innerHTML = '<span class="spinner"></span>Fixing "' + file.name + '" and converting to a Google Doc...';
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1];
+        google.script.run
+          .withSuccessHandler(res => {
+            status.innerHTML = '&#9989; Done &mdash; <a href="' + res.url + '" target="_blank">open the converted document</a>';
+          })
+          .withFailureHandler(err => {
+            status.className = 'error';
+            status.textContent = 'Something went wrong: ' + (err.message || err);
+          })
+          .processUpload(base64, file.name);
+      };
+      reader.readAsDataURL(file);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Never commit real documents -- they may contain personal data
+*.docx
+*.doc
+*.pptx
+*.ppt
+*.xlsx
+*.xls
+*.pub
+*.pdf
+samples/
+
+# clasp
+.clasp.json
+.clasprc.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Local agent/session config
+.claude/
