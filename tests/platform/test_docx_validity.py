@@ -250,16 +250,22 @@ def test_a_box_on_the_section_break_is_laid_out_on_its_own_sections_page(tmp_pat
 
 @needs_pdftotext
 def test_a_right_to_left_box_produces_a_package_that_still_opens(tmp_path):
-    """`w:bidiVisual` has to sit between tblOverlap and tblW in CT_TblPrBase.
+    """One independent reader opens a package carrying `w:bidiVisual`.
 
-    Put it after `tblW` and every element is still individually valid, so our
-    own tests see nothing wrong -- this is the check that would notice. The
-    Latin marker rides inside the right-to-left paragraph because mixed
-    content is ordinary in these documents and gives an assertion that does
-    not depend on how a text extractor handles bidirectional runs.
+    That is the whole claim, and it is worth being exact about how narrow it
+    is. This is an interoperability check for this one fixture, not schema
+    validation: LibreOffice is tolerant, so it passing does not establish that
+    the `CT_TblPrBase` child order is correct, only that this file did not
+    defeat it. The ordering itself is asserted directly against the emitted
+    XML in `test_docx_rtl.py`.
 
-    What this does not prove is that Google lays the result out correctly.
-    That still needs human eyes on a real import.
+    It says nothing at all about Arabic *visual* order -- the Latin marker
+    rides inside the right-to-left paragraph precisely so the assertion does
+    not depend on how a text extractor handles bidirectional runs, which means
+    it also cannot speak to whether those runs were laid out correctly.
+
+    Whether Google imports any of this faithfully is a separate question again,
+    and still needs human eyes on a real conversion.
     """
     body = rtl_anchor("RTLMARKER " + ARABIC) + SECTION
     converted = convert_fixture(tmp_path, body)

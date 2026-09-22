@@ -13,6 +13,12 @@ happens to be written" becomes "it worked until someone rewrote it".
 The genuine gaps were the parts the converter *creates*, which have no author
 to inherit direction from: the table itself, the filler paragraph an empty
 cell requires, and the separators that keep two tables from merging.
+
+What is deliberately *not* claimed here is effective direction resolution. The
+converter reads `w:bidi` where an author wrote it on the paragraph, and that is
+all. It does not resolve direction inherited from a paragraph style, and a box
+whose paragraphs disagree with each other gets the first stated direction,
+because there is one table to put one direction on.
 """
 
 from __future__ import annotations
@@ -116,9 +122,13 @@ def test_the_converted_table_states_its_direction(tmp_path):
 def test_bidi_visual_sits_where_the_schema_requires(tmp_path):
     """CT_TblPrBase order: tblpPr, tblOverlap, bidiVisual, then tblW.
 
-    Every element here is individually valid, so nothing in our own suite
-    would notice this being wrong -- only a validating reader would, by which
-    point a member of staff is looking at an error instead of their document.
+    Every element is individually valid whatever the order, so no assertion
+    about the *presence* of any of them would catch this -- it has to be
+    checked as an order, which is what this does.
+
+    The LibreOffice case cannot stand in for it. A tolerant reader opening the
+    file proves interoperability with that reader, not conformance; only a
+    validating parser would reject bad order outright, and we do not run one.
     """
     root, _ = transform_body(tmp_path, rtl_anchor() + final_section())
     properties = root.find(".//" + q("w", "tbl") + "/" + q("w", "tblPr"))
@@ -140,6 +150,64 @@ def test_a_left_to_right_box_gains_nothing(tmp_path):
     properties = root.find(".//" + q("w", "tbl") + "/" + q("w", "tblPr"))
     assert properties.find(q("w", "bidiVisual")) is None, (
         "a left-to-right text box was marked right-to-left"
+    )
+
+
+@pytest.mark.parametrize("off", ["0", "false", "off"], ids=["zero", "false", "off"])
+def test_a_box_that_turns_direction_off_beats_a_right_to_left_anchor(tmp_path, off):
+    """An explicit `w:val="0"` is an instruction, not an absence.
+
+    `ST_OnOff` spells false three ways and all three mean the same thing. A
+    box that says "read me left to right" sitting inside a right-to-left
+    document is the whole reason the box is consulted before its anchor; if an
+    explicit override loses to the surrounding text there was no point reading
+    the box at all.
+    """
+    ltr_box = TEXTBOX.replace(
+        "<w:p><w:r><w:t>Card text</w:t></w:r></w:p>",
+        f"<w:p><w:pPr><w:bidi w:val='{off}'/></w:pPr><w:r><w:t>Latin text</w:t></w:r></w:p>",
+    )
+    body = (
+        f"<w:p>{RTL_PROPERTIES}"
+        + anchor(ltr_box, h=("column", offset(0)), v=("paragraph", offset(0)))[len("<w:p>") :]
+        + final_section()
+    )
+    root, report = transform_body(tmp_path, body)
+    assert report["textboxes"] == 1
+
+    properties = root.find(".//" + q("w", "tbl") + "/" + q("w", "tblPr"))
+    assert properties.find(q("w", "bidiVisual")) is None, (
+        f"w:bidi w:val='{off}' turns direction off, but the box was still "
+        "made right-to-left by its anchor"
+    )
+
+
+def test_a_right_to_left_box_beats_a_left_to_right_anchor(tmp_path):
+    """The opposing case, so the rule is not satisfied by always saying no."""
+    body = (
+        "<w:p><w:pPr><w:bidi w:val='0'/></w:pPr>"
+        + anchor(rtl_box(), h=("column", offset(0)), v=("paragraph", offset(0)))[len("<w:p>") :]
+        + final_section()
+    )
+    root, _ = transform_body(tmp_path, body)
+    properties = root.find(".//" + q("w", "tbl") + "/" + q("w", "tblPr"))
+    assert properties.find(q("w", "bidiVisual")) is not None, (
+        "the box's own right-to-left paragraphs were overruled by its anchor"
+    )
+
+
+def test_a_box_that_says_nothing_follows_its_anchor(tmp_path):
+    """Absence is the only case where the anchor gets a say."""
+    silent = TEXTBOX  # "Card text" with no pPr at all
+    body = (
+        f"<w:p>{RTL_PROPERTIES}"
+        + anchor(silent, h=("column", offset(0)), v=("paragraph", offset(0)))[len("<w:p>") :]
+        + final_section()
+    )
+    root, _ = transform_body(tmp_path, body)
+    properties = root.find(".//" + q("w", "tbl") + "/" + q("w", "tblPr"))
+    assert properties.find(q("w", "bidiVisual")) is not None, (
+        "a box stating no direction should follow the paragraph it is anchored to"
     )
 
 

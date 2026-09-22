@@ -203,21 +203,66 @@ def _ends_section(paragraph: Element) -> bool:
     return properties is not None and properties.find(q("w", "sectPr")) is not None
 
 
-def is_rtl(paragraph: Element | None) -> bool:
-    """Whether this paragraph reads right to left.
+# ST_OnOff spells false three ways, and <w:bidi w:val="off"/> is as much an
+# instruction to read left to right as w:val="0" is.
+OFF_VALUES = {"0", "false", "off"}
 
-    `<w:bidi>` in the paragraph's own properties is the direct statement. A
-    section's `sectPr` carries one too, but that is the *section's* default and
-    a paragraph may override it, so only the paragraph is consulted here; the
-    callers that need a section default pass the paragraph that carries it.
+
+def stated_direction(paragraph: Element | None) -> bool | None:
+    """True if this paragraph says right to left, False if it says left to
+    right, None if it does not say.
+
+    The three-way answer is the point. `<w:bidi w:val="0"/>` is an author
+    turning direction *off* for this paragraph, which is a different fact from
+    a paragraph that simply never mentions direction -- and the two have to
+    lead to different decisions, or an explicit override gets ignored.
+
+    Only the paragraph's own `pPr` is read. Direction inherited from a
+    paragraph style in styles.xml is **not** resolved, so a paragraph that
+    reads right to left purely by style reports None here.
     """
     if paragraph is None:
-        return False
+        return None
     properties = paragraph.find(q("w", "pPr"))
     if properties is None:
-        return False
+        return None
     bidi = properties.find(q("w", "bidi"))
-    return bidi is not None and bidi.get(q("w", "val")) not in ("0", "false")
+    if bidi is None:
+        return None
+    return bidi.get(q("w", "val")) not in OFF_VALUES
+
+
+def is_rtl(paragraph: Element | None) -> bool:
+    """Whether this paragraph states that it reads right to left.
+
+    A paragraph that says nothing is treated as left to right, which is the
+    OOXML default.
+    """
+    return stated_direction(paragraph) is True
+
+
+def box_direction(content: Element, anchored_to: Element | None) -> bool:
+    """The direction a converted text box should be given.
+
+    The box's own paragraphs are the authority: the first one that states a
+    direction decides, including when it states left to right. Only when no
+    paragraph in the box says anything -- an empty box, or one whose direction
+    comes from a style we do not resolve -- does the paragraph it is anchored
+    to get a say.
+
+    Known limits, stated rather than papered over:
+
+    * A box whose paragraphs **disagree** is given the first stated direction.
+      There is one table and one direction to put on it, so a mixed box cannot
+      be represented faithfully either way.
+    * Direction inherited from a paragraph style is invisible here, so such a
+      box falls through to its anchor.
+    """
+    for paragraph in content.findall(".//" + q("w", "p")):
+        stated = stated_direction(paragraph)
+        if stated is not None:
+            return stated
+    return stated_direction(anchored_to) is True
 
 
 def new_paragraph(rtl: bool = False) -> Element:
@@ -471,11 +516,7 @@ def build_table(item: Anchored, ids: Ids) -> Element | None:
     if content is None:
         return None
     width = to_dxa(item.extent["cx"]) if item.extent else 9000
-    # The box's own paragraphs first -- Word states direction on every
-    # paragraph it writes, so an explicit reading is usually available. An
-    # empty text box has none, and then the paragraph it is anchored to is the
-    # best evidence there is.
-    rtl = any(is_rtl(p) for p in content.findall(".//" + q("w", "p"))) or is_rtl(item.paragraph)
+    rtl = box_direction(content, item.paragraph)
 
     table = Element(q("w", "tbl"))
     properties = SubElement(table, q("w", "tblPr"))
