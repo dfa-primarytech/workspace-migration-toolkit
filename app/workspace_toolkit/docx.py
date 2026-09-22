@@ -21,12 +21,17 @@ position, instead of trading one for the other.
 
 from __future__ import annotations
 
+import json
+from collections import Counter
+from pathlib import Path
+
 # Type annotation and serialisation only; parsing always uses defusedxml.
 from xml.etree.ElementTree import Element, register_namespace  # nosec B405
 
+from .config import Settings
 from .model import Compatibility as C
 from .model import emu_to_points, warning
-from .package import DOCX, Package
+from .package import DOCX, Package, digest
 
 NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -210,7 +215,17 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
     buckets: list[list[dict]] = [[] for _ in sections]
     section_of = section_index(body, len(sections))
 
-    for index, anchor in enumerate(root.iter(q("wp", "anchor"))):
+    # Anchors inside mc:Fallback are a legacy restatement of the shape in the
+    # sibling mc:Choice, not extra content. Counting them would double every
+    # shape Word wrote twice -- and make a text box's own fallback look like a
+    # separate picture sitting exactly beneath it.
+    duplicates = {
+        anchor
+        for fallback in root.iter(q("mc", "Fallback"))
+        for anchor in fallback.iter(q("wp", "anchor"))
+    }
+
+    for index, anchor in enumerate(a for a in root.iter(q("wp", "anchor")) if a not in duplicates):
         kind, label = classify(anchor)
         position_h = anchor_position(anchor, "H")
         position_v = anchor_position(anchor, "V")
@@ -326,3 +341,81 @@ def fonts(root: Element) -> set[str]:
             if value:
                 names.add(value)
     return names
+
+
+# --------------------------------------------------------------------------
+# Entry points, mirroring the PPTX preflight so the job path stays uniform
+# --------------------------------------------------------------------------
+
+
+def analyse(path: Path, output: Path, settings: Settings | None = None) -> dict:
+    settings = settings or Settings()
+    package = Package(path, settings, DOCX)
+    try:
+        return _analyse(package, path, output)
+    finally:
+        package.close()
+
+
+def _analyse(package: Package, path: Path, output: Path) -> dict:
+    output.mkdir(parents=True, exist_ok=True)
+    asset_dir = output / "assets"
+    asset_dir.mkdir(exist_ok=True)
+
+    source_sha = digest(path.read_bytes())
+    manifest = parse(package, path.name, source_sha)
+
+    assets: dict[str, dict] = {}
+    for name in sorted(package.names):
+        if not name.startswith("word/media/"):
+            continue
+        data = package.read(name)
+        sha = digest(data)
+        if sha in assets:
+            assets[sha]["sourceParts"].append(name)
+            continue
+        target = "assets/" + sha  # generated name, never an archive path
+        (output / target).write_bytes(data)
+        mime = package.mime(name)
+        assets[sha] = {
+            "id": sha,
+            "sha256": sha,
+            "path": target,
+            "mimeType": mime,
+            "kind": mime.split("/", 1)[0]
+            if mime.startswith(("image/", "audio/", "video/"))
+            else "embedded",
+            "byteLength": len(data),
+            "sourceParts": [name],
+            "status": "extracted",
+        }
+    manifest["assets"] = assets
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
+def analysis_report(manifest: dict) -> dict:
+    counts = Counter(e["type"] for page in manifest["pages"] for e in page["elements"])
+    warnings = list(manifest["warnings"])
+    for page in manifest["pages"]:
+        for element in page["elements"]:
+            warnings.extend(
+                {**w, "pageIndex": page["index"], "elementId": element["id"]}
+                for w in element["warnings"]
+            )
+    return {
+        "schemaVersion": "1.0",
+        "status": "analysed",
+        "sourceSha256": manifest["source"]["sha256"],
+        "pages": len(manifest["pages"]),
+        "dimensionsPt": {
+            "width": manifest["pages"][0]["widthPt"] if manifest["pages"] else 0,
+            "height": manifest["pages"][0]["heightPt"] if manifest["pages"] else 0,
+        },
+        "elementCounts": dict(counts),
+        "assetCounts": dict(Counter(a["kind"] for a in manifest["assets"].values())),
+        "fonts": manifest["fonts"],
+        "warnings": warnings,
+        "verification": "not_converted",
+        "classificationBasis": "Preflight candidates, not verified Google compatibility.",
+    }

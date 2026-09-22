@@ -1,4 +1,7 @@
+import asyncio
+import json
 import zipfile
+from collections import Counter
 
 import pytest
 from workspace_toolkit.config import Settings
@@ -360,3 +363,199 @@ def test_render_writes_a_package_google_can_import(tmp_path):
         assert again.xml(DOCX.main_part) is not None
     finally:
         again.close()
+
+
+# ---------------------------------------------------------------- pipeline
+
+
+def test_pipeline_selection_is_driven_by_the_filename():
+    from workspace_toolkit.pipelines import resolve
+
+    assert resolve("term plan.docx").fmt.key == "docx"
+    assert resolve("assembly.PPTX").fmt.key == "pptx"
+    with pytest.raises(ToolkitError) as excinfo:
+        resolve("budget.xlsx")
+    assert excinfo.value.code == "unsupported_type"
+
+
+def test_each_pipeline_uses_its_own_job_filename():
+    from workspace_toolkit.pipelines import resolve
+
+    assert resolve("a.docx").source_name == "source.docx"
+    assert resolve("a.pptx").source_name == "source.pptx"
+
+
+def test_preflight_produces_a_manifest_and_a_rendered_package(tmp_path):
+    # Exercises the real subprocess path: analyse and render both happen in the
+    # sandboxed worker, which never holds credentials.
+    body = anchor(TEXTBOX, h=("column", offset(-457200)), v=("paragraph", offset(0))) + SECTION
+    root = tmp_path / "job"
+    root.mkdir()
+    write_docx(root / "source.docx", body)
+
+    from workspace_toolkit.jobs import preflight
+    from workspace_toolkit.package import DOCX as DOCX_FORMAT
+
+    manifest = asyncio.run(preflight(root, Settings(), DOCX_FORMAT))
+    assert manifest["source"]["type"] == "docx"
+    assert manifest["pages"][0]["elements"][0]["kind"] == "textbox"
+    assert (root / "result" / "converted.docx").exists()
+
+    render_report = json.loads((root / "result" / "render.json").read_text(encoding="utf-8"))
+    assert render_report["textboxes"] == 1
+    assert render_report["tokens"] == {"Card": 1, "text": 1}
+
+    with zipfile.ZipFile(root / "result" / "converted.docx") as archive:
+        assert "w:tblpPr" in archive.read("word/document.xml").decode()
+
+
+def test_media_is_extracted_for_recovery(tmp_path):
+    root = tmp_path / "job"
+    root.mkdir()
+    write_docx(root / "source.docx", anchor(PICTURE) + SECTION)
+    from workspace_toolkit.docx import analyse
+
+    manifest = analyse(root / "source.docx", root / "result", Settings())
+    assets = list(manifest["assets"].values())
+    assert [a["kind"] for a in assets] == ["image"]
+    assert (root / "result" / assets[0]["path"]).read_bytes().startswith(b"\x89PNG")
+
+
+# ---------------------------------------------------------------- conversion
+
+
+class FakeGoogle:
+    """Stands in for Drive. Records what would have been sent."""
+
+    def __init__(self, exported="Card text", importable=True):
+        self.exported = exported
+        self.importable = importable
+        self.uploads = []
+
+    async def request(self, method, url, **kwargs):
+        from workspace_toolkit.google import DOCS_MIME
+        from workspace_toolkit.package import DOCX_MIME
+
+        return {"importFormats": {DOCX_MIME: [DOCS_MIME]} if self.importable else {}}
+
+    async def folder(self):
+        return "folder-id"
+
+    async def upload(self, path, name, mime, parent, convert=False, target=None):
+        self.uploads.append(
+            {"path": path, "name": name, "mime": mime, "convert": convert, "target": target}
+        )
+        return {"id": f"file-{len(self.uploads)}"}
+
+    async def export_text(self, file_id):
+        return self.exported
+
+
+def converted_job(tmp_path, body, **kwargs):
+    root = tmp_path / "job"
+    root.mkdir()
+    write_docx(root / "source.docx", body)
+    manifest = asyncio.run(preflight_manifest(root))
+    google = FakeGoogle(**kwargs)
+    from workspace_toolkit.docs import convert
+
+    report = asyncio.run(convert(root, manifest, google, output_name="Worksheet – converted"))
+    return report, google
+
+
+async def preflight_manifest(root):
+    from workspace_toolkit.jobs import preflight
+    from workspace_toolkit.package import DOCX as DOCX_FORMAT
+
+    return await preflight(root, Settings(), DOCX_FORMAT)
+
+
+def test_conversion_uploads_the_repaired_package_not_the_original(tmp_path):
+    body = anchor(TEXTBOX, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION
+    report, google = converted_job(tmp_path, body)
+
+    document = google.uploads[0]
+    assert document["path"].name == "converted.docx", "the repairs are the whole point"
+    assert document["convert"] is True
+    assert document["target"] == "application/vnd.google-apps.document"
+    assert report["url"].startswith("https://docs.google.com/document/d/")
+    assert report["status"] == "completed_with_warnings"
+    assert report["verification"] == "text_checked"
+
+
+def test_missing_text_is_reported_as_a_count_never_as_content(tmp_path):
+    # A distinctive token so "did the document's own words leak into the
+    # report?" has an unambiguous answer. The report is saved to Drive, so it
+    # must carry counts only.
+    secret = "Safeguarding-Quokka-7781"
+    box = TEXTBOX.replace("Card text", secret)
+    body = anchor(box, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION
+    report, _ = converted_job(tmp_path, body, exported="")
+    mismatch = [w for w in report["warnings"] if w["code"] == "text_mismatch"]
+    assert mismatch and mismatch[0]["missingTokenCount"] == 1
+    assert secret not in json.dumps(report)
+
+
+def test_layout_always_needs_a_human_even_when_text_matches(tmp_path):
+    body = anchor(TEXTBOX, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION
+    report, _ = converted_job(tmp_path, body)
+    assert not [w for w in report["warnings"] if w["code"] == "text_mismatch"]
+    assert [w for w in report["warnings"] if w["code"] == "visual_review_required"]
+
+
+def test_an_account_without_word_import_fails_before_uploading(tmp_path):
+    body = anchor(TEXTBOX, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION
+    report, google = converted_job(tmp_path, body, importable=False)
+    assert google.uploads == []
+    assert report["status"] == "failed"
+    assert [w for w in report["warnings"] if w["code"] == "conversion_unavailable"]
+
+
+def test_recovered_media_is_saved_alongside_the_document(tmp_path):
+    body = anchor(PICTURE) + SECTION
+    report, google = converted_job(tmp_path, body)
+    assert [u["name"] for u in google.uploads[1:-1]], "assets should be uploaded"
+    assert report["assetOutputs"][0]["kind"] == "image"
+    assert google.uploads[-1]["name"] == "Conversion report.json"
+
+
+def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
+    """Word writes a shape twice: mc:Choice and a legacy mc:Fallback.
+
+    Counting both makes a text box's own fallback look like a separate picture
+    sitting exactly beneath it -- indistinguishable from a real card layout.
+    Measured on real worksheets: 6 of 18 anchors in one, 4 of 15 in another.
+    """
+    inner = run(TEXTBOX, h=("column", offset(0)), v=("paragraph", offset(0)))
+    fallback = run(PICTURE, h=("column", offset(0)), v=("paragraph", offset(0)))
+    body = (
+        "<w:p><mc:AlternateContent>"
+        f"<mc:Choice Requires='wps'>{inner}</mc:Choice>"
+        f"<mc:Fallback>{fallback}</mc:Fallback>"
+        "</mc:AlternateContent></w:p>" + SECTION
+    )
+    manifest = parse_body(tmp_path, body)
+    kinds = [e["kind"] for e in manifest["pages"][0]["elements"]]
+    assert kinds == ["textbox"], "the fallback restatement is not extra content"
+
+    # And the renderer agrees: the fallback is discarded before anchors are read.
+    root, report = transform_body(tmp_path, body)
+    assert report == {"textboxes": 1, "pictures": 0, "ink": 0, "unsupported": {}}
+
+
+def test_parser_and_renderer_agree_on_what_is_in_the_document(tmp_path):
+    # These two run over different trees (the parser never sees the transform),
+    # so a disagreement means the manifest is describing a document the
+    # renderer is not producing.
+    body = (
+        anchor(TEXTBOX, h=("column", offset(-457200)), v=("paragraph", offset(0)))
+        + anchor(PICTURE, h=("column", offset(3000000)), v=("paragraph", offset(0)))
+        + anchor(graphic(CHART_URI))
+        + SECTION
+    )
+    manifest = parse_body(tmp_path, body)
+    counted = Counter(e["kind"] for e in manifest["pages"][0]["elements"])
+    _, report = transform_body(tmp_path, body)
+    assert counted["textbox"] == report["textboxes"]
+    assert counted["picture"] == report["pictures"]
+    assert counted["unsupported"] == sum(report["unsupported"].values())

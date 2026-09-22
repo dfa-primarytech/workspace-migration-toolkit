@@ -23,8 +23,12 @@ any wrap element before <wp:docPr>.
 
 from __future__ import annotations
 
+import json
 import zipfile
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # Serialisation only; parsing always uses defusedxml.
 from xml.etree.ElementTree import Element, SubElement, tostring  # nosec B405
@@ -32,6 +36,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring  # nosec B405
 from .docx import (
     COINCIDENT_SIZE_TOL,
     COINCIDENT_TOL_EMU,
+    analysis_report,
     anchor_extent,
     anchor_position,
     classify,
@@ -40,6 +45,9 @@ from .docx import (
     q,
     to_dxa,
 )
+from .errors import ToolkitError
+from .model import Compatibility as C
+from .model import warning
 from .package import DOCX, Package
 
 DEFAULT_WRAP_GAP_DXA = 180
@@ -49,6 +57,26 @@ XML_DECLARATION = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
 # Text-bearing markers are deliberately not used to decide emptiness; see
 # remove_empty_paragraphs.
 PROPERTY_TAGS = {"pPr", "rPr"}
+
+
+@dataclass
+class Anchored:
+    """One floating object, with everything the passes need to decide about it.
+
+    A dataclass rather than a dict because the fields are heterogeneous and
+    every consumer indexes them; typing this as a mapping loses all of that.
+    """
+
+    anchor: Element
+    drawing: Element
+    run: Element | None
+    paragraph: Element | None
+    kind: str
+    label: str
+    h: dict | None
+    v: dict | None
+    extent: dict | None
+    behind: bool = field(default=False)
 
 
 class Ids:
@@ -101,7 +129,7 @@ def remove_background(root: Element) -> None:
 def replace_anchors(root: Element, ids: Ids) -> dict:
     """Rewrites floating content into constructs Google imports faithfully."""
     parent_of = parents(root)
-    items = []
+    items: list[Anchored] = []
     for anchor in root.iter(q("wp", "anchor")):
         drawing = parent_of.get(anchor)
         if drawing is None:
@@ -109,44 +137,48 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
         run = parent_of.get(drawing)
         kind, label = classify(anchor)
         items.append(
-            {
-                "anchor": anchor,
-                "drawing": drawing,
-                "run": run,
-                "paragraph": _enclosing(parent_of, run, "p"),
-                "kind": kind,
-                "label": label,
-                "h": anchor_position(anchor, "H"),
-                "v": anchor_position(anchor, "V"),
-                "extent": anchor_extent(anchor),
-                "behind": False,
-            }
+            Anchored(
+                anchor=anchor,
+                drawing=drawing,
+                run=run,
+                paragraph=_enclosing(parent_of, run, "p"),
+                kind=kind,
+                label=label,
+                h=anchor_position(anchor, "H"),
+                v=anchor_position(anchor, "V"),
+                extent=anchor_extent(anchor),
+            )
         )
 
     _mark_backing_pictures(items)
 
-    report = {"textboxes": 0, "pictures": 0, "ink": 0, "unsupported": {}}
+    unsupported: dict[str, int] = {}
+    report: dict[str, Any] = {
+        "textboxes": 0,
+        "pictures": 0,
+        "ink": 0,
+        "unsupported": unsupported,
+    }
     for item in items:
-        kind = item["kind"]
-        if kind == "unsupported":
+        if item.kind == "unsupported":
             # Never delete what we cannot convert -- leave it for the importer.
-            report["unsupported"][item["label"]] = report["unsupported"].get(item["label"], 0) + 1
-        elif kind == "ink":
-            _detach(parent_of, item["drawing"], item["anchor"])
+            unsupported[item.label] = unsupported.get(item.label, 0) + 1
+        elif item.kind == "ink":
+            _detach(item.drawing, item.anchor)
             report["ink"] += 1
-        elif kind == "picture":
-            if item["behind"]:
-                send_behind_text(item["anchor"])
+        elif item.kind == "picture":
+            if item.behind:
+                send_behind_text(item.anchor)
             report["pictures"] += 1
-        elif kind == "textbox":
+        elif item.kind == "textbox":
             _replace_textbox(parent_of, item, ids)
             report["textboxes"] += 1
     return report
 
 
-def _replace_textbox(parent_of: dict, item: dict, ids: Ids) -> None:
-    paragraph = item["paragraph"]
-    _detach(parent_of, item["drawing"], item["anchor"])
+def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> None:
+    paragraph = item.paragraph
+    _detach(item.drawing, item.anchor)
     if paragraph is None:
         return
     container = parent_of.get(paragraph)
@@ -162,26 +194,24 @@ def _replace_textbox(parent_of: dict, item: dict, ids: Ids) -> None:
     container.insert(at, table)
 
 
-def _mark_backing_pictures(items: list[dict]) -> None:
+def _mark_backing_pictures(items: list[Anchored]) -> None:
     """Finds pictures a text box is stacked on, and marks them to go behind.
 
     Word builds "card" layouts this way. A floating text box overlaps its
     backing picture rather than displacing it, so the artwork can stay -- but
     only if it is explicitly pushed behind the text, or it hides the box.
     """
-    boxes = [i for i in items if i["kind"] == "textbox" and i["extent"] and i["h"] and i["v"]]
+    boxes = [i for i in items if i.kind == "textbox" and i.extent and i.h and i.v]
     for picture in items:
-        if picture["kind"] != "picture" or not (
-            picture["extent"] and picture["h"] and picture["v"]
-        ):
+        if picture.kind != "picture" or not (picture.extent and picture.h and picture.v):
             continue
         for box in boxes:
-            if box["paragraph"] is not picture["paragraph"]:
+            if box.paragraph is not picture.paragraph:
                 continue
-            if not (_near(box["h"], picture["h"]) and _near(box["v"], picture["v"])):
+            if not (_near(box.h, picture.h) and _near(box.v, picture.v)):
                 continue
-            if _same_size(box["extent"], picture["extent"]):
-                picture["behind"] = True
+            if box.extent and _same_size(box.extent, picture.extent):
+                picture.behind = True
                 break
 
 
@@ -253,16 +283,16 @@ def wrap_gap(anchor: Element, attribute: str) -> int:
         return DEFAULT_WRAP_GAP_DXA
 
 
-def floating_properties(item: dict) -> Element | None:
+def floating_properties(item: Anchored) -> Element | None:
     """Builds <w:tblpPr> from the anchor's real coordinates.
 
     Returns None when neither axis gives a usable position, so the caller emits
     an ordinary inline table rather than a float anchored nowhere.
     """
-    h, v = item["h"], item["v"]
+    h, v = item.h, item.v
     if not h and not v:
         return None
-    anchor = item["anchor"]
+    anchor = item.anchor
     pr = Element(q("w", "tblpPr"))
     for name, attribute in (
         ("leftFromText", "distL"),
@@ -274,8 +304,10 @@ def floating_properties(item: dict) -> Element | None:
 
     # An axis with no usable position borrows the other's frame, so the table
     # is never anchored to two different coordinate systems at once.
-    pr.set(q("w", "horzAnchor"), (h or v)["frame"])
-    pr.set(q("w", "vertAnchor"), (v or h)["frame"])
+    # One of the two is always set; the guard above returned otherwise.
+    horizontal, vertical = h or v, v or h
+    pr.set(q("w", "horzAnchor"), horizontal["frame"] if horizontal else "text")
+    pr.set(q("w", "vertAnchor"), vertical["frame"] if vertical else "text")
     _axis(pr, h, "tblpX", "tblpXSpec")
     _axis(pr, v, "tblpY", "tblpYSpec")
     return pr
@@ -290,11 +322,11 @@ def _axis(pr: Element, position: dict | None, offset_attr: str, spec_attr: str) 
         pr.set(q("w", offset_attr), "0")
 
 
-def build_table(item: dict, ids: Ids) -> Element | None:
-    content = item["anchor"].find(".//" + q("w", "txbxContent"))
+def build_table(item: Anchored, ids: Ids) -> Element | None:
+    content = item.anchor.find(".//" + q("w", "txbxContent"))
     if content is None:
         return None
-    width = to_dxa(item["extent"]["cx"]) if item["extent"] else 9000
+    width = to_dxa(item.extent["cx"]) if item.extent else 9000
 
     table = Element(q("w", "tbl"))
     properties = SubElement(table, q("w", "tblPr"))
@@ -329,13 +361,13 @@ def build_table(item: dict, ids: Ids) -> Element | None:
     return table
 
 
-def build_cell(item: dict, content: Element, width: int) -> Element:
+def build_cell(item: Anchored, content: Element, width: int) -> Element:
     cell = Element(q("w", "tc"))
     properties = SubElement(cell, q("w", "tcPr"))
     SubElement(properties, q("w", "tcW")).attrib.update(
         {q("w", "w"): str(width), q("w", "type"): "dxa"}
     )
-    fill = shape_fill(item["anchor"])
+    fill = shape_fill(item.anchor)
     if fill:
         SubElement(properties, q("w", "shd")).attrib.update(
             {q("w", "val"): "clear", q("w", "color"): "auto", q("w", "fill"): fill}
@@ -392,7 +424,10 @@ def serialise(root: Element) -> bytes:
 def render(package: Package, destination: Path) -> dict:
     """Writes a Google-ready .docx beside the original and reports what changed."""
     root = package.xml(DOCX.main_part)
+    # Captured before transform(), which moves text out of the shapes.
+    tokens = Counter(source_text(root).split())
     report = transform(root)
+    report["tokens"] = dict(tokens)
     document = serialise(root)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -420,12 +455,14 @@ def _enclosing(parent_of: dict, element: Element | None, name: str) -> Element |
     return element
 
 
-def _detach(parent_of: dict, drawing: Element, anchor: Element) -> None:
+def _detach(drawing: Element, anchor: Element) -> None:
     if anchor in list(drawing):
         drawing.remove(anchor)
 
 
-def _near(a: dict, b: dict) -> bool:
+def _near(a: dict | None, b: dict | None) -> bool:
+    if a is None or b is None:
+        return False
     if a["mode"] != "offset" or b["mode"] != "offset":
         return a == b
     return abs(a["emu"] - b["emu"]) <= COINCIDENT_TOL_EMU
@@ -436,3 +473,138 @@ def _same_size(a: dict, b: dict) -> bool:
         abs(a["cx"] - b["cx"]) / max(a["cx"], 1) <= COINCIDENT_SIZE_TOL
         and abs(a["cy"] - b["cy"]) / max(a["cy"], 1) <= COINCIDENT_SIZE_TOL
     )
+
+
+def source_text(root: Element) -> str:
+    """All body text, used only to check nothing vanished during import."""
+    return " ".join((node.text or "") for node in root.iter(q("w", "t")))
+
+
+def render_path(source: Path, destination: Path, settings) -> dict:
+    """Opens the package through the same guards and renders it."""
+    package = Package(source, settings, DOCX)
+    try:
+        return render(package, destination)
+    finally:
+        package.close()
+
+
+def verify(tokens: dict, exported: str) -> list[dict]:
+    """Compares the converted document's text against the source's.
+
+    A whitespace-normalised token multiset catches text that went missing or
+    got duplicated, and reports only counts -- never the text itself, which
+    would put document content into a report saved to Drive.
+
+    This says nothing about layout. Positioning is exactly what cannot be
+    checked without human eyes, which is why the review warning is
+    unconditional.
+    """
+    findings = []
+    missing = Counter(tokens) - Counter(exported.split())
+    if missing:
+        findings.append(
+            warning(
+                "text_mismatch",
+                "Some source text could not be verified after import.",
+                missingTokenCount=sum(missing.values()),
+                classification=C.UNSUPPORTED,
+            )
+        )
+    findings.append(
+        warning(
+            "visual_review_required",
+            "Check the position of text boxes, images and tables in the converted "
+            "document. Layout has not been verified automatically.",
+            classification=C.UNSUPPORTED,
+        )
+    )
+    return findings
+
+
+async def convert(
+    root: Path,
+    manifest: dict,
+    google,
+    progress: dict | None = None,
+    output_name: str = "Converted document",
+) -> dict:
+    """Uploads the rendered .docx for native import, then checks what came back."""
+    from .google import DOCS_MIME, DRIVE  # imported here to avoid a cycle
+
+    report = progress if progress is not None else {}
+    report.update(analysis_report(manifest))
+    report.update(status="converting", outputs=[], assetOutputs=[])
+    result = root / "result"
+    try:
+        formats = await google.request("GET", DRIVE + "/about", params={"fields": "importFormats"})
+        if DOCS_MIME not in formats.get("importFormats", {}).get(DOCX.mime, []):
+            raise ToolkitError(
+                "conversion_unavailable",
+                "Google does not currently offer Word conversion for this account.",
+                422,
+            )
+        folder = await google.folder()
+        report["folderUrl"] = "https://drive.google.com/drive/folders/" + folder
+
+        # The repaired package, not the original: the repairs are the point.
+        uploaded = await google.upload(
+            result / "converted.docx",
+            output_name,
+            DOCX.mime,
+            folder,
+            convert=True,
+            target=DOCS_MIME,
+        )
+        report["outputs"].append({"kind": "document", "id": uploaded["id"]})
+        report["documentId"] = uploaded["id"]
+        report["url"] = "https://docs.google.com/document/d/" + uploaded["id"] + "/edit"
+
+        # Keep every extracted asset privately alongside the document, so
+        # anything the importer drops is still recoverable by hand.
+        for asset in manifest["assets"].values():
+            saved = await google.upload(
+                result / asset["path"], asset["id"], asset["mimeType"], folder
+            )
+            report["assetOutputs"].append(
+                {
+                    "assetId": asset["id"],
+                    "kind": asset["kind"],
+                    "driveFileId": saved["id"],
+                    "url": "https://drive.google.com/file/d/" + saved["id"] + "/view",
+                }
+            )
+
+        render_report = json.loads((result / "render.json").read_text(encoding="utf-8"))
+        exported = await google.export_text(uploaded["id"])
+        report["warnings"].extend(verify(render_report.get("tokens", {}), exported))
+        report["conversion"] = {
+            k: v for k, v in render_report.items() if k in {"textboxes", "pictures", "ink"}
+        }
+        report["conversion"]["unsupportedKept"] = render_report.get("unsupported", {})
+        report["verification"] = "text_checked"
+        report["status"] = "completed_with_warnings"
+    except ToolkitError as exc:
+        report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
+        report["warnings"].append(warning(exc.code, exc.message, classification=C.UNSUPPORTED))
+        report["verification"] = "incomplete"
+
+    if report.get("folderUrl"):
+        path = root / "conversion-report.json"
+        path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        try:
+            saved = await google.upload(
+                path,
+                "Conversion report.json",
+                "application/json",
+                report["folderUrl"].rsplit("/", 1)[-1],
+            )
+            report["reportUrl"] = "https://drive.google.com/file/d/" + saved["id"] + "/view"
+        except ToolkitError:
+            report["warnings"].append(
+                warning(
+                    "report_upload_failed",
+                    "The report could not be saved to Drive. Download it from this page.",
+                )
+            )
+    return report

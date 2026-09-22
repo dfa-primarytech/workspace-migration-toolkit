@@ -14,6 +14,7 @@ from .package import PPTX_MIME
 from .pptx import analysis_report
 
 SLIDES_MIME = "application/vnd.google-apps.presentation"
+DOCS_MIME = "application/vnd.google-apps.document"
 DRIVE = "https://www.googleapis.com/drive/v3"
 
 
@@ -52,9 +53,15 @@ class Google:
         return folder_id
 
     async def upload(
-        self, path: Path, name: str, mime: str, parent: str, convert: bool = False
+        self,
+        path: Path,
+        name: str,
+        mime: str,
+        parent: str,
+        convert: bool = False,
+        target: str = SLIDES_MIME,
     ) -> dict:
-        metadata = {"name": name, "mimeType": SLIDES_MIME if convert else mime, "parents": [parent]}
+        metadata = {"name": name, "mimeType": target if convert else mime, "parents": [parent]}
         try:
             response = await self.client.post(
                 "https://www.googleapis.com/upload/drive/v3/files",
@@ -99,6 +106,27 @@ class Google:
             raise ToolkitError(
                 "upload_uncertain",
                 "A Google upload failed or its result is uncertain. Check the conversion folder before retrying.",
+                502,
+            ) from exc
+
+    async def export_text(self, file_id: str) -> str:
+        """Reads a converted file back as plain text.
+
+        Uses Drive export rather than the Docs API so no extra OAuth scope is
+        needed: drive.file already covers files this application created.
+        """
+        try:
+            response = await self.client.get(
+                DRIVE + f"/files/{file_id}/export",
+                headers=self.headers,
+                params={"mimeType": "text/plain"},
+            )
+            response.raise_for_status()
+            return response.text
+        except httpx.HTTPError as exc:
+            raise ToolkitError(
+                "verification_unavailable",
+                "The converted file could not be read back for checking.",
                 502,
             ) from exc
 

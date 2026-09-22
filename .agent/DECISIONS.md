@@ -51,3 +51,18 @@ duplicate names, macro detection -- is format-independent. Rather than copying
 it per format, Package and validate_upload_name take a Format describing the
 few things that differ (suffix, mime, main part, main mime, wording). Both
 default to PPTX, so existing call sites are unchanged.
+
+## 2026-09-22: mc:Fallback anchors are duplicates, not content
+Word writes a shape twice: the modern form in mc:Choice and a legacy
+restatement in mc:Fallback. Any pass that reads anchors must skip the fallback
+copies or it double-counts every such shape -- and specifically makes a text
+box's own fallback look like a separate picture positioned exactly beneath it,
+which is indistinguishable from a genuine "card" layout.
+
+This invalidates an earlier finding, recorded here rather than silently
+corrected: the claim that two sample worksheets used a backing-picture pattern
+for every text box was an artefact of counting fallback anchors. Measured
+properly, 6 of 18 anchors in one and 4 of 15 in another are duplicates, and no
+sample document contains a real backing picture. The behind-text handling is
+still correct for documents that use the pattern; it simply does not fire on
+this sample, so it remains unexercised by real data.

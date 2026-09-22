@@ -5,12 +5,19 @@ import sys
 from pathlib import Path
 
 from .config import Settings
+from .docs import render_path
+from .docx import analyse as analyse_docx
 from .errors import ToolkitError
-from .pptx import analyse
+from .pptx import analyse as analyse_pptx
+
+# Deliberately not importing the pipelines registry: that pulls in the Google
+# client, and this subprocess must never hold credentials or reach the network.
+ANALYSERS = {"pptx": analyse_pptx, "docx": analyse_docx}
 
 
 def main() -> None:
     source, output, config = map(Path, sys.argv[1:4])
+    fmt = sys.argv[4] if len(sys.argv) > 4 else "pptx"
     settings = Settings(**json.loads(config.read_text(encoding="utf-8")))
     try:
         if sys.platform != "win32":
@@ -20,7 +27,12 @@ def main() -> None:
             resource.setrlimit(
                 resource.RLIMIT_CPU, (settings.parser_timeout + 2, settings.parser_timeout + 2)
             )
-        analyse(source, output, settings)
+        ANALYSERS[fmt](source, output, settings)
+        if fmt == "docx":
+            # Rewriting happens here too: it is the same bounded, credential-free
+            # sandbox that already parses the untrusted package.
+            report = render_path(source, output / "converted.docx", settings)
+            (output / "render.json").write_text(json.dumps(report), encoding="utf-8")
     except ToolkitError as exc:
         (output / "error.json").write_text(
             json.dumps({"code": exc.code, "message": exc.message, "status": exc.status}),
@@ -32,7 +44,7 @@ def main() -> None:
             json.dumps(
                 {
                     "code": "parse_failed",
-                    "message": "The presentation could not be analysed.",
+                    "message": "The file could not be analysed.",
                     "status": 400,
                 }
             ),
