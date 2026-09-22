@@ -1,8 +1,14 @@
 # Backlog
 
 1. Harden the PPTX parser and mocked Google boundary tests; expand deterministic fixtures.
-2. Give the Publisher agent write access (collaborator or fork) — it cannot push, and
-   #12 only exists because its work was rescued by git bundle.
+2. Fix the credential in the Publisher session's environment. It is NOT a permissions
+   problem: that session signs in as Scrappy995, which already has write on this repo,
+   and Codex pushes successfully as the same account. Read works, write returns 403,
+   which means a restricted token rather than a restricted account. Check in that
+   environment: `gh api repos/dfa-primarytech/workspace-migration-toolkit --jq .permissions`
+   (push=false there proves it), and `env | grep -iE "GH_TOKEN|GITHUB_TOKEN"` — an
+   injected read-only token silently overrides the stored credentials. Forking needs no
+   token change and survives an environment that re-injects one.
 3. Create the Google Cloud project: enable Drive, Slides, Docs and Sheets APIs, an Internal
    consent screen and a web OAuth client with redirect http://localhost:8080/auth/callback.
    Then validate a controlled real PPTX and a real DOCX end to end locally, before any
