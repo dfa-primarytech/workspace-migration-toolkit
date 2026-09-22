@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.google import Google, convert, google_text, verify
 from workspace_toolkit.package import PPTX_MIME
@@ -185,3 +186,43 @@ def test_upload_does_not_follow_untrusted_location(tmp_path):
 
     asyncio.run(run())
     assert len(requests) == 1
+
+
+def test_google_rejects_malformed_success_responses(tmp_path):
+    path = tmp_path / "asset"
+    path.write_bytes(b"data")
+
+    async def run_request():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[]))
+        ) as client:
+            with pytest.raises(ToolkitError) as error:
+                await Google("test-token", client).request("GET", "https://www.googleapis.com/x")
+            assert error.value.code == "google_failed"
+
+    async def run_folder():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+        ) as client:
+            with pytest.raises(ToolkitError) as error:
+                await Google("test-token", client).folder()
+            assert error.value.code == "google_failed"
+
+    def upload_handler(request):
+        if request.method == "POST":
+            return httpx.Response(
+                200, headers={"Location": "https://www.googleapis.com/upload/session"}
+            )
+        return httpx.Response(200, json={})
+
+    async def run_upload():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upload_handler)) as client:
+            with pytest.raises(ToolkitError) as error:
+                await Google("test-token", client).upload(
+                    path, "asset", "application/octet-stream", "folder"
+                )
+            assert error.value.code == "upload_uncertain"
+
+    asyncio.run(run_request())
+    asyncio.run(run_folder())
+    asyncio.run(run_upload())

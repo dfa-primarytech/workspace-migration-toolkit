@@ -26,7 +26,10 @@ class Google:
         try:
             response = await self.client.request(method, url, headers=self.headers, **kwargs)
             response.raise_for_status()
-            return response.json() if response.content else {}
+            result = response.json() if response.content else {}
+            if not isinstance(result, dict):
+                raise ValueError("Unexpected Google response")
+            return result
         except (httpx.HTTPError, ValueError) as exc:
             raise ToolkitError(
                 "google_failed",
@@ -41,7 +44,12 @@ class Google:
             json={"name": "Workspace conversion", "mimeType": "application/vnd.google-apps.folder"},
             params={"fields": "id"},
         )
-        return result["id"]
+        folder_id = result.get("id")
+        if not isinstance(folder_id, str) or not folder_id:
+            raise ToolkitError(
+                "google_failed", "Google could not create the conversion folder.", 502
+            )
+        return folder_id
 
     async def upload(
         self, path: Path, name: str, mime: str, parent: str, convert: bool = False
@@ -82,7 +90,10 @@ class Google:
                 content=chunks(),
             )
             uploaded.raise_for_status()
-            return uploaded.json()
+            result = uploaded.json()
+            if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+                raise ValueError("Unexpected upload response")
+            return result
         except (httpx.HTTPError, KeyError, ValueError) as exc:
             # Never retry creation blindly: a lost response can still mean success.
             raise ToolkitError(

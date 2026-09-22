@@ -49,6 +49,25 @@ def test_auth_rejects_tampering_and_expiry():
     expired = auth.box.encrypt_at_time(b"{}", int(time.time()) - 700).decode()
     with pytest.raises(ToolkitError):
         auth.open(expired, 600)
+    invalid_shape = auth.box.encrypt(b"[]").decode()
+    with pytest.raises(ToolkitError):
+        auth.open(invalid_shape, 600)
+
+
+@pytest.mark.parametrize(
+    "session_data",
+    [
+        {"access_token": "", "expires": 9999999999, "csrf": "csrf"},
+        {"access_token": "token", "expires": "invalid", "csrf": "csrf"},
+        {"access_token": "token", "expires": 9999999999, "csrf": 123},
+    ],
+)
+def test_invalid_session_payload_is_rejected(session_data):
+    settings = configured()
+    app = create_app(settings)
+    client = TestClient(app, base_url=settings.base_url)
+    client.cookies.set(SESSION, app.state.auth.seal(session_data))
+    assert client.get("/api/session").json()["signedIn"] is False
 
 
 def test_oauth_wrong_state_never_contacts_google():
@@ -88,6 +107,32 @@ def test_oauth_exchange():
     result = asyncio.run(run())
     assert result["access_token"] == "fake-access"
     assert result["csrf"]
+
+
+@pytest.mark.parametrize("access_token", [None, "", 123])
+def test_oauth_rejects_invalid_access_token(access_token):
+    auth = Auth(configured())
+    _, state = auth.start()
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "access_token": access_token,
+                        "token_type": "Bearer",
+                        "scope": SCOPE,
+                        "expires_in": 3600,
+                    },
+                )
+            )
+        ) as client:
+            with pytest.raises(ToolkitError) as error:
+                await auth.exchange("code", state["state"], auth.seal(state), client)
+            assert error.value.code == "oauth_failed"
+
+    asyncio.run(run())
 
 
 def test_secure_cookie_headers():

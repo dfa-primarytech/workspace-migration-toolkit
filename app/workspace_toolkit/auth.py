@@ -38,7 +38,10 @@ class Auth:
         if not token or self.box is None:
             raise ToolkitError("sign_in_required", "Please sign in with Google.", 401)
         try:
-            return json.loads(self.box.decrypt(token.encode(), ttl=ttl))
+            data = json.loads(self.box.decrypt(token.encode(), ttl=ttl))
+            if not isinstance(data, dict):
+                raise ValueError("Invalid session payload")
+            return data
         except (InvalidToken, ValueError, TypeError) as exc:
             raise ToolkitError(
                 "session_expired", "Your session has expired. Please sign in again.", 401
@@ -109,10 +112,11 @@ class Auth:
             ):
                 raise ValueError("Required permission missing")
             expires = min(int(token["expires_in"]), 3600)
-            if expires <= 0:
+            access_token = token.get("access_token")
+            if expires <= 0 or not isinstance(access_token, str) or not access_token:
                 raise ValueError("Expired token")
             return {
-                "access_token": token["access_token"],
+                "access_token": access_token,
                 "expires": int(time.time()) + expires,
                 "csrf": secrets.token_urlsafe(32),
             }
@@ -123,7 +127,17 @@ class Auth:
 
     def session(self, request: Request, *, csrf: bool = False) -> dict:
         data = self.open(request.cookies.get(SESSION), 3600)
-        if data.get("expires", 0) <= time.time():
+        try:
+            expires = float(data.get("expires", 0))
+        except (TypeError, ValueError):
+            expires = 0
+        if (
+            expires <= time.time()
+            or not isinstance(data.get("access_token"), str)
+            or not data["access_token"]
+            or not isinstance(data.get("csrf"), str)
+            or not data["csrf"]
+        ):
             raise ToolkitError(
                 "session_expired", "Your session has expired. Please sign in again.", 401
             )
