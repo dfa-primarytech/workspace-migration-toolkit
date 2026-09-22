@@ -49,13 +49,19 @@ These cost real time. Worth knowing before you touch `Code.gs`:
 
 ## Testing
 
-There is no automated test suite yet. **This is the most valuable thing someone
-could add.** The transform logic is pure XML manipulation, so it's testable in
-principle — the obstacle is that `XmlService` only exists in the Apps Script
-runtime, which means either a port to a standard DOM or a thin abstraction over
-both.
+Run the dependency-free regression tests with Node.js 20 or newer:
 
-Until then, testing is manual: deploy, convert a known file, compare in Docs.
+```bash
+node --test tests/*.test.cjs
+```
+
+These execute the Apps Script and browser JavaScript with focused runtime stubs.
+They cover unsupported-anchor preservation, upload guards and browser error
+handling. They do not emulate XmlService or validate complete OOXML documents.
+A full XML fixture suite remains valuable work (issue #2).
+
+Before deploying, also convert known files in Apps Script and compare in Docs,
+including charts, grouped shapes, canvases and the original worksheet layouts.
 
 ## Style
 

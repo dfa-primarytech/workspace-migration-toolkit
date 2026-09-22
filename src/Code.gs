@@ -57,7 +57,20 @@ function doGet() {
  * Google Doc, and returns the resulting Doc's URL.
  */
 function processUpload(base64Data, filename) {
+  const maxBytes = 25 * 1024 * 1024;
+  if (typeof filename !== 'string' || !/\.docx$/i.test(filename)) {
+    throw new Error('Please choose a .docx file.');
+  }
+  if (typeof base64Data !== 'string' || !base64Data.length) {
+    throw new Error('The uploaded file is empty.');
+  }
+  if (base64Data.length > 4 * Math.ceil(maxBytes / 3)) {
+    throw new Error('The file exceeds the 25 MiB upload limit.');
+  }
   const rawBytes = Utilities.base64Decode(base64Data);
+  if (rawBytes.length > maxBytes) {
+    throw new Error('The file exceeds the 25 MiB upload limit.');
+  }
   const inputBlob = Utilities.newBlob(rawBytes, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename);
 
   const fixedBlob = fixDocx(inputBlob);
@@ -267,6 +280,10 @@ function _replaceAnchors(root) {
     let kind, txbx = null, blip = null;
     if (_findAllDeep(anchor, 'contentPart', NS.w14).length > 0) {
       kind = 'ink';                                     // decorative, dropped
+    } else if (_isCompoundAnchor(anchor)) {
+      // A group may contain text boxes and pictures: extracting the first
+      // descendant would discard the rest of the group.
+      kind = 'unknown';
     } else if ((txbx = _findFirstDeep(anchor, 'txbxContent', NS.w))) {
       kind = 'textbox';
     } else if ((blip = _findFirstDeep(anchor, 'blip', NS.a)) && anchor.getChild('extent', NS.wp)) {
@@ -336,6 +353,8 @@ function _dropBackingPictures(items) {
 function _emitGroup(group) {
   const live = [];
   group.forEach(it => {
+    // Keep unsupported content available to the importer instead of deleting it.
+    if (it.kind === 'unknown') return;
     // A floating picture we intend to keep is left entirely alone -- detaching
     // and rebuilding it would lose the wrap mode and position we want Docs to
     // read. Backing pictures are still dropped even in floating mode.
@@ -400,6 +419,15 @@ function _emitGroup(group) {
 
   let at = _contentIndex(pParent, anchorP) + 1;
   spaced.forEach(b => { pParent.addContent(at, b); at++; });
+}
+
+function _isCompoundAnchor(anchor) {
+  const data = _findFirstDeep(anchor, 'graphicData', NS.a);
+  const uri = data && data.getAttribute('uri');
+  return !!uri && [
+    'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup',
+    'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas',
+  ].indexOf(uri.getValue()) !== -1;
 }
 
 function _buildPicturePara(pic) {
