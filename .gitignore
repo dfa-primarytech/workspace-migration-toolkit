@@ -22,3 +22,8 @@ desktop.ini
 
 # Local agent/session config
 .claude/
+
+# Native parser build output
+native/pub-parser/build/
+__pycache__/
+*.pyc

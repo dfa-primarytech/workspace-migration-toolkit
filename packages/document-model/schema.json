@@ -1,0 +1,1389 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dfa-primarytech/workspace-migration-toolkit/packages/document-model/schema.json",
+  "title": "Intermediate document representation",
+  "description": "A source-independent, versioned model for fixed-layout documents. Geometry is in PostScript points throughout. Compatibility statuses produced by a parser are candidates inferred from the source, never statements that a Google rendering has been checked.",
+  "version": "1.0.0",
+  "$defs": {
+    "sourceProperties": {
+      "description": "Raw librevenge properties, exactly as the callback presented them. Binary payloads read '<binary>': they live in the asset store, never inline.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "note": {
+      "description": "A machine-readable code with human-readable text.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "diagnostic": {
+      "type": "object",
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "pageIndex": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Page the diagnostic belongs to, or null at document level."
+        },
+        "eventIndex": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Position in the callback stream, so the diagnostic is locatable in the original document."
+        },
+        "elementId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "severity",
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "bounds": {
+      "description": "A box in PostScript points, with the origin at the page's top left.",
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string",
+          "const": "pt"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height",
+        "unit"
+      ],
+      "additionalProperties": false
+    },
+    "point": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "length": {
+      "type": "object",
+      "properties": {
+        "points": {
+          "type": "number"
+        },
+        "sourceValue": {
+          "type": "number",
+          "description": "The value before conversion."
+        },
+        "sourceUnit": {
+          "type": "string",
+          "enum": [
+            "in",
+            "pt",
+            "twip",
+            "%",
+            "generic",
+            ""
+          ]
+        }
+      },
+      "required": [
+        "points",
+        "sourceValue",
+        "sourceUnit"
+      ],
+      "additionalProperties": false
+    },
+    "pathCommand": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "An svg:d action: M, L, C, Q, A or Z."
+        },
+        "properties": {
+          "$ref": "#/$defs/sourceProperties"
+        }
+      },
+      "required": [
+        "action",
+        "properties"
+      ],
+      "additionalProperties": false
+    },
+    "textItem": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "text",
+            "space",
+            "tab",
+            "lineBreak",
+            "field"
+          ],
+          "description": "Explicit spaces, tabs and breaks keep their own identity: each is real formatting, not whitespace."
+        },
+        "value": {
+          "type": "string"
+        },
+        "properties": {
+          "$ref": "#/$defs/sourceProperties"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "runStyle": {
+      "type": "object",
+      "properties": {
+        "fontFamily": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fontSizePoints": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "bold": {
+          "type": "boolean"
+        },
+        "italic": {
+          "type": "boolean"
+        },
+        "underline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "fontFamily",
+        "fontSizePoints",
+        "bold",
+        "italic",
+        "underline",
+        "color",
+        "language",
+        "country"
+      ],
+      "additionalProperties": false
+    },
+    "run": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "eventIndex": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string",
+          "description": "The items flattened for convenience. A field contributes nothing: its displayed value depends on rendering context the parser does not have."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/textItem"
+          }
+        },
+        "style": {
+          "$ref": "#/$defs/runStyle"
+        },
+        "linkHref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "implicit": {
+          "type": "boolean",
+          "description": "True when the run was created because content arrived with no open span."
+        },
+        "sourceProperties": {
+          "$ref": "#/$defs/sourceProperties"
+        }
+      },
+      "required": [
+        "index",
+        "eventIndex",
+        "text",
+        "items",
+        "style",
+        "implicit"
+      ],
+      "additionalProperties": false
+    },
+    "paragraphStyle": {
+      "type": "object",
+      "properties": {
+        "alignment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lineHeight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "alignment",
+        "lineHeight"
+      ],
+      "additionalProperties": false
+    },
+    "paragraph": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "eventIndex": {
+          "type": "integer"
+        },
+        "style": {
+          "$ref": "#/$defs/paragraphStyle"
+        },
+        "listKind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "ordered",
+            "unordered",
+            null
+          ]
+        },
+        "listLevel": {
+          "type": "integer"
+        },
+        "implicit": {
+          "type": "boolean"
+        },
+        "sourceProperties": {
+          "$ref": "#/$defs/sourceProperties"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        }
+      },
+      "required": [
+        "index",
+        "eventIndex",
+        "style",
+        "listLevel",
+        "implicit",
+        "runs"
+      ],
+      "additionalProperties": false
+    },
+    "tableCell": {
+      "type": "object",
+      "properties": {
+        "row": {
+          "type": "integer"
+        },
+        "column": {
+          "type": "integer"
+        },
+        "rowSpan": {
+          "type": "integer"
+        },
+        "columnSpan": {
+          "type": "integer"
+        },
+        "covered": {
+          "type": "boolean",
+          "description": "A cell hidden by another cell's span. It holds no content, but dropping it would leave the row's coordinates inconsistent with the column count."
+        },
+        "eventIndex": {
+          "type": "integer"
+        },
+        "sourceProperties": {
+          "$ref": "#/$defs/sourceProperties"
+        },
+        "paragraphs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/paragraph"
+          }
+        }
+      },
+      "required": [
+        "row",
+        "column",
+        "rowSpan",
+        "columnSpan",
+        "covered",
+        "paragraphs"
+      ],
+      "additionalProperties": false
+    },
+    "tableRow": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "eventIndex": {
+          "type": "integer"
+        },
+        "height": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "heightIsMinimum": {
+          "type": "boolean"
+        },
+        "isHeader": {
+          "type": "boolean"
+        },
+        "sourceProperties": {
+          "$ref": "#/$defs/sourceProperties"
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tableCell"
+          }
+        }
+      },
+      "required": [
+        "index",
+        "eventIndex",
+        "heightIsMinimum",
+        "isHeader",
+        "cells"
+      ],
+      "additionalProperties": false
+    },
+    "table": {
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "width": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "width"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tableRow"
+          }
+        }
+      },
+      "required": [
+        "columns",
+        "rows"
+      ],
+      "additionalProperties": false
+    },
+    "compatibility": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "NATIVE",
+            "SUBSTITUTED",
+            "FLATTENED",
+            "UNSUPPORTED",
+            "IGNORED"
+          ]
+        },
+        "basis": {
+          "type": "string",
+          "enum": [
+            "parser-candidate",
+            "verified"
+          ],
+          "description": "'parser-candidate' means the status was inferred from the callback stream and no rendering has been checked. The parser never emits 'verified'."
+        },
+        "evidence": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "basis",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "elementSource": {
+      "type": "object",
+      "properties": {
+        "callback": {
+          "type": "string",
+          "description": "The librevenge callback this element came from."
+        },
+        "eventIndex": {
+          "type": "integer"
+        },
+        "endEventIndex": {
+          "type": "integer"
+        },
+        "styleEventIndex": {
+          "type": "integer"
+        },
+        "properties": {
+          "$ref": "#/$defs/sourceProperties"
+        },
+        "styleProperties": {
+          "$ref": "#/$defs/sourceProperties"
+        }
+      },
+      "required": [
+        "callback",
+        "eventIndex",
+        "endEventIndex",
+        "properties",
+        "styleProperties"
+      ],
+      "additionalProperties": false
+    },
+    "geometry": {
+      "type": "object",
+      "properties": {
+        "shapeKind": {
+          "type": "string"
+        },
+        "polygonIsRectangular": {
+          "type": "boolean"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathCommand"
+          }
+        }
+      },
+      "required": [
+        "shapeKind",
+        "polygonIsRectangular",
+        "points",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "assetId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "type": "string",
+          "enum": [
+            "drawGraphicObject",
+            "bitmapFillShape"
+          ],
+          "description": "'bitmapFillShape' is a picture painted as a shape with a bitmap fill, which is how Publisher usually emits images."
+        },
+        "shapeKind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "polygonIsRectangular": {
+          "type": "boolean"
+        },
+        "polygon": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathCommand"
+          }
+        }
+      },
+      "required": [
+        "assetId",
+        "route",
+        "polygonIsRectangular",
+        "polygon",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "container": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "layer",
+            "embeddedGraphics",
+            "group"
+          ]
+        },
+        "isAuthoredGroup": {
+          "type": "boolean",
+          "description": "False for a rendering wrapper. startLayer is not evidence that the author grouped anything."
+        }
+      },
+      "required": [
+        "kind",
+        "isAuthoredGroup"
+      ],
+      "additionalProperties": false
+    },
+    "element": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "text",
+            "image",
+            "table",
+            "shape",
+            "line",
+            "path",
+            "group",
+            "wrapper",
+            "unknown"
+          ]
+        },
+        "pageIndex": {
+          "type": "integer"
+        },
+        "bounds": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/bounds"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotationDegrees": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "zIndex": {
+          "type": "integer",
+          "description": "Paint order within the page, from zero."
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/elementSource"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/compatibility"
+        },
+        "paragraphs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/paragraph"
+          }
+        },
+        "image": {
+          "$ref": "#/$defs/image"
+        },
+        "geometry": {
+          "$ref": "#/$defs/geometry"
+        },
+        "container": {
+          "$ref": "#/$defs/container"
+        },
+        "table": {
+          "$ref": "#/$defs/table"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "pageIndex",
+        "bounds",
+        "zIndex",
+        "visible",
+        "source",
+        "compatibility",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "page": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "index": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "page",
+            "master"
+          ]
+        },
+        "width": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Page width in points, or null when the source declared none."
+        },
+        "height": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "const": "pt"
+        },
+        "sourceSize": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/length"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/length"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "width",
+            "height"
+          ],
+          "additionalProperties": false
+        },
+        "eventRange": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "integer"
+            },
+            "end": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "additionalProperties": false
+        },
+        "implicit": {
+          "type": "boolean"
+        },
+        "sourceProperties": {
+          "$ref": "#/$defs/sourceProperties"
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/element"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "index",
+        "kind",
+        "width",
+        "height",
+        "unit",
+        "eventRange",
+        "implicit",
+        "elements",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "publisher",
+            "powerpoint",
+            "word",
+            "excel"
+          ]
+        },
+        "filename": {
+          "type": "string",
+          "description": "Basename only. A full path would leak the directory the file was processed in."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "byteLength": {
+          "type": "integer"
+        },
+        "containerType": {
+          "type": "string"
+        },
+        "formatFamily": {
+          "type": "string"
+        },
+        "supportedByParser": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "filename",
+        "sha256",
+        "byteLength",
+        "containerType",
+        "formatFamily",
+        "supportedByParser"
+      ],
+      "additionalProperties": false
+    },
+    "generator": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "font": {
+      "type": "object",
+      "properties": {
+        "family": {
+          "type": "string"
+        },
+        "usageCount": {
+          "type": "integer"
+        },
+        "firstPageIndex": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "firstEventIndex": {
+          "type": "integer"
+        },
+        "embedded": {
+          "type": "boolean"
+        },
+        "embeddedMime": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "embeddedByteLength": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "family",
+        "usageCount",
+        "embedded"
+      ],
+      "additionalProperties": false
+    },
+    "truncation": {
+      "type": "object",
+      "properties": {
+        "truncated": {
+          "type": "boolean",
+          "description": "True when a resource limit stopped collection. The callback counts still cover the whole stream."
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "truncated",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "assetUse": {
+      "type": "object",
+      "properties": {
+        "pageIndex": {
+          "type": "integer"
+        },
+        "elementId": {
+          "type": "string"
+        },
+        "eventIndex": {
+          "type": "integer"
+        },
+        "route": {
+          "type": "string"
+        },
+        "bounds": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/bounds"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "polygonIsRectangular": {
+          "type": "boolean"
+        },
+        "polygon": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathCommand"
+          }
+        }
+      },
+      "required": [
+        "pageIndex",
+        "elementId",
+        "eventIndex",
+        "route",
+        "bounds",
+        "polygon",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "asset": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "filename": {
+          "type": "string",
+          "pattern": "^assets/[0-9a-f]{64}\\.[a-z0-9]+$",
+          "description": "Generated from the payload hash, so nothing in the document can choose a path."
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "declaredMimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sniffedMimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "byteLength": {
+          "type": "integer"
+        },
+        "pixelWidth": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Null when the format's header does not carry it."
+        },
+        "pixelHeight": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "useCount": {
+          "type": "integer"
+        },
+        "uses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/assetUse"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "sha256",
+        "filename",
+        "mimeType",
+        "byteLength",
+        "pixelWidth",
+        "pixelHeight",
+        "useCount",
+        "uses",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "documentBundle": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "generator": {
+          "$ref": "#/$defs/generator"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "document": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pageCount": {
+              "type": "integer"
+            },
+            "masterPageCount": {
+              "type": "integer"
+            },
+            "metadata": {
+              "$ref": "#/$defs/sourceProperties"
+            }
+          },
+          "required": [
+            "title",
+            "pageCount",
+            "masterPageCount",
+            "metadata"
+          ],
+          "additionalProperties": false
+        },
+        "units": {
+          "type": "object",
+          "properties": {
+            "length": {
+              "type": "string",
+              "const": "pt"
+            }
+          },
+          "required": [
+            "length"
+          ],
+          "additionalProperties": false
+        },
+        "fonts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/font"
+          }
+        },
+        "assets": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer"
+            },
+            "placementCount": {
+              "type": "integer"
+            },
+            "manifest": {
+              "type": "string"
+            },
+            "directory": {
+              "type": "string"
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "count",
+            "placementCount",
+            "manifest",
+            "directory",
+            "ids"
+          ],
+          "additionalProperties": false
+        },
+        "callbacks": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "integer"
+            },
+            "counts": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            }
+          },
+          "required": [
+            "total",
+            "counts"
+          ],
+          "additionalProperties": false
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/page"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/diagnostic"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        },
+        "truncation": {
+          "$ref": "#/$defs/truncation"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "generator",
+        "source",
+        "document",
+        "units",
+        "fonts",
+        "assets",
+        "callbacks",
+        "pages",
+        "warnings",
+        "limitations",
+        "truncation"
+      ],
+      "additionalProperties": false
+    },
+    "assetsBundle": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "generator": {
+          "$ref": "#/$defs/generator"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/asset"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "generator",
+        "source",
+        "assets"
+      ],
+      "additionalProperties": false
+    },
+    "reportBundle": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "generator": {
+          "$ref": "#/$defs/generator"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "truncated",
+            "failed"
+          ]
+        },
+        "failureCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "callbackCounts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "compatibility": {
+          "type": "object"
+        },
+        "fonts": {
+          "type": "array"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "truncation": {
+          "$ref": "#/$defs/truncation"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/diagnostic"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "generator",
+        "status",
+        "source",
+        "counts",
+        "callbackCounts",
+        "compatibility",
+        "truncation",
+        "diagnostics",
+        "limitations"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/documentBundle"
+    },
+    {
+      "$ref": "#/$defs/assetsBundle"
+    },
+    {
+      "$ref": "#/$defs/reportBundle"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "id": "PUB-001",
+  "description": "A four-page A5 school information booklet. Real document, never committed: this file records only its hash and non-identifying structural counts.",
+  "sourceSha256": "d9b3577affb403bbadb703de29cca64e9d5cc25833ab60ac032295b4f2f786ea",
+  "supplyVia": {
+    "environmentVariable": "PUBLISHER_FIXTURE_PUB001",
+    "note": "Set this to an absolute path outside the repository. The file must never be committed, and .gitignore refuses *.pub."
+  },
+  "provenance": "Counts below come from a previous investigation of the callback stream, not from this parser. They are the acceptance target, and a mismatch is a finding to investigate rather than a number to edit.",
+  "expected": {
+    "pageCount": 4,
+    "pageWidthPoints": 420.945,
+    "pageHeightPoints": 595.276,
+    "pageSizeTolerancePoints": 1.0,
+    "pageOrientation": "portrait",
+    "pageSizeName": "A5",
+    "textFrameCallbacks": 6,
+    "substantiveTextFrames": 4,
+    "tables": 1,
+    "tableColumns": 1,
+    "tableRows": 3,
+    "paragraphs": 82,
+    "styledSpans": 147,
+    "textInsertions": 204,
+    "imagePlacements": 12,
+    "distinctAssets": 11,
+    "pngAssets": 8,
+    "jpegAssets": 3,
+    "assetsUsedOnTwoPages": 1,
+    "pathCallbacks": 2,
+    "renderingLayerWrappers": 1,
+    "fonts": ["Calibri", "SassoonPrimaryInfant", "SassoonPrimaryType"]
+  }
+}

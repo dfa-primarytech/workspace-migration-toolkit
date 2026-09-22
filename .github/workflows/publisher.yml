@@ -1,0 +1,125 @@
+# CI for the Publisher parser. Builds and tests only; deploys nothing and
+# creates no cloud resources.
+name: publisher-parser
+
+on:
+  push:
+    branches: [main]
+    # Spelled out rather than shared through a YAML anchor: GitHub
+    # Actions does not accept anchors in a workflow file.
+    paths:
+      - 'native/pub-parser/**'
+      - 'packages/document-model/**'
+      - 'tests/publisher/**'
+      - 'tests/fixtures/publisher/**'
+      - 'docker/publisher.Dockerfile'
+      - '.github/workflows/publisher.yml'
+  pull_request:
+    paths:
+      - 'native/pub-parser/**'
+      - 'packages/document-model/**'
+      - 'tests/publisher/**'
+      - 'tests/fixtures/publisher/**'
+      - 'docker/publisher.Dockerfile'
+      - '.github/workflows/publisher.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native adapter (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libmspub and librevenge
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake pkg-config libmspub-dev librevenge-dev
+
+      - name: Record the tested library versions
+        # The parser's behaviour is the behaviour of these two libraries,
+        # so which versions a run used is part of its result.
+        run: |
+          {
+            echo '### Library versions'
+            echo
+            echo "| Library | Version |"
+            echo "| --- | --- |"
+            echo "| libmspub | $(pkg-config --modversion libmspub-0.1) |"
+            echo "| librevenge | $(pkg-config --modversion librevenge-0.0) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Configure and build
+        working-directory: native/pub-parser
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Unit tests
+        # Driven entirely by synthetic callback sequences: no .pub file,
+        # no Google API, no network.
+        working-directory: native/pub-parser
+        run: ./build/pubir-tests
+
+      - name: Schema, validator and CLI tests
+        env:
+          PUBLISHER_PARSER_BIN: ${{ github.workspace }}/native/pub-parser/build/publisher-parser
+        run: python3 -m unittest discover -s tests/publisher -t tests/publisher -v
+
+      - name: Refuse any committed source document
+        # The fixture directory holds expectations, never documents. A
+        # real .pub here would be a school's document in a public repo.
+        run: |
+          found=$(find tests/fixtures/publisher -type f \
+            \( -iname '*.pub' -o -iname '*.doc*' -o -iname '*.pdf' -o -iname '*.ppt*' -o -iname '*.xls*' \) )
+          if [ -n "$found" ]; then
+            echo "::error::source documents must not be committed:"
+            echo "$found"
+            exit 1
+          fi
+
+  container:
+    name: Container build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        # The image runs the unit tests during its build, so a successful
+        # build is also a passing test run on a clean Debian base.
+        run: docker build -f docker/publisher.Dockerfile -t publisher-parser:ci .
+      - name: Smoke-test the entrypoint
+        run: docker run --rm publisher-parser:ci --version
+
+  pub001:
+    name: PUB-001 acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # PUB-001 is a real school document and is not in this repository,
+      # so this job cannot run on a public runner today. It exists to
+      # state that plainly: a skipped regression is not a passing one, and
+      # nothing in this workflow may report PUB-001 as verified until the
+      # fixture is actually supplied.
+      - name: Report the acceptance status honestly
+        run: |
+          {
+            echo '### PUB-001 acceptance: NOT RUN'
+            echo
+            echo 'The private fixture is not available to CI, so PUB-001'
+            echo 'regression acceptance is **blocked, not passing**.'
+            echo
+            echo 'To run it locally:'
+            echo
+            echo '```bash'
+            echo 'export PUBLISHER_FIXTURE_PUB001=/path/outside/the/repo/PUB-001.pub'
+            echo 'python3 -m unittest discover -s tests/publisher -t tests/publisher -v'
+            echo '```'
+            echo
+            echo 'Expected counts: tests/fixtures/publisher/PUB-001/expected.json'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=PUB-001::not run; the private fixture is unavailable to CI"
