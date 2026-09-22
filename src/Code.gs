@@ -254,12 +254,15 @@ const FLOAT_TEXTBOX_TABLES = true;
  * to displace it: both can occupy the same rectangle. Setting this true keeps
  * the picture, restoring card designs that would otherwise lose their artwork.
  *
- * Default false because the importer's z-ordering between a floating table and
- * a floating picture is unverified -- the table may land behind the image and
- * hide the text. Turn it on and check a real card layout before relying on it.
- * Ignored entirely when FLOAT_TEXTBOX_TABLES is false.
+ * Rather than relying on the importer's default z-ordering, a kept backing
+ * picture is explicitly pushed behind the text (behindDoc="1" with wrapNone --
+ * "Behind text" in the Docs UI), which is a positioning Docs is known to
+ * support. The text box floating above it should therefore stay readable.
+ *
+ * Ignored entirely when FLOAT_TEXTBOX_TABLES is false, because an inline table
+ * cannot overlap anything.
  */
-const KEEP_BACKING_PICTURES = false;
+const KEEP_BACKING_PICTURES = true;
 
 // Default gap between a floating table and the text wrapping around it (dxa).
 const DEFAULT_WRAP_GAP_DXA = 180;
@@ -416,6 +419,7 @@ function _replaceAnchors(root) {
   });
 
   _dropBackingPictures(items);
+  items.forEach(it => { if (it.sendBehind) _sendBehindText(it.anchor); });
 
   // --- group by anchoring paragraph, preserving document order of groups ---
   const groups = [];
@@ -443,10 +447,7 @@ function _replaceAnchors(root) {
  * The text is the part that must stay editable, so the backing picture goes.
  */
 function _dropBackingPictures(items) {
-  // A floating text box sits on top of its backing picture rather than
-  // displacing it, so the picture can stay -- if the importer layers them the
-  // right way round. Unverified, hence opt-in.
-  if (FLOAT_TEXTBOX_TABLES && KEEP_BACKING_PICTURES) return;
+  const keep = FLOAT_TEXTBOX_TABLES && KEEP_BACKING_PICTURES;
   const boxes = items.filter(it => it.kind === 'textbox' && it.ext && it.h !== null && it.v !== null);
   items.forEach(pic => {
     if (pic.kind !== 'picture' || !pic.ext || pic.h === null || pic.v === null) return;
@@ -458,8 +459,44 @@ function _dropBackingPictures(items) {
       const dh = Math.abs(box.ext.cy - pic.ext.cy) / Math.max(box.ext.cy, 1);
       return dw <= COINCIDENT_SIZE_TOL && dh <= COINCIDENT_SIZE_TOL;
     });
-    if (covered) pic.drop = true;
+    if (!covered) return;
+    // A floating text box overlaps its backing picture rather than displacing
+    // it, so the artwork can stay -- pushed behind the text so the box on top
+    // of it stays readable.
+    if (keep) pic.sendBehind = true;
+    else pic.drop = true;
   });
+}
+
+const WRAP_ELEMENTS = ['wrapNone', 'wrapSquare', 'wrapTight', 'wrapThrough', 'wrapTopAndBottom'];
+
+/**
+ * Rewrites an anchor as "behind text": behindDoc="1" plus wrapNone, the same
+ * combination Word uses and the Docs UI exposes as "Behind text".
+ *
+ * The wrap element is replaced in place because CT_Anchor fixes the order of
+ * its children -- a wrap element after <wp:docPr> is invalid.
+ */
+function _sendBehindText(anchor) {
+  anchor.setAttribute('behindDoc', '1');
+
+  let at = -1;
+  for (let i = 0; i < WRAP_ELEMENTS.length && at === -1; i++) {
+    const existing = anchor.getChild(WRAP_ELEMENTS[i], NS.wp);
+    if (existing) {
+      at = _contentIndex(anchor, existing);
+      anchor.removeContent(existing);
+    }
+  }
+  const wrapNone = XmlService.createElement('wrapNone', NS.wp);
+  if (at !== -1) {
+    anchor.addContent(at, wrapNone);
+    return;
+  }
+  // No wrap element at all: it must still precede docPr if that is present.
+  const docPr = anchor.getChild('docPr', NS.wp);
+  if (docPr) anchor.addContent(_contentIndex(anchor, docPr), wrapNone);
+  else anchor.addContent(wrapNone);
 }
 
 /** Orders one paragraph's anchors into rows and emits the replacement blocks. */

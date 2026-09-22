@@ -42,7 +42,7 @@ See [Known limitations](#known-limitations).
 | Problem construct | Rewritten as |
 |---|---|
 | Floating / anchored text boxes | **Floating tables positioned at the original coordinates**, preserving text, inline images and the shape's fill colour as cell shading |
-| Text boxes stacked on a backing picture | The text box alone — the backing image is dropped (see below) |
+| Text boxes stacked on a backing picture | Both — the text box floats above, the artwork is pushed behind the text (see below) |
 | Floating pictures | Left as floating anchors, so Docs imports them with its own wrap/position controls |
 | Charts, SmartArt, grouped shapes, drawing canvases and anything else unrecognised | Preserved untouched for Google's importer, and **reported back to the user** so they know to check them |
 | Legacy VML-only pictures | Modern inline DrawingML pictures |
@@ -103,7 +103,7 @@ Constants near the top of the anchor section in `src/Code.gs`:
 | Constant | Default | Effect |
 |---|---|---|
 | `FLOAT_TEXTBOX_TABLES` | `true` | Emit each text box as a floating table at its original coordinates. `false` falls back to inline tables ordered by position. |
-| `KEEP_BACKING_PICTURES` | `false` | Keep the artwork under a text box instead of dropping it. Only meaningful when text boxes float; z-ordering unverified. |
+| `KEEP_BACKING_PICTURES` | `true` | Keep the artwork under a text box, pushed behind the text, instead of dropping it. Only meaningful when text boxes float. |
 | `KEEP_PICTURES_FLOATING` | `true` | Leave pictures as floating anchors so they stay draggable in Docs. Set `false` to force everything inline. |
 | `COINCIDENT_TOL_EMU` | 0.06" | Position tolerance for backing-picture detection |
 | `COINCIDENT_SIZE_TOL` | 0.03 | Size tolerance for the same |
@@ -111,10 +111,10 @@ Constants near the top of the anchor section in `src/Code.gs`:
 
 ## Known limitations
 
-- **Backing pictures are still dropped by default.** Now that text boxes float,
-  a card's artwork could be kept underneath it — but the importer's z-ordering
-  between a floating table and a floating picture is unverified, and getting it
-  wrong hides the text. Set `KEEP_BACKING_PICTURES = true` to try it.
+- **Backing pictures behind floating text boxes are new and lightly tested.**
+  The picture is pushed behind the text (`behindDoc="1"` + `wrapNone`, Docs'
+  "Behind text") so the box above stays readable. Set
+  `KEEP_BACKING_PICTURES = false` to drop the artwork instead, as before.
 - **Only `word/document.xml` gets the structural passes.** Headers and footers
   get background-stripping only. Fine if your documents don't use them;
   a real gap if they do.

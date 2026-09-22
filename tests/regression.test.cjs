@@ -475,3 +475,82 @@ test('each text box becomes its own positioned table, never a merged row', () =>
   // And they are separated, or Word would merge them into one table.
   assert.equal(inserted.some(el => el.getName() === 'p'), true);
 });
+
+// ---------- backing pictures kept behind the text ----------
+
+function anchorWithWrap(wrapName) {
+  const children = [];
+  if (wrapName) children.push({ name: wrapName });
+  children.push({ name: 'docPr' });
+  return {
+    attrs: {}, children,
+    setAttribute(n, v) { this.attrs[n] = v; return this; },
+    getChild(n) { return this.children.filter(c => c.name === n)[0] || null; },
+    removeContent(c) {
+      const i = this.children.indexOf(c);
+      if (i !== -1) this.children.splice(i, 1);
+    },
+    addContent(i, c) {
+      if (c === undefined) this.children.push(i);
+      else this.children.splice(i, 0, c);
+    },
+  };
+}
+
+function behindCtx() {
+  const ctx = server({ XmlService: xmlStub() });
+  ctx._contentIndex = (parent, child) => parent.children.indexOf(child);
+  return ctx;
+}
+
+test('a kept backing picture is pushed behind the text, replacing its wrap', () => {
+  const ctx = behindCtx();
+  const anchor = anchorWithWrap('wrapSquare');
+  ctx._sendBehindText(anchor);
+  assert.equal(anchor.attrs.behindDoc, '1');
+  const names = anchor.children.map(c => c.name);
+  assert.deepEqual(names, ['wrapNone', 'docPr'], 'wrap must be swapped in place');
+});
+
+test('wrap elements always precede docPr, even when none existed', () => {
+  const ctx = behindCtx();
+  const anchor = anchorWithWrap(null);
+  ctx._sendBehindText(anchor);
+  const names = anchor.children.map(c => c.name);
+  assert.deepEqual(names, ['wrapNone', 'docPr'],
+    'CT_Anchor forbids a wrap element after docPr');
+});
+
+test('every wrap variant is recognised and replaced', () => {
+  const ctx = behindCtx();
+  for (const wrap of ['wrapNone', 'wrapSquare', 'wrapTight', 'wrapThrough', 'wrapTopAndBottom']) {
+    const anchor = anchorWithWrap(wrap);
+    ctx._sendBehindText(anchor);
+    assert.deepEqual(anchor.children.map(c => c.name), ['wrapNone', 'docPr'], wrap);
+  }
+});
+
+test('coincident backing pictures are marked to go behind, not deleted', () => {
+  const ctx = server();
+  // Same shape _replaceAnchors builds, drop flag included.
+  const at = (h, v) => ({ pKey: 'p1', h, v, drop: false, ext: { cx: 3000000, cy: 1000000 } });
+  const box = Object.assign(at(100, 200), { kind: 'textbox' });
+  const backing = Object.assign(at(100, 200), { kind: 'picture' });
+  const elsewhere = Object.assign(at(5000000, 200), { kind: 'picture' });
+
+  ctx._dropBackingPictures([box, backing, elsewhere]);
+
+  assert.equal(backing.sendBehind, true, 'backing picture should be kept');
+  assert.equal(backing.drop, false, 'and must not be dropped');
+  assert.equal(elsewhere.sendBehind, undefined, 'unrelated picture untouched');
+  assert.equal(elsewhere.drop, false);
+});
+
+test('a picture behind a text box in another paragraph is left alone', () => {
+  const ctx = server();
+  const box = { kind: 'textbox', pKey: 'p1', h: 100, v: 200, drop: false, ext: { cx: 3000000, cy: 1000000 } };
+  const pic = { kind: 'picture', pKey: 'p2', h: 100, v: 200, drop: false, ext: { cx: 3000000, cy: 1000000 } };
+  ctx._dropBackingPictures([box, pic]);
+  assert.equal(pic.sendBehind, undefined);
+  assert.equal(pic.drop, false);
+});
