@@ -38,3 +38,7 @@ dist/
 credentials*.json
 *token*.json
 job-output/
+
+# Native parser build output
+native/pub-parser/build/
+.mcp.json

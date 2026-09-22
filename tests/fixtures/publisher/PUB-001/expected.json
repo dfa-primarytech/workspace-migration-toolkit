@@ -1,0 +1,94 @@
+{
+  "id": "PUB-001",
+  "description": "A four-page A5 school information booklet. Real document, never committed: this file records only its hash and non-identifying structural counts.",
+  "sourceSha256": "d9b3577affb403bbadb703de29cca64e9d5cc25833ab60ac032295b4f2f786ea",
+  "supplyVia": {
+    "environmentVariable": "PUBLISHER_FIXTURE_PUB001",
+    "note": "Set this to an absolute path outside the repository. The file must never be committed, and .gitignore refuses *.pub."
+  },
+  "provenance": "Verified: publisher-parser reproduced every count below from the real document on 2026-09-22, against libmspub 0.1.4 and librevenge 0.0.5. A future mismatch is a regression to investigate -- possibly a parser bug, possibly a library change -- not a number to edit.",
+  "expected": {
+    "pageCount": 4,
+    "pageWidthPoints": 420.944882,
+    "pageHeightPoints": 595.275591,
+    "pageSizeTolerancePoints": 0.001,
+    "pageOrientation": "portrait",
+    "pageSizeName": "A5",
+    "textFrameCallbacks": 6,
+    "substantiveTextFrames": 4,
+    "tables": 1,
+    "tableColumns": 1,
+    "tableRows": 3,
+    "paragraphs": 82,
+    "styledSpans": 147,
+    "textInsertions": 204,
+    "imagePlacements": 12,
+    "distinctAssets": 11,
+    "pngAssets": 8,
+    "jpegAssets": 3,
+    "assetsUsedOnTwoPages": 1,
+    "pathCallbacks": 2,
+    "renderingLayerWrappers": 1,
+    "fonts": [
+      "Calibri",
+      "SassoonPrimaryInfant",
+      "SassoonPrimaryType"
+    ],
+    "pageSizeNote": "148.5 x 210 mm: A4 halved exactly, not a nominal 148 mm A5.",
+    "nonSubstantiveTextFrames": 2,
+    "elements": 22,
+    "callbacks": 881,
+    "wrapperElements": 1,
+    "pathElements": 2,
+    "unknownElements": 0,
+    "shapeElements": 0,
+    "drawGraphicObjectCallbacks": 0,
+    "drawPolygonCallbacks": 12,
+    "allImagePlacementsRectangular": true,
+    "explicitSpaces": 143,
+    "lineBreaks": 1,
+    "boldRuns": 38,
+    "italicRuns": 6,
+    "underlinedRuns": 0,
+    "fontSizesPoints": [
+      6,
+      10,
+      11,
+      12,
+      14,
+      16,
+      18
+    ],
+    "textColours": [
+      "#000000",
+      "#00b2ad",
+      "#231f20"
+    ],
+    "paragraphAlignments": {
+      "left": 144,
+      "center": 3
+    },
+    "tableCellParagraphs": [
+      4,
+      4,
+      4
+    ],
+    "tableColumnWidthPoints": 386.897244,
+    "tableRowHeightsDeclared": false,
+    "tableRowHeightsNote": "libmspub declares a column width but no row height for this table, so the parser flags table-row-heights-unknown.",
+    "compatibilityCandidates": {
+      "NATIVE": 19,
+      "SUBSTITUTED": 0,
+      "FLATTENED": 2,
+      "UNSUPPORTED": 0,
+      "IGNORED": 1
+    },
+    "diagnostics": 0,
+    "masterPages": 0,
+    "fontUsageCounts": {
+      "SassoonPrimaryInfant": 138,
+      "SassoonPrimaryType": 8,
+      "Calibri": 1
+    }
+  }
+}

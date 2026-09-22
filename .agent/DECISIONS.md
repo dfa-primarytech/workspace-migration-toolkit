@@ -111,3 +111,27 @@ requires a broader grant. drive.file is non-sensitive; documents, presentations,
 spreadsheets and full drive are sensitive or restricted and would widen what
 staff consent to across their entire Drive. The application only ever touches
 files it created, so the narrow scope is accurate rather than limiting.
+
+## 2026-09-22: Publisher parser boundary
+Read `.pub` through LibreOffice's libmspub, driving a small C++
+`librevenge::RVNGDrawingInterface` sink that builds the intermediate model
+directly. Do not write a new binary parser, and do not build production logic on
+`pub2raw` text -- it is an unstable debug format that drops binary payloads.
+The sink links librevenge only, not libmspub, so unit tests drive it with
+synthetic property lists and no document is needed to test the adapter.
+
+Support both image routes: `drawGraphicObject`, and a shape carrying a bitmap
+fill. Confirmed on PUB-001 that `drawGraphicObject` is never called and all
+twelve images arrive by the second route, so a parser watching only the obvious
+callback would report that booklet as having no pictures at all.
+
+Record `startLayer` as a rendering wrapper, never as an authored group;
+librevenge emits it as a painting construct and treating it as a group invents
+structure the author did not make.
+
+Parser compatibility statuses are candidates (`basis: "parser-candidate"`),
+never verified claims about Google rendering; the validator rejects a parser
+bundle asserting otherwise. Geometry is normalised to PostScript points, with
+the raw librevenge properties retained alongside so a renderer can revisit a
+parser decision without re-reading the source. Do not vendor libmspub or
+librevenge; tested against libmspub 0.1.4 and librevenge 0.0.5.
