@@ -3,7 +3,7 @@ import json
 
 import httpx
 from workspace_toolkit.errors import ToolkitError
-from workspace_toolkit.google import Google, convert, verify
+from workspace_toolkit.google import Google, convert, google_text, verify
 from workspace_toolkit.package import PPTX_MIME
 from workspace_toolkit.pptx import analyse
 
@@ -17,7 +17,8 @@ def fake_presentation():
         "slides": [
             {
                 "pageElements": [
-                    {"shape": {"text": {"textElements": [{"textRun": {"content": text}}]}}}
+                    {"shape": {"text": {"textElements": [{"textRun": {"content": text}}]}}},
+                    {"image": {"contentUrl": "redacted"}},
                 ]
             }
             for text in ["Hello school", "Last slide"]
@@ -33,6 +34,69 @@ def test_verify_detects_missing_text_and_dimensions(pptx, tmp_path):
     damaged["slides"][0]["pageElements"] = []
     damaged["pageSize"]["width"]["magnitude"] = 720
     assert {w["code"] for w in verify(manifest, damaged)} >= {"text_mismatch", "page_size_changed"}
+
+
+def test_verify_detects_missing_images_tables_and_charts(pptx, tmp_path):
+    manifest = analyse(pptx, tmp_path / "result")
+    source = manifest["pages"][0]
+    source["elements"].extend(
+        [
+            {"type": "table", "paragraphs": [], "warnings": [], "id": "table"},
+            {"type": "chart", "paragraphs": [], "warnings": [], "id": "chart"},
+        ]
+    )
+    converted = fake_presentation()
+    converted["slides"][0]["pageElements"] = converted["slides"][0]["pageElements"][:1]
+    findings = verify(manifest, converted)
+    missing = {
+        finding["objectType"]: (finding["sourceCount"], finding["convertedCount"])
+        for finding in findings
+        if finding["code"] == "object_count_changed"
+    }
+    assert missing == {"image": (1, 0), "table": (1, 0), "chart": (1, 0)}
+
+
+def test_verify_counts_nested_google_objects_and_separates_table_cells(pptx, tmp_path):
+    manifest = analyse(pptx, tmp_path / "result")
+    manifest["pages"][0]["elements"].append(
+        {"type": "table", "paragraphs": [], "warnings": [], "id": "table"}
+    )
+    converted = fake_presentation()
+    converted["slides"][0]["pageElements"].append(
+        {
+            "elementGroup": {
+                "children": [
+                    {"image": {"contentUrl": "redacted"}},
+                    {
+                        "table": {
+                            "tableRows": [
+                                {
+                                    "tableCells": [
+                                        {
+                                            "text": {
+                                                "textElements": [{"textRun": {"content": "one"}}]
+                                            }
+                                        },
+                                        {
+                                            "text": {
+                                                "textElements": [{"textRun": {"content": "two"}}]
+                                            }
+                                        },
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                ]
+            }
+        }
+    )
+    assert google_text(converted["slides"][0]["pageElements"][-1]) == "one two"
+    assert not [
+        finding
+        for finding in verify(manifest, converted)
+        if finding["code"] == "object_count_changed"
+    ]
 
 
 def test_native_conversion_assets_and_report(pptx, tmp_path):

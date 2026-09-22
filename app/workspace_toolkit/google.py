@@ -98,18 +98,35 @@ class Google:
 
 
 def google_text(element: dict) -> str:
-    result = ""
+    fragments = []
     for item in element.get("shape", {}).get("text", {}).get("textElements", []):
-        result += item.get("textRun", {}).get("content", "")
+        fragments.append(item.get("textRun", {}).get("content", ""))
     for row in element.get("table", {}).get("tableRows", []):
         for cell in row.get("tableCells", []):
-            result += " ".join(
-                e.get("textRun", {}).get("content", "")
-                for e in cell.get("text", {}).get("textElements", [])
+            fragments.append(
+                "".join(
+                    e.get("textRun", {}).get("content", "")
+                    for e in cell.get("text", {}).get("textElements", [])
+                )
             )
     for child in element.get("elementGroup", {}).get("children", []):
-        result += " " + google_text(child)
-    return result
+        fragments.append(google_text(child))
+    return " ".join(fragment for fragment in fragments if fragment)
+
+
+def google_object_counts(elements: list[dict]) -> Counter:
+    counts: Counter = Counter()
+    for element in elements:
+        if "image" in element:
+            counts["image"] += 1
+        if "table" in element:
+            counts["table"] += 1
+        if "sheetsChart" in element:
+            counts["chart"] += 1
+        children = element.get("elementGroup", {}).get("children", [])
+        if children:
+            counts.update(google_object_counts(children))
+    return counts
 
 
 def verify(manifest: dict, presentation: dict) -> list[dict]:
@@ -163,6 +180,25 @@ def verify(manifest: dict, presentation: dict) -> list[dict]:
                     classification=C.UNSUPPORTED,
                 )
             )
+        source_counts = Counter(
+            element["type"]
+            for element in source["elements"]
+            if element["type"] in {"image", "table", "chart"}
+        )
+        converted_counts = google_object_counts(target.get("pageElements", []))
+        for kind in ("image", "table", "chart"):
+            if converted_counts[kind] < source_counts[kind]:
+                findings.append(
+                    warning(
+                        "object_count_changed",
+                        f"Some source {kind} objects could not be verified after import.",
+                        slideIndex=source["index"],
+                        objectType=kind,
+                        sourceCount=source_counts[kind],
+                        convertedCount=converted_counts[kind],
+                        classification=C.UNSUPPORTED,
+                    )
+                )
     findings.append(
         warning(
             "visual_review_required",
