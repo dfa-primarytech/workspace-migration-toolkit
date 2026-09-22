@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from .config import Settings
 from .errors import ToolkitError
+from .package import PPTX, Format
 
 
 @contextmanager
@@ -21,7 +22,7 @@ def workspace(settings: Settings):
         yield uuid4().hex, root
 
 
-async def preflight(root: Path, settings: Settings) -> dict:
+async def preflight(root: Path, settings: Settings, fmt: Format = PPTX) -> dict:
     output = root / "result"
     output.mkdir()
     # Worker receives limits only, never OAuth credentials or session keys.
@@ -34,9 +35,10 @@ async def preflight(root: Path, settings: Settings) -> dict:
         sys.executable,
         "-m",
         "workspace_toolkit.worker",
-        str(root / "source.pptx"),
+        str(root / ("source" + fmt.suffix)),
         str(output),
         str(config),
+        fmt.key,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         env={
@@ -51,13 +53,11 @@ async def preflight(root: Path, settings: Settings) -> dict:
         if process.returncode is None:
             process.kill()
         await process.wait()
-        raise ToolkitError(
-            "parser_timeout", "This presentation took too long to analyse.", 422
-        ) from None
+        raise ToolkitError("parser_timeout", "This file took too long to analyse.", 422) from None
     if process.returncode:
         error = output / "error.json"
         if error.exists():
             data = json.loads(error.read_text(encoding="utf-8"))
             raise ToolkitError(data["code"], data["message"], data["status"])
-        raise ToolkitError("parse_failed", "The presentation could not be analysed.")
+        raise ToolkitError("parse_failed", "The file could not be analysed.")
     return json.loads((output / "manifest.json").read_text(encoding="utf-8"))

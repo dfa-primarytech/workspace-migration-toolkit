@@ -16,10 +16,10 @@ from starlette.staticfiles import StaticFiles
 from .auth import SESSION, STATE, Auth
 from .config import Settings
 from .errors import ToolkitError
-from .google import Google, convert
+from .google import Google
 from .jobs import preflight, workspace
 from .package import validate_upload_name
-from .pptx import analysis_report
+from .pipelines import describe, resolve
 
 logger = logging.getLogger("workspace_toolkit")
 STATIC = Path(__file__).parent / "static"
@@ -81,12 +81,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "signedIn": True,
                 "csrfToken": data["csrf"],
                 "maxUploadBytes": settings.max_upload_bytes,
+                "formats": describe(),
             }
         except ToolkitError:
             return {
                 "signedIn": False,
                 "configured": settings.oauth_ready,
                 "maxUploadBytes": settings.max_upload_bytes,
+                "formats": describe(),
             }
 
     @app.get("/auth/start")
@@ -124,7 +126,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def run(request: Request, do_convert: bool):
         session = auth.session(request, csrf=True)
         filename = unquote(request.headers.get("x-upload-filename", ""))
-        validate_upload_name(filename, request.headers.get("content-type", ""))
+        pipeline = resolve(filename)
+        validate_upload_name(filename, request.headers.get("content-type", ""), pipeline.fmt)
         length = request.headers.get("content-length")
         if length:
             try:
@@ -144,7 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     async with asyncio.timeout(settings.job_timeout):
                         size = 0
-                        with (root / "source.pptx").open("xb") as stream:
+                        with (root / pipeline.source_name).open("xb") as stream:
                             async for chunk in request.stream():
                                 size += len(chunk)
                                 if size > settings.max_upload_bytes:
@@ -158,9 +161,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             raise ToolkitError(
                                 "empty_upload", "Please choose a file that is not empty."
                             )
-                        manifest = await preflight(root, settings)
+                        manifest = await preflight(root, settings, pipeline.fmt)
                         if not do_convert:
-                            return analysis_report(manifest)
+                            return pipeline.analysis_report(manifest)
                         if request.headers.get("x-source-sha256") != manifest["source"]["sha256"]:
                             raise ToolkitError(
                                 "source_changed",
@@ -168,7 +171,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 409,
                             )
                         async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-                            return await convert(
+                            return await pipeline.convert(
                                 root,
                                 manifest,
                                 Google(session["access_token"], client),
@@ -196,7 +199,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             {
                                 "event": "job_finished",
                                 "jobId": job_id,
-                                "fileType": "pptx",
+                                "fileType": pipeline.fmt.key,
                                 "durationMs": round((time.monotonic() - began) * 1000),
                             }
                         )
