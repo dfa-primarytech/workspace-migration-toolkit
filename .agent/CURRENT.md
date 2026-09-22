@@ -40,9 +40,32 @@ on `feat/publisher-ir` as draft PR #12: roughly 5,700 lines of C++ and tests.
 That work was recovered by git bundle and pushed from another environment,
 because the Publisher session gets 403 on push. **It still has no write access.**
 Until it is added as a collaborator, or switches to forking, every session there
-ends needing a manual rescue. Nothing in #12 has been compiled or tested here;
-its Docker and CI files are planned but not yet in the branch, so no Linux CI
-has run. PUB-001 regression acceptance remains blocked on the private fixture.
+ends needing a manual rescue.
+
+#12 has now been built and tested on Linux CI, and all five checks are green.
+The container build passes and runs the 85 C++ unit tests on a clean Ubuntu
+base during the image build. Two CI failures were found and fixed on the way,
+both in platform-owned files that the Publisher session could not have reached:
+`.dockerignore` excluded `**` and re-included only the platform image's files,
+so any second image built from the repository root failed; and the secret scan
+flagged PUB-001's SHA-256 as high-entropy hex, now excluded by that exact key
+alone.
+
+PUB-001 acceptance is **no longer blocked**. The private fixture was supplied,
+and the parser reproduced every expected count with zero diagnostics: 4 pages at
+420.944882 x 595.275591 pt, 22 elements, 82 paragraphs, 147 styled runs, 204
+text insertions, 12 image placements over 11 deduplicated assets, one 1x3 table,
+two paths, one rendering layer and three fonts. It runs locally only -- the
+document is a real school booklet and must never be committed -- so the CI job
+reports NOT RUN ON CI rather than claiming a pass. 85 C++ tests and 55 Python
+tests pass with the fixture supplied; 22 skip without it.
+
+What remains unverified for Publisher is breadth, not depth: only one real
+document has been parsed. PUB-001 contains no authored group, no
+`drawGraphicObject`, no master page, no metafile image, no embedded font, no
+list, no link and no rotated object. Those paths have synthetic callback tests
+only. PUB-002 onwards are the next real dependency, and #12 stays draft until
+then.
 
 Live OAuth, real Google conversion and visual fidelity remain unverified for
 both PPTX and DOCX. Every Google interaction is covered by test doubles only.
