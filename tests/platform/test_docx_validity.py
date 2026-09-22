@@ -39,6 +39,7 @@ from .test_docx import (
     run,
     write_docx,
 )
+from .test_docx_rtl import ARABIC, rtl_anchor
 from .test_docx_sections import (
     A4_LANDSCAPE,
     A4_PORTRAIT,
@@ -245,6 +246,25 @@ def test_a_box_on_the_section_break_is_laid_out_on_its_own_sections_page(tmp_pat
         f"expected page {portrait + 1} with 'Portrait body', found it on page "
         f"{card + 1}. pages={pages}"
     )
+
+
+@needs_pdftotext
+def test_a_right_to_left_box_produces_a_package_that_still_opens(tmp_path):
+    """`w:bidiVisual` has to sit between tblOverlap and tblW in CT_TblPrBase.
+
+    Put it after `tblW` and every element is still individually valid, so our
+    own tests see nothing wrong -- this is the check that would notice. The
+    Latin marker rides inside the right-to-left paragraph because mixed
+    content is ordinary in these documents and gives an assertion that does
+    not depend on how a text extractor handles bidirectional runs.
+
+    What this does not prove is that Google lays the result out correctly.
+    That still needs human eyes on a real import.
+    """
+    body = rtl_anchor("RTLMARKER " + ARABIC) + SECTION
+    converted = convert_fixture(tmp_path, body)
+    pdf = soffice_convert(converted, "pdf", tmp_path / "out")
+    assert "RTLMARKER" in rendered_text(pdf), "the right-to-left text box did not reach the page"
 
 
 @needs_soffice

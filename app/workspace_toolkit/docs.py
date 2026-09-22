@@ -17,8 +17,8 @@ Everything this module does is grounded in observed importer behaviour:
   drawings. Those are the ones that must be rewritten.
 
 Schema order matters in two places and breaks the file silently if ignored:
-CT_TblPrBase requires tblpPr and tblOverlap before tblW, and CT_Anchor requires
-any wrap element before <wp:docPr>.
+CT_TblPrBase requires tblpPr, tblOverlap and bidiVisual before tblW, and
+CT_Anchor requires any wrap element before <wp:docPr>.
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> None:
     # laid out landscape. Content belonging to this section must precede it.
     at = index if _ends_section(paragraph) else index + 1
     container.insert(at, table)
-    _keep_tables_apart(container, at)
+    _keep_tables_apart(container, at, rtl=is_rtl(paragraph))
 
 
 def _ends_section(paragraph: Element) -> bool:
@@ -203,13 +203,44 @@ def _ends_section(paragraph: Element) -> bool:
     return properties is not None and properties.find(q("w", "sectPr")) is not None
 
 
-def _keep_tables_apart(container: Element, at: int) -> None:
+def is_rtl(paragraph: Element | None) -> bool:
+    """Whether this paragraph reads right to left.
+
+    `<w:bidi>` in the paragraph's own properties is the direct statement. A
+    section's `sectPr` carries one too, but that is the *section's* default and
+    a paragraph may override it, so only the paragraph is consulted here; the
+    callers that need a section default pass the paragraph that carries it.
+    """
+    if paragraph is None:
+        return False
+    properties = paragraph.find(q("w", "pPr"))
+    if properties is None:
+        return False
+    bidi = properties.find(q("w", "bidi"))
+    return bidi is not None and bidi.get(q("w", "val")) not in ("0", "false")
+
+
+def new_paragraph(rtl: bool = False) -> Element:
+    """An empty paragraph, reading the same way as the text around it.
+
+    Every paragraph this converter *creates* -- table separators, the filler
+    an empty cell requires -- has no author to inherit direction from. Left
+    bare in a right-to-left document it reads left to right, which puts the
+    paragraph mark and the caret on the wrong side of the page.
+    """
+    paragraph = Element(q("w", "p"))
+    if rtl:
+        SubElement(SubElement(paragraph, q("w", "pPr")), q("w", "bidi"))
+    return paragraph
+
+
+def _keep_tables_apart(container: Element, at: int, rtl: bool = False) -> None:
     """Adjacent <w:tbl> siblings merge into one table, so separate them."""
     children = list(container)
     if at + 1 < len(children) and local(children[at + 1].tag) == "tbl":
-        container.insert(at + 1, Element(q("w", "p")))
+        container.insert(at + 1, new_paragraph(rtl))
     if at > 0 and local(children[at - 1].tag) == "tbl":
-        container.insert(at, Element(q("w", "p")))
+        container.insert(at, new_paragraph(rtl))
 
 
 def _mark_backing_pictures(items: list[Anchored]) -> None:
@@ -440,15 +471,29 @@ def build_table(item: Anchored, ids: Ids) -> Element | None:
     if content is None:
         return None
     width = to_dxa(item.extent["cx"]) if item.extent else 9000
+    # The box's own paragraphs first -- Word states direction on every
+    # paragraph it writes, so an explicit reading is usually available. An
+    # empty text box has none, and then the paragraph it is anchored to is the
+    # best evidence there is.
+    rtl = any(is_rtl(p) for p in content.findall(".//" + q("w", "p"))) or is_rtl(item.paragraph)
 
     table = Element(q("w", "tbl"))
     properties = SubElement(table, q("w", "tblPr"))
 
-    # Schema order: tblpPr and tblOverlap must precede tblW.
+    # Schema order: CT_TblPrBase runs tblpPr, tblOverlap, bidiVisual, then
+    # tblW. Emitting bidiVisual after tblW would be rejected by a validating
+    # reader even though every element is individually correct.
     position = floating_properties(item)
     if position is not None:
         properties.append(position)
         SubElement(properties, q("w", "tblOverlap")).set(q("w", "val"), "never")
+
+    # A right-to-left text box becomes a right-to-left table. With one column
+    # there is no cell order to mirror, so this changes nothing visible today
+    # -- it states the table's direction so that a reader laying out borders,
+    # indentation or any future multi-column cell does not have to guess.
+    if rtl:
+        SubElement(properties, q("w", "bidiVisual"))
 
     SubElement(properties, q("w", "tblW")).attrib.update(
         {q("w", "w"): str(width), q("w", "type"): "dxa"}
@@ -469,12 +514,12 @@ def build_table(item: Anchored, ids: Ids) -> Element | None:
     SubElement(grid, q("w", "gridCol")).set(q("w", "w"), str(width))
 
     row = SubElement(table, q("w", "tr"))
-    row.append(build_cell(item, content, width))
+    row.append(build_cell(item, content, width, rtl=rtl))
     _ = ids  # docPr ids are only needed when rebuilding drawings
     return table
 
 
-def build_cell(item: Anchored, content: Element, width: int) -> Element:
+def build_cell(item: Anchored, content: Element, width: int, rtl: bool = False) -> Element:
     cell = Element(q("w", "tc"))
     properties = SubElement(cell, q("w", "tcPr"))
     SubElement(properties, q("w", "tcW")).attrib.update(
@@ -496,7 +541,9 @@ def build_cell(item: Anchored, content: Element, width: int) -> Element:
         content.remove(paragraph)
         cell.append(paragraph)
     if cell.find(q("w", "p")) is None:
-        SubElement(cell, q("w", "p"))
+        # OOXML requires a cell to end with a paragraph. This one is ours, so
+        # it has no author's direction to inherit.
+        cell.append(new_paragraph(rtl))
     return cell
 
 
