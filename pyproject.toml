@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=78"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workspace-migration-toolkit"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "httpx>=0.28,<1",
+  "cryptography>=44", "defusedxml>=0.7.1,<1"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.11", "mypy>=1.15", "pip-audit>=2.9", "bandit>=1.8", "detect-secrets>=1.5", "types-defusedxml>=0.7"]
+
+[project.scripts]
+workspace-preflight = "workspace_toolkit.cli:main"
+workspace-server = "workspace_toolkit.server:main"
+
+[tool.setuptools.packages.find]
+where = ["app"]
+
+[tool.setuptools.package-data]
+workspace_toolkit = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/platform"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+files = ["app"]

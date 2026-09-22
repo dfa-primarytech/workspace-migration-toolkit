@@ -22,3 +22,19 @@ desktop.ini
 
 # Local agent/session config
 .claude/
+# Platform build/test files and private runtime data
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+.env
+.env.*
+!.env.example
+credentials*.json
+*token*.json
+job-output/
