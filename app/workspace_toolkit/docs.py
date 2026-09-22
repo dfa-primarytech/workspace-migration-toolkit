@@ -24,6 +24,7 @@ any wrap element before <wp:docPr>.
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
@@ -235,6 +236,101 @@ def send_behind_text(anchor: Element) -> None:
     anchor.insert(at, Element(q("wp", "wrapNone")))
 
 
+# VML style lengths carry their unit. Word writes pt almost always, but not
+# only -- and a picture skipped for an unrecognised unit is a picture lost.
+VML_UNITS_TO_EMU = {
+    "pt": 12700,
+    "in": 914400,
+    "cm": 360000,
+    "mm": 36000,
+    "pc": 152400,
+    "px": 9525,  # at VML's assumed 96dpi
+}
+VML_LENGTH = re.compile(r"(-?[\d.]+)\s*(pt|in|cm|mm|pc|px)", re.IGNORECASE)
+
+
+def vml_length(style: str, name: str) -> int | None:
+    """Reads one dimension out of a VML style attribute, in EMU."""
+    match = re.search(name + r"\s*:\s*([^;]+)", style, re.IGNORECASE)
+    if not match:
+        return None
+    size = VML_LENGTH.match(match.group(1).strip())
+    if not size:
+        return None
+    try:
+        return round(float(size.group(1)) * VML_UNITS_TO_EMU[size.group(2).lower()])
+    except (ValueError, KeyError):
+        return None
+
+
+def fix_legacy_pictures(root: Element, ids: Ids) -> int:
+    """Rewrites VML-only pictures as modern inline DrawingML.
+
+    Word keeps some images as <w:pict> with a VML shape and no DrawingML
+    sibling -- usually pasted or very old content. Google's importer ignores
+    them entirely, so the picture simply disappears. Rebuilding them as an
+    inline <w:drawing> referencing the same relationship keeps the image.
+
+    Only touches a <w:pict> whose parent is a run: it also appears inside
+    <w:object>, where a <w:drawing> is not a legal child.
+    """
+    converted = 0
+    for container, pict in _pairs(root, q("w", "pict")):
+        if local(container.tag) != "r":
+            continue
+        shape = pict.find(".//" + q("v", "shape"))
+        image = pict.find(".//" + q("v", "imagedata"))
+        if shape is None or image is None:
+            continue
+        rid = image.get(q("r", "id"))
+        if not rid:
+            continue
+        style = shape.get("style") or ""
+        cx = vml_length(style, "width")
+        cy = vml_length(style, "height")
+        if not cx or not cy:
+            continue
+        at = list(container).index(pict)
+        container.remove(pict)
+        container.insert(at, make_inline_drawing(rid, cx, cy, shape.get("alt") or "Picture", ids))
+        converted += 1
+    return converted
+
+
+def make_inline_drawing(rid: str, cx: int, cy: int, name: str, ids: Ids) -> Element:
+    """Builds the <w:drawing> wrapper for an inline picture."""
+    number = str(ids.next())
+    drawing = Element(q("w", "drawing"))
+    inline = SubElement(drawing, q("wp", "inline"))
+    inline.attrib.update({"distT": "0", "distB": "0", "distL": "0", "distR": "0"})
+    SubElement(inline, q("wp", "extent")).attrib.update({"cx": str(cx), "cy": str(cy)})
+    SubElement(inline, q("wp", "effectExtent")).attrib.update(
+        {"l": "0", "t": "0", "r": "0", "b": "0"}
+    )
+    SubElement(inline, q("wp", "docPr")).attrib.update({"id": number, "name": name})
+    frame = SubElement(inline, q("wp", "cNvGraphicFramePr"))
+    SubElement(frame, q("a", "graphicFrameLocks")).set("noChangeAspect", "1")
+
+    graphic = SubElement(inline, q("a", "graphic"))
+    data = SubElement(graphic, q("a", "graphicData"))
+    data.set("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")
+    picture = SubElement(data, q("pic", "pic"))
+    properties = SubElement(picture, q("pic", "nvPicPr"))
+    SubElement(properties, q("pic", "cNvPr")).attrib.update({"id": number, "name": name})
+    SubElement(properties, q("pic", "cNvPicPr"))
+    fill = SubElement(picture, q("pic", "blipFill"))
+    SubElement(fill, q("a", "blip")).set(q("r", "embed"), rid)
+    SubElement(SubElement(fill, q("a", "stretch")), q("a", "fillRect"))
+    shape_properties = SubElement(picture, q("pic", "spPr"))
+    transform_element = SubElement(shape_properties, q("a", "xfrm"))
+    SubElement(transform_element, q("a", "off")).attrib.update({"x": "0", "y": "0"})
+    SubElement(transform_element, q("a", "ext")).attrib.update({"cx": str(cx), "cy": str(cy)})
+    geometry = SubElement(shape_properties, q("a", "prstGeom"))
+    geometry.set("prst", "rect")
+    SubElement(geometry, q("a", "avLst"))
+    return drawing
+
+
 def remove_empty_paragraphs(root: Element) -> None:
     """Removes paragraphs left hollow once their only content was relocated.
 
@@ -413,6 +509,9 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     remove_background(root)
     report = replace_anchors(root, ids)
     report["ink"] += ink
+    # After the anchors: a legacy picture inside a text box only becomes
+    # reachable once that text box has been moved into its table.
+    report["legacyPictures"] = fix_legacy_pictures(root, ids)
     remove_empty_paragraphs(root)
     return report
 
@@ -421,20 +520,55 @@ def serialise(root: Element) -> bytes:
     return XML_DECLARATION + tostring(root, encoding="utf-8", xml_declaration=False)
 
 
+HEADER_FOOTER = re.compile(r"^word/(header|footer)\d*\.xml$")
+
+
+def story_parts(package: Package) -> list[str]:
+    """Every part carrying body-like content, not just the main document.
+
+    Headers and footers hold exactly the same constructs -- anchored text
+    boxes, legacy pictures, ink -- and Google mishandles them the same way.
+    Leaving them out means branded letterheads and title blocks break while the
+    body converts cleanly.
+    """
+    headers = sorted(n for n in package.names if HEADER_FOOTER.match(n))
+    return [DOCX.main_part, *headers]
+
+
 def render(package: Package, destination: Path) -> dict:
     """Writes a Google-ready .docx beside the original and reports what changed."""
-    root = package.xml(DOCX.main_part)
-    # Captured before transform(), which moves text out of the shapes.
-    tokens = Counter(source_text(root).split())
-    report = transform(root)
+    ids = Ids()
+    report: dict[str, Any] = {
+        "textboxes": 0,
+        "pictures": 0,
+        "ink": 0,
+        "legacyPictures": 0,
+        "unsupported": {},
+        "parts": [],
+    }
+    rewritten: dict[str, bytes] = {}
+    tokens: Counter = Counter()
+
+    for name in story_parts(package):
+        root = package.xml(name)
+        if name == DOCX.main_part:
+            # Body text only. Drive's plain-text export does not reliably
+            # include headers, so counting them would invent mismatches.
+            tokens = Counter(source_text(root).split())
+        part_report = transform(root, ids)
+        rewritten[name] = serialise(root)
+        report["parts"].append(name)
+        for key in ("textboxes", "pictures", "ink", "legacyPictures"):
+            report[key] += part_report[key]
+        for label, count in part_report["unsupported"].items():
+            report["unsupported"][label] = report["unsupported"].get(label, 0) + count
+
     report["tokens"] = dict(tokens)
-    document = serialise(root)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as out:
         for name in sorted(package.names):
-            data = document if name == DOCX.main_part else package.read(name)
-            out.writestr(name, data)
+            out.writestr(name, rewritten.get(name) or package.read(name))
     return report
 
 

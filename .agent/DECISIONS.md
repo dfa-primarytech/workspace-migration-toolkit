@@ -66,3 +66,27 @@ properly, 6 of 18 anchors in one and 4 of 15 in another are duplicates, and no
 sample document contains a real backing picture. The behind-text handling is
 still correct for documents that use the pattern; it simply does not fire on
 this sample, so it remains unexercised by real data.
+
+## 2026-09-22: Headers and footers are story parts, not decoration
+word/header*.xml and word/footer*.xml carry the same constructs as the body --
+anchored text boxes, legacy pictures, ink -- and Google mishandles them the same
+way. They now get the identical transform. Branded letterheads and title blocks
+live there, so converting the body while leaving the header broken is the worst
+of both worlds. Their text is deliberately excluded from the verification token
+count: Drive's plain-text export does not reliably include headers, so counting
+them would report a mismatch on every document that has one.
+
+## 2026-09-22: The full-page background heuristic is not ported
+The Apps Script fixer detected full-page decorative images in headers by size
+and page-aspect match, and deleted them. That existed because the old converter
+flattened every picture inline, where a full-page background is ruinous. The
+platform keeps pictures as floating anchors with their original position, so a
+background can simply stay where it is. Deleting content on a size heuristic is
+a worse trade than leaving it, now that leaving it works. Reconsider only if a
+real conversion shows backgrounds breaking the result.
+
+## 2026-09-22: VML lengths are read in every unit, not just points
+The Apps Script version matched "pt" only and silently skipped anything else,
+which loses the picture entirely. The port reads pt, in, cm, mm, pc and px. An
+unmeasurable shape is left as-is rather than dropped: a picture we cannot resize
+is still a picture.

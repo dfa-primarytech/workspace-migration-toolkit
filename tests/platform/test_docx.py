@@ -540,7 +540,13 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
 
     # And the renderer agrees: the fallback is discarded before anchors are read.
     root, report = transform_body(tmp_path, body)
-    assert report == {"textboxes": 1, "pictures": 0, "ink": 0, "unsupported": {}}
+    assert report == {
+        "textboxes": 1,
+        "pictures": 0,
+        "ink": 0,
+        "legacyPictures": 0,
+        "unsupported": {},
+    }
 
 
 def test_parser_and_renderer_agree_on_what_is_in_the_document(tmp_path):
@@ -559,3 +565,142 @@ def test_parser_and_renderer_agree_on_what_is_in_the_document(tmp_path):
     assert counted["textbox"] == report["textboxes"]
     assert counted["picture"] == report["pictures"]
     assert counted["unsupported"] == sum(report["unsupported"].values())
+
+
+# ---------------------------------------------------------------- legacy VML
+
+
+def pict(style, rid="rId1", alt=None, wrapper="r"):
+    attr = f' alt="{alt}"' if alt else ""
+    shape = f'<v:shape style="{style}"{attr}><v:imagedata r:id="{rid}"/></v:shape>'
+    return f"<w:p><w:{wrapper}><w:pict>{shape}</w:pict></w:{wrapper}></w:p>"
+
+
+def test_a_vml_only_picture_becomes_an_inline_drawing(tmp_path):
+    # Google's importer ignores <w:pict> entirely, so without this the image
+    # simply disappears from the converted document.
+    body = pict("width:117.4pt;height:78.3pt", alt="Reward stamp") + SECTION
+    root, report = transform_body(tmp_path, body)
+    assert report["legacyPictures"] == 1
+    assert root.find(".//" + q("w", "pict")) is None
+
+    extent = root.find(".//" + q("wp", "extent"))
+    assert extent.get("cx") == str(round(117.4 * 12700))
+    assert extent.get("cy") == str(round(78.3 * 12700))
+    assert root.find(".//" + q("a", "blip")).get(q("r", "embed")) == "rId1"
+    assert root.find(".//" + q("wp", "docPr")).get("name") == "Reward stamp"
+    # Inline, not anchored: a VML shape's position is not recoverable.
+    assert root.find(".//" + q("wp", "inline")) is not None
+
+
+def test_vml_sizes_are_read_in_every_unit_word_writes(tmp_path):
+    for style, cx in (
+        ("width:1in;height:1in", 914400),
+        ("width:2.54cm;height:1in", 914400),
+        ("width:25.4mm;height:1in", 914400),
+        ("width:96px;height:1in", 914400),
+        ("width:6pc;height:1in", 914400),
+    ):
+        root, report = transform_body(tmp_path, pict(style) + SECTION)
+        assert report["legacyPictures"] == 1, style
+        assert root.find(".//" + q("wp", "extent")).get("cx") == str(cx), style
+
+
+def test_an_unmeasurable_vml_picture_is_left_alone_not_deleted(tmp_path):
+    body = pict("width:auto;height:auto") + SECTION
+    root, report = transform_body(tmp_path, body)
+    assert report["legacyPictures"] == 0
+    assert root.find(".//" + q("w", "pict")) is not None, "content must survive"
+
+
+def test_a_pict_outside_a_run_is_not_rewritten(tmp_path):
+    # <w:drawing> is not a legal child of <w:object>.
+    body = pict("width:10pt;height:10pt", wrapper="object") + SECTION
+    root, report = transform_body(tmp_path, body)
+    assert report["legacyPictures"] == 0
+    assert root.find(".//" + q("w", "pict")) is not None
+
+
+def test_generated_drawing_ids_are_unique(tmp_path):
+    body = pict("width:10pt;height:10pt") + pict("width:20pt;height:20pt", rid="rId2") + SECTION
+    root, _ = transform_body(tmp_path, body)
+    ids = [e.get("id") for e in root.iter(q("wp", "docPr"))]
+    assert len(ids) == 2 and len(set(ids)) == 2
+
+
+# ---------------------------------------------------------------- headers
+
+
+def docx_with_header(path, body, header, footer=None):
+    parts = dict(docx_parts(body))
+    parts["word/header1.xml"] = document(header).replace("w:document", "w:hdr")
+    if footer is not None:
+        parts["word/footer1.xml"] = document(footer).replace("w:document", "w:ftr")
+    parts["[Content_Types].xml"] = parts["[Content_Types].xml"].replace(
+        "</Types>",
+        '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-'
+        'officedocument.wordprocessingml.header+xml"/></Types>',
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in parts.items():
+            archive.writestr(name, content)
+    return path
+
+
+def render_with_header(tmp_path, body, header, footer=None):
+    source = docx_with_header(tmp_path / "sample.docx", body, header, footer)
+    package = Package(source, Settings(), DOCX)
+    try:
+        report = render(package, tmp_path / "out.docx")
+    finally:
+        package.close()
+    with zipfile.ZipFile(tmp_path / "out.docx") as archive:
+        parts = {n: archive.read(n).decode() for n in archive.namelist() if n.endswith(".xml")}
+    return report, parts
+
+
+def test_headers_get_the_same_structural_passes_as_the_body(tmp_path):
+    # Branded letterheads put their content in headers. Converting the body
+    # while leaving the header broken is the worst of both worlds.
+    header = anchor(TEXTBOX, h=("margin", offset(0)), v=("paragraph", offset(0)))
+    report, parts = render_with_header(tmp_path, SECTION, header)
+    assert report["parts"] == ["word/document.xml", "word/header1.xml"]
+    assert report["textboxes"] == 1
+    assert "<w:tbl>" in parts["word/header1.xml"]
+    assert "tblpPr" in parts["word/header1.xml"]
+
+
+def test_footers_are_transformed_too_and_counts_are_merged(tmp_path):
+    header = pict("width:10pt;height:10pt")
+    footer = anchor(INK)
+    report, parts = render_with_header(tmp_path, SECTION, header, footer)
+    assert set(report["parts"]) == {
+        "word/document.xml",
+        "word/header1.xml",
+        "word/footer1.xml",
+    }
+    assert report["legacyPictures"] == 1
+    assert report["ink"] == 1
+
+
+def test_header_text_is_not_counted_for_verification(tmp_path):
+    # Drive's plain-text export does not reliably include headers, so counting
+    # their text would report a mismatch on every document that has one.
+    body = "<w:p><w:r><w:t>Body words</w:t></w:r></w:p>" + SECTION
+    header = "<w:p><w:r><w:t>Letterhead</w:t></w:r></w:p>"
+    report, _ = render_with_header(tmp_path, body, header)
+    assert report["tokens"] == {"Body": 1, "words": 1}
+
+
+def test_every_other_part_survives_the_multi_part_rewrite(tmp_path):
+    header = anchor(TEXTBOX, h=("margin", offset(0)), v=("paragraph", offset(0)))
+    source = docx_with_header(tmp_path / "sample.docx", SECTION, header)
+    package = Package(source, Settings(), DOCX)
+    try:
+        render(package, tmp_path / "out.docx")
+        original = set(package.names)
+    finally:
+        package.close()
+    with zipfile.ZipFile(tmp_path / "out.docx") as archive:
+        assert set(archive.namelist()) == original
+        assert archive.read("word/media/image1.png").startswith(b"\x89PNG")
