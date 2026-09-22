@@ -1,0 +1,57 @@
+# Checks that the .docx the converter emits is accepted by an OOXML
+# implementation that is not our own.
+#
+# Separate from platform.yml because it installs LibreOffice, which is slow and
+# only needed for these tests -- and because platform.yml belongs to the
+# platform stream. Kept in its own file so neither stream blocks the other.
+name: DOCX validity
+
+on:
+  push:
+    paths:
+      - 'app/workspace_toolkit/docx.py'
+      - 'app/workspace_toolkit/docs.py'
+      - 'app/workspace_toolkit/package.py'
+      - 'tests/platform/test_docx*.py'
+      - '.github/workflows/docx-validity.yml'
+  pull_request:
+    paths:
+      - 'app/workspace_toolkit/docx.py'
+      - 'app/workspace_toolkit/docs.py'
+      - 'app/workspace_toolkit/package.py'
+      - 'tests/platform/test_docx*.py'
+      - '.github/workflows/docx-validity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  libreoffice:
+    name: Independent reader accepts our output
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install LibreOffice
+        # --no-install-recommends keeps this to roughly the Writer filters
+        # rather than the whole office suite.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-writer
+          soffice --version
+
+      - name: Install the application
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+
+      - name: Convert and re-read with LibreOffice
+        # Fails if any test is skipped: a silent skip here would report green
+        # while checking nothing, which is worse than no check at all.
+        run: python -m pytest tests/platform/test_docx_validity.py -v -ra --strict-markers
