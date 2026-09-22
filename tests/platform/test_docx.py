@@ -484,16 +484,16 @@ def test_conversion_uploads_the_repaired_package_not_the_original(tmp_path):
 
 
 def test_missing_text_is_reported_as_a_count_never_as_content(tmp_path):
-    # A distinctive token so "did the document's own words leak into the
+    # A distinctive canary so "did the document's own words leak into the
     # report?" has an unambiguous answer. The report is saved to Drive, so it
     # must carry counts only.
-    secret = "Safeguarding-Quokka-7781"
-    box = TEXTBOX.replace("Card text", secret)
+    canary = "Quokka-Marmalade-7781"
+    box = TEXTBOX.replace("Card text", canary)
     body = anchor(box, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION
     report, _ = converted_job(tmp_path, body, exported="")
     mismatch = [w for w in report["warnings"] if w["code"] == "text_mismatch"]
     assert mismatch and mismatch[0]["missingTokenCount"] == 1
-    assert secret not in json.dumps(report)
+    assert canary not in json.dumps(report)
 
 
 def test_layout_always_needs_a_human_even_when_text_matches(tmp_path):
