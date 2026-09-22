@@ -41,3 +41,4 @@ job-output/
 
 # Native parser build output
 native/pub-parser/build/
+.mcp.json
