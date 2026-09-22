@@ -39,9 +39,13 @@ void usage() {
                "  --max-input-bytes N     refuse inputs larger than N bytes\n"
                "  --max-seconds S         collection time budget (a backstop; the caller must\n"
                "                          also impose a hard subprocess timeout)\n"
+               "  --max-callbacks N       maximum collected callbacks\n"
+               "  --max-pages N           maximum collected pages\n"
+               "  --max-elements N        maximum collected elements\n"
                "  --max-assets N          maximum distinct extracted assets\n"
                "  --max-asset-bytes N     maximum bytes for a single asset\n"
-               "  --max-elements N        maximum collected elements\n"
+               "  --max-total-asset-bytes N  maximum bytes across all assets\n"
+               "  --max-text-bytes N      maximum collected text bytes\n"
                "  --version               print the parser and library versions\n"
                "  --help                  print this message\n");
 }
@@ -113,9 +117,13 @@ int main(int argc, char **argv) {
       return true;
     };
     if (needsValue("--max-input-bytes", limits.maxInputBytes)) continue;
+    if (needsValue("--max-callbacks", limits.maxCallbacks)) continue;
+    if (needsValue("--max-pages", limits.maxPages)) continue;
+    if (needsValue("--max-elements", limits.maxElements)) continue;
     if (needsValue("--max-assets", limits.maxAssets)) continue;
     if (needsValue("--max-asset-bytes", limits.maxAssetBytes)) continue;
-    if (needsValue("--max-elements", limits.maxElements)) continue;
+    if (needsValue("--max-total-asset-bytes", limits.maxTotalAssetBytes)) continue;
+    if (needsValue("--max-text-bytes", limits.maxTextBytes)) continue;
     if (arg == "--max-seconds") {
       long long seconds = 0;
       if (i + 1 >= argc || !parseLongLong(argv[i + 1], seconds)) {

@@ -18,16 +18,20 @@ input.pub → libmspub → native adapter → document.json
 
 | Part | State |
 |---|---|
-| Callback adapter and IR model | Implemented, 83 unit tests passing |
-| `publisher-parser` CLI | Implemented; failure paths tested end to end |
-| Schema and validator | Implemented, 19 tests passing |
+| Callback adapter and IR model | Implemented, 85 unit tests passing |
+| `publisher-parser` CLI | Implemented; failure and limit paths tested end to end |
+| Schema and validator | Implemented |
+| PUB-001 regression | **Passing** against the real document — see [PUB-001](#pub-001) |
 | Linux container | Written, **build not yet executed** — see [Verification gaps](#verification-gaps) |
 | CI workflow | Written, **not yet executed** |
-| PUB-001 regression | **Blocked** on the private fixture — see [PUB-001](#pub-001) |
 
-The adapter has **not yet been run against any real `.pub` file.** Every
-test to date drives it with synthetic callback sequences. That is a real
-gap, not a formality: see [Verification gaps](#verification-gaps).
+The adapter has been run against PUB-001, the real four-page A5 school
+booklet, and reproduced every expected count: 4 pages at
+420.944882 × 595.275591 pt, 22 elements, 82 paragraphs, 147 styled runs,
+204 text insertions, 12 image placements over 11 deduplicated assets
+(8 PNG, 3 JPEG, one reused across two pages), one 1×3 table, two paths,
+one rendering wrapper and three fonts — **with zero diagnostics**, in
+0.12 s.
 
 ## Why a native adapter
 
@@ -53,19 +57,26 @@ real school document anywhere near the repository.
 
 ## Two findings that shape the model
 
-**Publisher paints pictures as shapes with a bitmap fill.** The investigated
-sample emitted *every visible image* as a `setStyle` with
-`draw:fill = "bitmap"` followed by a rectangular `drawPolygon`, and never
-called `drawGraphicObject` at all. A parser watching only
-`drawGraphicObject` would report a school newsletter as having no pictures
-in it. Both routes are supported, and every asset use records which one it
-came through.
+**Publisher paints pictures as shapes with a bitmap fill.** Confirmed on
+PUB-001: `drawGraphicObject` was called **zero** times, and all twelve
+images arrived as a `setStyle` with `draw:fill = "bitmap"` followed by a
+rectangular `drawPolygon`. A parser watching only `drawGraphicObject`
+would report that school booklet as having no pictures in it. Both routes
+are supported, and every asset use records which one it came through.
 
 **`startLayer` is not a group.** librevenge emits layers as a rendering
 construct. Treating one as a user-created Publisher group would invent
 structure the author never made, so wrappers (`type: "wrapper"`,
 `isAuthoredGroup: false`) and authored groups (`type: "group"`) are
-different things in the model.
+different things in the model. PUB-001 contains exactly one layer and no
+authored group, which is the case that would have been misreported.
+
+**libmspub declares column widths but not row heights.** PUB-001's table
+carries a 386.897244 pt column and no `style:row-height` or
+`style:min-row-height` on any of its three rows. Rather than leave a null
+to be read as zero, the table records a `table-row-heights-unknown`
+warning so a renderer knows the row geometry has to come from the
+content.
 
 ## Layout
 
@@ -148,8 +159,13 @@ resource limit. **A non-zero exit still writes `report.json`**, so a caller
 never has to interpret an exit code alone.
 
 Useful options: `--force` (write into a non-empty directory),
-`--max-input-bytes`, `--max-assets`, `--max-asset-bytes`, `--max-elements`,
-`--max-seconds`, `--version`.
+`--max-input-bytes`, `--max-callbacks`, `--max-pages`, `--max-elements`,
+`--max-assets`, `--max-asset-bytes`, `--max-total-asset-bytes`,
+`--max-text-bytes`, `--max-seconds`, `--version`.
+
+Each limit was exercised against PUB-001: every one halts collection,
+reports `status: "truncated"` with the reason, exits `3`, and still emits
+a bundle that passes full schema and referential validation.
 
 ## Testing
 
@@ -164,6 +180,9 @@ python3 -m unittest discover -s tests/publisher -t tests/publisher -v
 Neither needs a Google API, credentials or a network. The Python tests
 skip the CLI suite if the binary is not built, and skip the PUB-001 suite
 if the private fixture is not supplied.
+
+With the fixture supplied: **85 C++ tests and 55 Python tests pass, none
+skipped.**
 
 ## PUB-001
 
@@ -184,10 +203,16 @@ Without it, those ten tests skip with an explicit reason. **A skip is not a
 pass**, and the CI workflow's `pub001` job says so in its step summary
 rather than going green in a way that could be mistaken for acceptance.
 
-The expected counts came from an earlier investigation of the callback
-stream, not from this parser. If the parser disagrees with them, that is a
-finding to investigate — possibly a bug here, possibly a correction to the
-expectations — not a number to quietly edit.
+The expected counts originally came from an earlier investigation of the
+callback stream. **They have now been reproduced by this parser** against
+the real document, and the file records several values that were measured
+rather than predicted: the exact page geometry, the column width, the
+per-font usage counts, the bold/italic run tallies, the font sizes and
+colours, and the fact that `drawGraphicObject` is never called.
+
+If the parser later disagrees with any of them, that is a finding to
+investigate — possibly a bug here, possibly a libmspub change — not a
+number to quietly edit.
 
 ## Security
 
@@ -235,21 +260,24 @@ validator rejects a parser bundle that claims `basis: "verified"`.
 
 Stated plainly, because the tests passing does not close them:
 
-1. **No real `.pub` has been parsed.** Every passing test drives synthetic
-   callbacks. The adapter's behaviour against libmspub's *actual* callback
-   sequences — property spellings, ordering, which of the two image routes
-   a given file uses — is inferred from the library's headers and an
-   earlier investigation, not observed.
-2. **The container image has not been built.** No Docker daemon was
+1. **The container image has not been built.** No Docker daemon was
    available. Package names and versions were verified on Ubuntu 24.04,
-   which is why the image uses that base rather than Debian, but the build
-   itself is unrun.
-3. **CI has not executed.** The workflow is written but has never run.
-4. **PUB-001 acceptance is blocked** on the private fixture.
+   which is why the image uses that base rather than Debian, but the
+   build itself is unrun.
+2. **CI has not executed.** The workflow is written but has never run.
+3. **Only one real document has been parsed.** PUB-001 is a clean,
+   modern, image-heavy A5 booklet. It exercises text, tables, both path
+   callbacks, a layer and the bitmap-fill image route — but it contains
+   no authored group, no `drawGraphicObject`, no master page, no
+   metafile image, no embedded font, no list, no link and no rotated
+   object. Those paths are covered by unit tests against synthetic
+   callbacks only. **PUB-002 onwards matter.**
+4. **PUB-001 cannot run in CI**, because the document must not be
+   committed. Acceptance is a local step until a private runner or a
+   secured fixture store exists.
 
-Until (1) and (4) are done, the parser is a well-tested adapter of an
-*assumed* callback stream. That is worth having, and it is not the same as
-a working Publisher parser.
+Closed since the first draft: the adapter has now parsed a real `.pub`,
+and PUB-001 acceptance passes.
 
 ## Scope
 

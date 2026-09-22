@@ -25,13 +25,15 @@ TEST(units_inches_convert_to_points) {
 }
 
 TEST(units_a5_page_size_round_trips) {
-  // A5 portrait, the page size the first real fixture is expected to use.
-  // 148 x 210 mm is 5.8268 x 8.2677 in, which is what has to come out as
-  // roughly 420.9 x 595.3 pt.
-  const Length width = convert("svg:width", 5.8268, librevenge::RVNG_INCH);
-  const Length height = convert("svg:height", 8.2677, librevenge::RVNG_INCH);
-  CHECK_NEAR(width.points, 419.53, 0.5);
-  CHECK_NEAR(height.points, 595.27, 0.5);
+  // The inch figures libmspub reports for PUB-001's A5 portrait pages,
+  // observed rather than assumed. The width is 148.5 mm, which is A4
+  // halved exactly rather than a nominal 148 mm A5, and it has to come
+  // out as 420.945 pt -- the number the regression expectations use.
+  const Length width = convert("svg:width", 148.5 / 25.4, librevenge::RVNG_INCH);
+  const Length height = convert("svg:height", 210.0 / 25.4, librevenge::RVNG_INCH);
+  CHECK_NEAR(width.points, 420.944882, 0.0005);
+  CHECK_NEAR(height.points, 595.275591, 0.0005);
+  CHECK(width.points < height.points); // portrait
 }
 
 TEST(units_points_pass_through) {

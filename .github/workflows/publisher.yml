@@ -100,18 +100,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # PUB-001 is a real school document and is not in this repository,
-      # so this job cannot run on a public runner today. It exists to
-      # state that plainly: a skipped regression is not a passing one, and
-      # nothing in this workflow may report PUB-001 as verified until the
-      # fixture is actually supplied.
+      # PUB-001 is a real school document and must not be committed, so
+      # this job cannot run it on a public runner. It exists to state that
+      # plainly: the suite passes locally, but CI has not checked it, and
+      # nothing here may report it as verified on CI's own authority.
       - name: Report the acceptance status honestly
         run: |
           {
-            echo '### PUB-001 acceptance: NOT RUN'
+            echo '### PUB-001 acceptance: NOT RUN ON CI'
             echo
-            echo 'The private fixture is not available to CI, so PUB-001'
-            echo 'regression acceptance is **blocked, not passing**.'
+            echo 'The suite passed locally on 2026-09-22 against the real'
+            echo 'document (libmspub 0.1.4, librevenge 0.0.5). CI cannot'
+            echo 'repeat it: the fixture is a real school document and is'
+            echo 'never committed. Treat this job as **unverified here**,'
+            echo 'not as a pass.'
             echo
             echo 'To run it locally:'
             echo

@@ -183,6 +183,47 @@ TEST(tables_report_a_row_that_arrives_without_a_table) {
   CHECK_EQ(doc.callbackCounts.at("openTableRow"), 1LL);
 }
 
+TEST(tables_without_declared_row_heights_are_flagged) {
+  // PUB-001 does exactly this: a column width, but no row height on any
+  // row. A renderer sizing rows from a null would reflow the table.
+  IrCollector collector;
+  collector.startDocument(RVNGPropertyList());
+  collector.startPage(page(8.0, 6.0));
+  // 5.3735 in is PUB-001's single column width, observed from the file.
+  collector.startTableObject(tableWithColumns({386.897244 / 72.0}));
+  for (int r = 0; r < 3; r++) {
+    collector.openTableRow(RVNGPropertyList()); // no height of either kind
+    collector.openTableCell(cell(r, 0));
+    collector.closeTableCell();
+    collector.closeTableRow();
+  }
+  collector.endTableObject();
+  collector.endPage();
+  collector.endDocument();
+  const Document &doc = collector.finish();
+
+  const Element &table = firstTable(doc);
+  CHECK(hasWarning(table, "table-row-heights-unknown"));
+  // The column width was supplied, so that must not be flagged too.
+  CHECK(!hasWarning(table, "table-columns-unknown"));
+  CHECK_NEAR(table.table.columnWidths[0].points, 386.897244, 0.0005);
+}
+
+TEST(tables_with_declared_row_heights_are_not_flagged) {
+  IrCollector collector;
+  collector.startDocument(RVNGPropertyList());
+  collector.startPage(page(8.0, 6.0));
+  collector.startTableObject(tableWithColumns({2.0}));
+  collector.openTableRow(row(0.5));
+  collector.closeTableRow();
+  collector.endTableObject();
+  collector.endPage();
+  collector.endDocument();
+  const Document &doc = collector.finish();
+
+  CHECK(!hasWarning(firstTable(doc), "table-row-heights-unknown"));
+}
+
 TEST(tables_without_declared_columns_are_flagged) {
   IrCollector collector;
   collector.startDocument(RVNGPropertyList());

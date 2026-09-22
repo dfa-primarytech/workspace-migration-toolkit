@@ -79,6 +79,9 @@ class Pub001RegressionTest(unittest.TestCase):
         document = bundle["document"]
         expected = self.expected["expected"]
         self.assertEqual(document["document"]["pageCount"], expected["pageCount"])
+        self.assertEqual(document["source"]["containerType"], "ole2")
+        self.assertEqual(document["source"]["formatFamily"], "microsoft-publisher")
+        self.assertTrue(document["source"]["supportedByParser"])
         tolerance = expected["pageSizeTolerancePoints"]
         for page in document["pages"]:
             if page["kind"] != "page":
@@ -167,6 +170,149 @@ class Pub001RegressionTest(unittest.TestCase):
         bundle = self._parse()
         self.assertFalse(bundle["document"]["truncation"]["truncated"])
         self.assertEqual(bundle["report"]["status"], "ok")
+
+    def test_the_document_parses_without_a_single_diagnostic(self):
+        # A clean stream: no unbalanced callbacks, no implicit containers,
+        # nothing the adapter had to guess at. If this ever starts
+        # reporting diagnostics, the adapter and libmspub have diverged.
+        bundle = self._parse()
+        self.assertEqual(
+            [(d["code"], d["severity"]) for d in bundle["report"]["diagnostics"]], [])
+        self.assertEqual(bundle["report"]["counts"]["callbacks"],
+                         self.expected["expected"]["callbacks"])
+
+    def test_no_image_arrives_by_draw_graphic_object(self):
+        # The evidence the whole bitmap-fill route exists for: this
+        # document never calls drawGraphicObject. A parser watching only
+        # that callback would report a newsletter with no pictures in it.
+        bundle = self._parse()
+        callbacks = bundle["report"]["callbackCounts"]
+        expected = self.expected["expected"]
+        self.assertEqual(callbacks.get("drawGraphicObject", 0),
+                         expected["drawGraphicObjectCallbacks"])
+        self.assertEqual(callbacks.get("drawPolygon", 0), expected["drawPolygonCallbacks"])
+        routes = {use["route"]
+                  for asset in bundle["assets"]["assets"] for use in asset["uses"]}
+        self.assertEqual(routes, {"bitmapFillShape"})
+
+    def test_every_image_placement_is_rectangular(self):
+        bundle = self._parse()
+        rectangular = all(use["polygonIsRectangular"]
+                          for asset in bundle["assets"]["assets"] for use in asset["uses"])
+        self.assertEqual(rectangular,
+                         self.expected["expected"]["allImagePlacementsRectangular"])
+
+    def test_element_type_tally(self):
+        bundle = self._parse()
+        counts = bundle["report"]["counts"]
+        expected = self.expected["expected"]
+        self.assertEqual(counts["elements"], expected["elements"])
+        self.assertEqual(counts["wrapperElements"], expected["wrapperElements"])
+        self.assertEqual(counts["pathElements"], expected["pathElements"])
+        self.assertEqual(counts["shapeElements"], expected["shapeElements"])
+        self.assertEqual(counts["masterPages"], expected["masterPages"])
+        # Nothing fell through to the unknown bucket.
+        self.assertEqual(counts["unknownElements"], expected["unknownElements"])
+
+    def test_compatibility_candidate_tally(self):
+        bundle = self._parse()
+        actual = {key: value
+                  for key, value in bundle["report"]["compatibility"].items() if key != "basis"}
+        self.assertEqual(actual, self.expected["expected"]["compatibilityCandidates"])
+        self.assertEqual(bundle["report"]["compatibility"]["basis"], "parser-candidate")
+
+    def _runs(self, bundle):
+        for page in bundle["document"]["pages"]:
+            for element in page["elements"]:
+                for paragraph in element.get("paragraphs", []):
+                    yield paragraph, element
+                for row in element.get("table", {}).get("rows", []):
+                    for cell in row["cells"]:
+                        for paragraph in cell["paragraphs"]:
+                            yield paragraph, element
+
+    def test_character_formatting_is_recovered(self):
+        bundle = self._parse()
+        expected = self.expected["expected"]
+        runs = [run for paragraph, _ in self._runs(bundle) for run in paragraph["runs"]]
+        self.assertEqual(len(runs), expected["styledSpans"])
+        self.assertEqual(sum(1 for r in runs if r["style"]["bold"]), expected["boldRuns"])
+        self.assertEqual(sum(1 for r in runs if r["style"]["italic"]), expected["italicRuns"])
+        self.assertEqual(sum(1 for r in runs if r["style"]["underline"]),
+                         expected["underlinedRuns"])
+        # Every run carries a resolved font, size, colour and language.
+        for key in ("fontFamily", "fontSizePoints", "color", "language"):
+            self.assertEqual(sum(1 for r in runs if r["style"][key] is not None), len(runs),
+                             msg=f"not every run carried {key}")
+        self.assertEqual(sorted({r["style"]["fontSizePoints"] for r in runs}),
+                         expected["fontSizesPoints"])
+        self.assertEqual(sorted({r["style"]["color"] for r in runs}), expected["textColours"])
+
+    def test_paragraph_alignment_is_recovered(self):
+        bundle = self._parse()
+        tally = {}
+        for paragraph, _ in self._runs(bundle):
+            for _run in paragraph["runs"]:
+                alignment = paragraph["style"]["alignment"]
+                tally[alignment] = tally.get(alignment, 0) + 1
+        self.assertEqual(tally, self.expected["expected"]["paragraphAlignments"])
+
+    def test_explicit_spaces_and_breaks_survive_as_their_own_items(self):
+        # 143 explicit spaces. Collapsing them into the text string would
+        # lose the distinction between typed and explicit whitespace.
+        bundle = self._parse()
+        expected = self.expected["expected"]
+        kinds = {}
+        for paragraph, _ in self._runs(bundle):
+            for run in paragraph["runs"]:
+                for item in run["items"]:
+                    kinds[item["kind"]] = kinds.get(item["kind"], 0) + 1
+        self.assertEqual(kinds.get("space", 0), expected["explicitSpaces"])
+        self.assertEqual(kinds.get("lineBreak", 0), expected["lineBreaks"])
+        self.assertEqual(kinds.get("text", 0), expected["textInsertions"])
+
+    def test_the_table_reports_that_no_row_height_was_declared(self):
+        bundle = self._parse()
+        expected = self.expected["expected"]
+        table = next(element
+                     for page in bundle["document"]["pages"]
+                     for element in page["elements"] if element["type"] == "table")
+        self.assertAlmostEqual(table["table"]["columns"][0]["width"]["points"],
+                               expected["tableColumnWidthPoints"], places=3)
+        self.assertEqual([len(cell["paragraphs"])
+                          for row in table["table"]["rows"] for cell in row["cells"]],
+                         expected["tableCellParagraphs"])
+        declared = any(row["height"] is not None for row in table["table"]["rows"])
+        self.assertEqual(declared, expected["tableRowHeightsDeclared"])
+        if not declared:
+            self.assertIn("table-row-heights-unknown",
+                          [note["code"] for note in table["warnings"]])
+
+    def test_font_usage_counts(self):
+        bundle = self._parse()
+        actual = {font["family"]: font["usageCount"] for font in bundle["document"]["fonts"]}
+        self.assertEqual(actual, self.expected["expected"]["fontUsageCounts"])
+
+    def test_non_substantive_frames_are_kept_not_dropped(self):
+        # Two frames hold a single character each. They are layout
+        # placeholders; dropping them would shift the page.
+        bundle = self._parse()
+        expected = self.expected["expected"]
+        frames = [element
+                  for page in bundle["document"]["pages"]
+                  for element in page["elements"] if element["type"] == "text"]
+        empty = [f for f in frames
+                 if not any(run["text"].strip()
+                            for paragraph in f["paragraphs"] for run in paragraph["runs"])]
+        self.assertEqual(len(empty), expected["nonSubstantiveTextFrames"])
+        self.assertEqual(len(frames), expected["textFrameCallbacks"])
+
+    def test_output_is_deterministic_for_this_document(self):
+        first = self._parse()
+        second = self._parse()
+        for name in ("document", "assets"):
+            self.assertEqual(json.dumps(first[name], sort_keys=False),
+                             json.dumps(second[name], sort_keys=False))
 
 
 if __name__ == "__main__":

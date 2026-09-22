@@ -1195,6 +1195,23 @@ void IrCollector::endTableObject() {
     return;
   }
   Element *table = elementById(tableStack_.back().elementId);
+  if (table != nullptr) {
+    // Observed on PUB-001: libmspub declared a column width but no row
+    // height at all. A renderer sizing rows from nothing would silently
+    // reflow the table, so say once that the heights were never supplied
+    // rather than leaving a null to be read as zero.
+    std::size_t missing = 0;
+    for (const TableRow &row : table->table.rows) {
+      if (!row.height.valid) missing++;
+    }
+    if (missing > 0) {
+      table->warnings.push_back(
+          {"table-row-heights-unknown",
+           "the source declared no height for " + std::to_string(missing) + " of " +
+               std::to_string(table->table.rows.size()) +
+               " rows; row geometry must be inferred from the content"});
+    }
+  }
   finishElement(table, event);
   tableStack_.pop_back();
   paragraphOpen_ = false;
