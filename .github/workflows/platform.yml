@@ -1,0 +1,38 @@
+name: Platform checks
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements-dev.lock && pip install --no-deps -e .
+      - run: ruff check app tests/platform && ruff format --check app tests/platform
+      - run: mypy app
+      - run: pytest -q
+      - run: bandit -r app -q
+      - run: pip-audit --local --skip-editable
+      - name: Secret detection
+        run: python scripts/check_secrets.py
+      - name: JavaScript syntax
+        run: node --check app/workspace_toolkit/static/app.js
+      - name: Container build
+        run: docker build -t workspace-toolkit:test .
+      - name: Container smoke test
+        run: |
+          docker run -d --name toolkit -p 8080:8080 workspace-toolkit:test
+          trap 'docker rm -f toolkit' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail http://localhost:8080/healthz; then exit 0; fi
+            sleep 1
+          done
+          exit 1

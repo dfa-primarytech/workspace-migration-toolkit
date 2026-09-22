@@ -1,0 +1,41 @@
+# Cloud Run deployment template. Documentation only: no resources are created.
+# Replace placeholders, provision secrets separately, and obtain explicit deployment approval.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: workspace-migration-toolkit
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '2'
+    spec:
+      containerConcurrency: 2
+      timeoutSeconds: 300
+      serviceAccountName: RUNTIME_SERVICE_ACCOUNT
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT/REPOSITORY/IMAGE:DIGEST_OR_TAG
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: '2'
+              memory: 2Gi
+          env:
+            - name: PUBLIC_BASE_URL
+              value: https://YOUR_SERVICE_HOST
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: google-client-id
+                  key: latest
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: google-client-secret
+                  key: latest
+            - name: SESSION_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: session-encryption-key
+                  key: latest

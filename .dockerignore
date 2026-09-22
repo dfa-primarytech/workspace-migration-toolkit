@@ -1,0 +1,11 @@
+**
+!Dockerfile
+!requirements.lock
+!pyproject.toml
+!README.md
+!LICENSE
+!app/
+!app/workspace_toolkit/
+!app/workspace_toolkit/**
+app/**/__pycache__/
+app/**/*.pyc

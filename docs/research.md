@@ -155,8 +155,12 @@ worksheets rather than synthetic tests. Structural probes of those files found:
 - 4–10 text boxes per document
 - 100% of anchors classifiable as picture, text box or ink — nothing hit the
   unrecognised-content path
-- 2 of 4 documents used a backing-picture-under-text-box pattern for every
-  text box
+- no document contained a genuine backing picture. An earlier count claiming
+  otherwise mistook `mc:Fallback` anchors — Word's legacy restatement of the
+  same shape — for separate pictures sitting beneath the text box. 6 of 18
+  anchors in one document and 4 of 15 in another are such duplicates, and any
+  tool reading anchors must discard them or it double-counts every shape Word
+  wrote twice
 - 1 document contained handwritten ink annotations
 - 1 header background image measured 2480×3508 — A4 at exactly 300dpi, matching
   page aspect to 0.0%

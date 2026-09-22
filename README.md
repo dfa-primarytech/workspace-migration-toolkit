@@ -72,7 +72,14 @@ and position. Inline content can't overlap, so emitting both tears the card in
 half and doubles the document's length. The converter detects coincident pairs
 (within 0.06" and 3% size) and drops the picture, keeping the text editable.
 
-In testing, 2 of 4 documents used this pattern for *every* text box.
+**Correction:** an earlier version of this note claimed 2 of 4 sample documents
+used this pattern for every text box. That was wrong. Those "coincident
+pictures" were anchors inside `mc:Fallback` — Word's legacy restatement of the
+*same* text box — which the converter discards before it looks for backing
+pictures. Measured properly, 6 of 18 anchors in one document and 4 of 15 in
+another are fallback duplicates, and no sample contains a genuine backing
+picture. The handling is still correct for documents that do use the pattern;
+it simply does not fire on this sample.
 
 ## Install
 
