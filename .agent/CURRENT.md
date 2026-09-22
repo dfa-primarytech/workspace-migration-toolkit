@@ -43,7 +43,7 @@ permissions problem** -- that session signs in as Scrappy995, which already hold
 write, and Codex pushes fine as the same account. See BACKLOG item 2.
 
 #12 has now been built and tested on Linux CI, and all five checks are green.
-The container build passes and runs the 85 C++ unit tests on a clean Ubuntu
+The container build passes and runs the 92 C++ unit tests on a clean Ubuntu
 base during the image build. Two CI failures were found and fixed on the way,
 both in platform-owned files that the Publisher session could not have reached:
 `.dockerignore` excluded `**` and re-included only the platform image's files,
@@ -57,7 +57,7 @@ and the parser reproduced every expected count with zero diagnostics: 4 pages at
 text insertions, 12 image placements over 11 deduplicated assets, one 1x3 table,
 two paths, one rendering layer and three fonts. It runs locally only -- the
 document is a real school booklet and must never be committed -- so the CI job
-reports NOT RUN ON CI rather than claiming a pass. 85 C++ tests and 55 Python
+reports NOT RUN ON CI rather than claiming a pass. 92 C++ tests and 55 Python
 tests pass with the fixture supplied; 22 skip without it.
 
 What remains unverified for Publisher is breadth, not depth: only one real
