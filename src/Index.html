@@ -28,6 +28,7 @@
     Upload a .docx file. It'll be repaired (floating text boxes, legacy images,
     stray page backgrounds) and opened as a clean, editable Google Doc.
   </p>
+  <p style="color:#5f6368; font-size:14px;">Maximum upload: 25 MiB. Files over 10 MiB may time out. Complex objects such as charts and grouped shapes are kept for Google to import; check their appearance after conversion.</p>
   <div id="dropzone">
     <div id="dropzoneText">Click to choose a .docx file, or drag one here</div>
     <input type="file" id="fileInput" accept=".docx">
@@ -52,15 +53,27 @@
     });
 
     function handleFile(file) {
+      if (file.size > 25 * 1024 * 1024) {
+        status.className = 'error';
+        status.textContent = 'This file is ' + (file.size / (1024 * 1024)).toFixed(1) + ' MiB. The upload limit is 25 MiB.';
+        return;
+      }
       if (!file.name.toLowerCase().endsWith('.docx')) {
         status.className = 'error';
         status.textContent = 'Please choose a .docx file.';
         return;
       }
       status.className = '';
-      status.innerHTML = '<span class="spinner"></span>Fixing "' + file.name + '" and converting to a Google Doc...';
+      status.textContent = 'Fixing "' + file.name + '" and converting to a Google Doc...';
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      status.prepend(spinner);
 
       const reader = new FileReader();
+      reader.onerror = () => {
+        status.className = 'error';
+        status.textContent = 'Could not read this file. Please try again.';
+      };
       reader.onload = () => {
         const base64 = reader.result.split(',')[1];
         google.script.run

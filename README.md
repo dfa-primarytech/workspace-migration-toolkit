@@ -45,6 +45,7 @@ See [Known limitations](#known-limitations).
 | Side-by-side text boxes | A single multi-cell table row, so two-column layouts stay two columns |
 | Text boxes stacked on a backing picture | The text box alone — the backing image is dropped (see below) |
 | Floating pictures | Left as floating anchors, so Docs imports them with its own wrap/position controls |
+| Unsupported anchors, grouped shapes and drawing canvases | Preserved for Google's importer; appearance still needs checking |
 | Legacy VML-only pictures | Modern inline DrawingML pictures |
 | Handwritten "ink" annotations | Removed |
 | `mc:Fallback` branches | Discarded; `mc:Choice` is promoted |
@@ -107,7 +108,10 @@ Constants near the top of the anchor section in `src/Code.gs`:
   cross-references. The sample that drove development was image-heavy
   worksheets.
 - **Apps Script limits** — 6-minute execution cap and in-memory DOM. Large
-  documents will fail.
+  documents may fail. Uploads over 25 MiB are rejected before browser reading
+  and checked again on the server. This is a conservative policy, not a measured
+  runtime limit; even smaller files can exceed it after ZIP expansion. The UI
+  warns that files over 10 MiB may time out.
 - Only PNG and JPEG are measured for background detection; EMF/WMF/GIF
   backgrounds are kept.
 
