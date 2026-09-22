@@ -14,6 +14,11 @@ state + PKCE and CSRF checks. No service-account document ownership, refresh tok
 central token store or public asset sharing. A stable encryption key works across
 Cloud Run instances; jobs remain synchronous and bounded. No deployment in this task.
 
+## 2026-09-22: Stabilize before GCP setup
+Keep GCP project creation, live OAuth and deployment after the local parser, API
+boundaries and deterministic regression suite are solid. Mocked boundary tests must
+reject malformed successful responses without exposing internals or losing recovery guidance.
+
 ## 2026-09-22: DOCX moves onto the platform, superseding "preserve src/"
 The user has redirected the project: conversion runs as a Cloud Run service
 covering all M365 formats, not as an Apps Script web app. This supersedes the
