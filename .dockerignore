@@ -9,3 +9,13 @@
 !app/workspace_toolkit/**
 app/**/__pycache__/
 app/**/*.pyc
+
+# The publisher image is built from this same root context, so its sources
+# must be re-included too: the ** above excludes everything by default, which
+# silently breaks any second image added to the repository.
+!docker/
+!docker/**
+!native/
+!native/pub-parser/
+!native/pub-parser/**
+native/pub-parser/build/
