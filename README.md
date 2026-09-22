@@ -99,8 +99,16 @@ Constants near the top of the anchor section in `src/Code.gs`:
 
 ## Known limitations
 
-- **Position is lost for text boxes.** They become tables, and a table in Google
-  Docs is always inline. There is no floating table in the target format.
+- **Position is lost for text boxes.** They become inline tables stacked in
+  reading order, so a laid-out page becomes a linear one.
+
+  This is a limitation of the current implementation, not of Google Docs. Docs
+  gained floating tables in 2023, and its `.docx` importer **does** honour
+  OOXML floating-table positioning (`w:tblpPr`) — verified with a probe
+  document: a table specified at `tblpX=7200`, `tblpY=2880` imported to exactly
+  5in from the page left and 2in from the top, with text wrapping correctly.
+  Emitting positioned tables instead of inline ones would preserve both the
+  position and the editable text. Not yet implemented.
 - **Only `word/document.xml` gets the structural passes.** Headers and footers
   get background-stripping only. Fine if your documents don't use them;
   a real gap if they do.

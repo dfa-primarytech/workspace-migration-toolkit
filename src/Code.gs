@@ -226,8 +226,11 @@ function _removeBackground(root) {
  * floating images come through badly placed, at the cost of making them
  * un-draggable.
  *
- * Text boxes are converted regardless: they become tables, and a table in
- * Google Docs is always inline. That is a hard limit of the target format.
+ * Text boxes are converted regardless: they become inline tables, so their
+ * position is lost. That is a limit of this implementation rather than of the
+ * target format -- Google's importer does honour floating-table positioning
+ * (w:tblpPr), so emitting positioned tables would keep position and editable
+ * text together. Not yet implemented.
  */
 const KEEP_PICTURES_FLOATING = true;
 
