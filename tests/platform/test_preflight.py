@@ -126,7 +126,13 @@ def test_relationship_escape_rejected(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "filename,mime", [("../x.pptx", PPTX_MIME), ("x.pptm", PPTX_MIME), ("x.pptx", "text/html")]
+    "filename,mime",
+    [
+        ("../x.pptx", PPTX_MIME),
+        ("x.pptm", PPTX_MIME),
+        ("x.pptx", "text/html"),
+        ("bad\tname.pptx", PPTX_MIME),
+    ],
 )
 def test_upload_metadata(filename, mime):
     with pytest.raises(ToolkitError):

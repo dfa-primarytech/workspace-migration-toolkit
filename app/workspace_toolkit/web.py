@@ -169,7 +169,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             )
                         async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
                             return await convert(
-                                root, manifest, Google(session["access_token"], client), progress
+                                root,
+                                manifest,
+                                Google(session["access_token"], client),
+                                progress,
+                                output_name=Path(filename).stem + " – converted",
                             )
                 except TimeoutError:
                     if progress.get("folderUrl"):

@@ -23,7 +23,12 @@ REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
 def validate_upload_name(filename: str, mime: str) -> None:
-    if not filename or len(filename) > 240 or any(c in filename for c in "/\\\x00\r\n"):
+    if (
+        not filename
+        or len(filename) > 240
+        or any(c in filename for c in "/\\")
+        or any(ord(c) < 32 for c in filename)
+    ):
         raise ToolkitError("invalid_filename", "Please choose a PowerPoint .pptx file.")
     if not filename.lower().endswith(".pptx"):
         raise ToolkitError("unsupported_type", "Only PowerPoint .pptx files are supported here.")

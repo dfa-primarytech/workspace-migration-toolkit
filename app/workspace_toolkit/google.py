@@ -173,7 +173,13 @@ def verify(manifest: dict, presentation: dict) -> list[dict]:
     return findings
 
 
-async def convert(root: Path, manifest: dict, google: Google, progress: dict | None = None) -> dict:
+async def convert(
+    root: Path,
+    manifest: dict,
+    google: Google,
+    progress: dict | None = None,
+    output_name: str = "Converted presentation",
+) -> dict:
     report = progress if progress is not None else {}
     report.update(analysis_report(manifest))
     report.update(status="converting", outputs=[], assetOutputs=[])
@@ -188,7 +194,7 @@ async def convert(root: Path, manifest: dict, google: Google, progress: dict | N
         folder = await google.folder()
         report["folderUrl"] = "https://drive.google.com/drive/folders/" + folder
         result = await google.upload(
-            root / "source.pptx", "Converted presentation", PPTX_MIME, folder, convert=True
+            root / "source.pptx", output_name, PPTX_MIME, folder, convert=True
         )
         report["outputs"].append({"kind": "presentation", "id": result["id"]})
         report["presentationId"] = result["id"]

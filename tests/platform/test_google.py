@@ -64,13 +64,19 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await convert(root, manifest, Google("test-token", client))
+            return await convert(
+                root,
+                manifest,
+                Google("test-token", client),
+                output_name="School assembly – converted",
+            )
 
     report = asyncio.run(run())
     assert report["status"] == "completed_with_warnings"
     assert report["verification"] == "page_size_count_and_text_checked"
     assert len(report["assetOutputs"]) == 3
     assert uploads[0]["mimeType"] == "application/vnd.google-apps.presentation"
+    assert uploads[0]["name"] == "School assembly – converted"
     assert {u["mimeType"] for u in uploads} >= {"video/mp4", "audio/wav", "application/json"}
     assert all(u["parents"] == ["folder1"] for u in uploads)
     assert report["reportUrl"].startswith("https://drive.google.com/")
