@@ -38,9 +38,9 @@ milestone -- the native libmspub callback adapter and intermediate model -- is
 on `feat/publisher-ir` as draft PR #12: roughly 5,700 lines of C++ and tests.
 
 That work was recovered by git bundle and pushed from another environment,
-because the Publisher session gets 403 on push. **It still has no write access.**
-Until it is added as a collaborator, or switches to forking, every session there
-ends needing a manual rescue.
+because the Publisher session gets 403 on push. **This is a token problem, not a
+permissions problem** -- that session signs in as Scrappy995, which already holds
+write, and Codex pushes fine as the same account. See BACKLOG item 2.
 
 #12 has now been built and tested on Linux CI, and all five checks are green.
 The container build passes and runs the 85 C++ unit tests on a clean Ubuntu
