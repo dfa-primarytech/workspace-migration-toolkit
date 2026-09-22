@@ -41,11 +41,38 @@ from .test_docx import (
 )
 
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
+PDFTOTEXT = shutil.which("pdftotext")
 
 needs_soffice = pytest.mark.skipif(
     SOFFICE is None,
     reason="LibreOffice not installed; this check runs in CI",
 )
+
+needs_pdftotext = pytest.mark.skipif(
+    SOFFICE is None or PDFTOTEXT is None,
+    reason="LibreOffice and poppler-utils not installed; this check runs in CI",
+)
+
+
+def rendered_text(pdf: Path) -> str:
+    """Text as actually laid out on the page.
+
+    Deliberately not LibreOffice's plain-text export: that filter walks the
+    body flow and omits frame-anchored content, so a floating table -- exactly
+    what this converter produces -- reads as an empty document. Extracting from
+    the rendered PDF asks the stronger question anyway: did the text reach the
+    page, not merely the file.
+    """
+    result = subprocess.run(  # noqa: S603  # nosec B603 -- fixed argv, no shell
+        [PDFTOTEXT, "-layout", str(pdf), "-"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, f"pdftotext failed: {result.stderr}"
+    return result.stdout
+
 
 # LibreOffice is slow to start and writes a user profile on first run.
 CONVERT_TIMEOUT = 180
@@ -119,9 +146,9 @@ def test_libreoffice_opens_what_we_emit(tmp_path):
     assert pdf.read_bytes().startswith(b"%PDF"), "not a PDF"
 
 
-@needs_soffice
-def test_our_text_survives_into_an_independent_reader(tmp_path):
-    """Opening without error is weak; reading the text back is the real check.
+@needs_pdftotext
+def test_text_box_content_reaches_the_rendered_page(tmp_path):
+    """Opening without error is weak; finding the text on the page is the check.
 
     A file can parse and still have lost its content -- a text box whose
     paragraphs never made it into the table cell would produce a perfectly
@@ -129,21 +156,21 @@ def test_our_text_survives_into_an_independent_reader(tmp_path):
     """
     body = CARD + SECOND_BOX + SECTION
     converted = convert_fixture(tmp_path, body)
-    text = soffice_convert(converted, "txt:Text (encoded):UTF8", tmp_path / "out")
-    content = text.read_text(encoding="utf-8", errors="replace")
+    pdf = soffice_convert(converted, "pdf", tmp_path / "out")
+    content = rendered_text(pdf)
     assert "Card text" in content, (
-        f"LibreOffice opened the file but the text box content was not in it; got: {content!r}"
+        f"the converted text box did not reach the page; got: {content!r}"
     )
 
 
-@needs_soffice
+@needs_pdftotext
 def test_header_content_survives_the_multi_part_rewrite(tmp_path):
     """Headers are rewritten as their own part; a mistake there is easy to miss."""
     body = "<w:p><w:r><w:t>Body copy</w:t></w:r></w:p>" + SECTION
     header = anchor(TEXTBOX, h=("margin", offset(0)), v=("paragraph", offset(0)))
     converted = convert_fixture(tmp_path, body, header=header)
-    text = soffice_convert(converted, "txt:Text (encoded):UTF8", tmp_path / "out")
-    assert "Body copy" in text.read_text(encoding="utf-8", errors="replace")
+    pdf = soffice_convert(converted, "pdf", tmp_path / "out")
+    assert "Body copy" in rendered_text(pdf)
 
 
 @needs_soffice

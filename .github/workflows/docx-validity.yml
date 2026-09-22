@@ -39,11 +39,13 @@ jobs:
 
       - name: Install LibreOffice
         # --no-install-recommends keeps this to roughly the Writer filters
-        # rather than the whole office suite.
+        # rather than the whole office suite. poppler-utils provides pdftotext,
+        # used to read text back off the rendered page.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libreoffice-writer
+          sudo apt-get install -y --no-install-recommends libreoffice-writer poppler-utils
           soffice --version
+          pdftotext -v
 
       - name: Install the application
         run: |
