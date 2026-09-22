@@ -2,7 +2,7 @@
 
 - Agent: Codex
 - Date: 2026-09-22
-- Branch: `feat/platform-pptx-preflight`
+- Branch: `feat/platform-pptx-preflight`; implementation commits `3bf1f4a` and `a4ab50f`
 - Base: `origin/main` at `730ecee`
 - Objective: add the shared application foundation and first PPTX preflight/native-import workflow while preserving the Apps Script DOCX fixer.
 - Files changed: coordination files; Python application under `app/`; platform tests; Docker/Cloud Run/CI configuration; dependency locks; `PROJECT.md`; `docs/platform.md`; `.gitignore`.
