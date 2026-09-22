@@ -188,11 +188,28 @@ def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> None:
     table = build_table(item, ids)
     if table is None:
         return
-    at = list(container).index(paragraph) + 1
-    # Adjacent <w:tbl> siblings merge into one table, so keep them apart.
-    if at < len(container) and local(container[at].tag) == "tbl":
-        container.insert(at, Element(q("w", "p")))
+    index = list(container).index(paragraph)
+    # A paragraph carrying <w:sectPr> *ends* its section. Inserting after it
+    # would push the table into the next section, where a different page size,
+    # orientation and set of margins apply -- so portrait content can end up
+    # laid out landscape. Content belonging to this section must precede it.
+    at = index if _ends_section(paragraph) else index + 1
     container.insert(at, table)
+    _keep_tables_apart(container, at)
+
+
+def _ends_section(paragraph: Element) -> bool:
+    properties = paragraph.find(q("w", "pPr"))
+    return properties is not None and properties.find(q("w", "sectPr")) is not None
+
+
+def _keep_tables_apart(container: Element, at: int) -> None:
+    """Adjacent <w:tbl> siblings merge into one table, so separate them."""
+    children = list(container)
+    if at + 1 < len(children) and local(children[at + 1].tag) == "tbl":
+        container.insert(at + 1, Element(q("w", "p")))
+    if at > 0 and local(children[at - 1].tag) == "tbl":
+        container.insert(at, Element(q("w", "p")))
 
 
 def _mark_backing_pictures(items: list[Anchored]) -> None:
