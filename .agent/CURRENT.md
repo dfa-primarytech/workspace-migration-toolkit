@@ -38,11 +38,16 @@ milestone -- the native libmspub callback adapter and intermediate model -- is
 on `feat/publisher-ir` as draft PR #12: roughly 5,700 lines of C++ and tests.
 
 That work was recovered by git bundle and pushed from another environment,
-because the Publisher session gets 403 on push. **It still has no write access.**
-Until it is added as a collaborator, or switches to forking, every session there
-ends needing a manual rescue. Nothing in #12 has been compiled or tested here;
-its Docker and CI files are planned but not yet in the branch, so no Linux CI
-has run. PUB-001 regression acceptance remains blocked on the private fixture.
+because the Publisher session gets 403 on push. **This is a token problem, not a
+permissions problem** -- that session signs in as Scrappy995, which already holds
+write, and Codex pushes fine as the same account. See BACKLOG item 2.
+
+PUB-001 has since been supplied and parsed: 4 pages, 82 paragraphs, 147 runs, 12
+image placements over 11 assets, zero diagnostics, every predicted count
+reproduced. CI now runs on that branch and all five checks pass, including the
+container build -- so the "container never built" and "CI never ran" gaps are
+closed. Still open: only one real document has been parsed, and PUB-001 cannot
+run on a public runner because it must never be committed.
 
 Live OAuth, real Google conversion and visual fidelity remain unverified for
 both PPTX and DOCX. Every Google interaction is covered by test doubles only.
