@@ -8,7 +8,7 @@ from workspace_toolkit.config import Settings
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.jobs import preflight, workspace
 from workspace_toolkit.package import PPTX_MIME, Package, validate_upload_name
-from workspace_toolkit.pptx import analyse
+from workspace_toolkit.pptx import NS, analyse
 
 from .conftest import fixture_parts, write_pptx
 
@@ -27,7 +27,11 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
     assert text["paragraphs"][0]["runs"][0]["text"] == "Hello school"
     assert {a["kind"] for a in manifest["assets"].values()} == {"image", "audio", "video"}
     assert len(manifest["assets"]) == 3  # duplicate image payload is deduplicated
-    assert {f["name"] for f in manifest["fonts"]} == {"Calibri", "Aptos"}
+    assert {f["name"] for f in manifest["fonts"]} == {"Calibri"}
+    assert manifest["declaredFonts"] == ["Aptos"]
+    assert text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontFamily"] == "Calibri"
+    assert "" not in manifest["relationships"]
+    assert "_package" in manifest["relationships"]
     assert {w["code"] for w in manifest["warnings"]} >= {
         "timing",
         "transition",
@@ -39,6 +43,16 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
     assert pptx.read_bytes() == before
     assert len(list((tmp_path / "out/assets").iterdir())) == 3
     assert "Hello school" not in (tmp_path / "out/report.json").read_text()
+
+
+def test_ordinary_shape_with_empty_text_body_stays_a_shape(tmp_path):
+    parts = fixture_parts()
+    parts["ppt/slides/slide1.xml"] = (
+        f'''<p:sld xmlns:p="{NS["p"]}" xmlns:a="{NS["a"]}"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvSpPr/></p:nvSpPr><p:spPr/><p:txBody><a:p/></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'''
+    )
+    path = write_pptx(tmp_path / "shape.pptx", parts)
+    manifest = analyse(path, tmp_path / "out")
+    assert manifest["pages"][1]["elements"][0]["type"] == "shape"
 
 
 def test_repeat_is_deterministic(pptx, tmp_path):

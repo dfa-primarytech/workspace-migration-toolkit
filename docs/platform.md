@@ -139,6 +139,9 @@ idempotency across browser retries remain future work.
 - No automatic slide-object repair, media reinsertion, animation recreation,
   font substitution or OCR. Audio/video are preserved as separate Drive files;
   users can recover them, but playback in Slides is not guaranteed.
+- `fonts` records directly referenced fonts outside theme definitions;
+  `declaredFonts` records the theme's wider font inventory. Effective theme-font
+  resolution and availability still require the compatibility layer.
 - Effective font inheritance, layout transforms, SmartArt, embedded charts/OLE,
   unknown extensions and strict OOXML need further fixtures. Direct geometry is
   captured; group-relative coordinates retain their source transform.

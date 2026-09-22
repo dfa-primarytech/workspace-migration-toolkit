@@ -33,10 +33,15 @@ def paragraphs(root: Element) -> list[dict]:
             if local(child.tag) in {"r", "fld"}:
                 prop = child.find("a:rPr", NS)
                 text = child.find("a:t", NS)
+                style = dict(prop.attrib) if prop is not None else {}
+                latin = prop.find("a:latin", NS) if prop is not None else None
+                font_family = latin.get("typeface") if latin is not None else None
+                if font_family:
+                    style["fontFamily"] = font_family
                 runs.append(
                     {
                         "text": text.text or "" if text is not None else "",
-                        "sourceStyle": dict(prop.attrib) if prop is not None else {},
+                        "sourceStyle": style,
                     }
                 )
             elif local(child.tag) == "br":
@@ -93,6 +98,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
     part_assets: dict[str, str] = {}
     relationships: dict[str, list[dict]] = {}
     fonts: set[str] = set()
+    declared_fonts: set[str] = set()
     resources = []
     for name in sorted(package.names):
         if name.endswith(".rels"):
@@ -102,7 +108,9 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                 if name == "_rels/.rels"
                 else parent.removesuffix("_rels") + filename.removesuffix(".rels")
             )
-            relationships[part] = package.relationships(part)
+            # The package root has no part name. Give it an explicit JSON key
+            # because several otherwise-valid JSON consumers reject empty keys.
+            relationships[part or "_package"] = package.relationships(part)
         if name.startswith(("ppt/media/", "ppt/embeddings/")):
             data = package.read(name)
             sha = digest(data)
@@ -131,8 +139,9 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
         if name.endswith(".xml"):
             root = package.xml(name)
             for node in root.iter():
-                if node.get("typeface"):
-                    fonts.add(node.attrib["typeface"])
+                typeface = node.get("typeface")
+                if typeface and not typeface.startswith("+"):
+                    (declared_fonts if name.startswith("ppt/theme/") else fonts).add(typeface)
             if name.startswith(
                 (
                     "ppt/slideMasters/",
@@ -235,7 +244,8 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                     kind = "table"
                 elif charts:
                     kind = "chart"
-                elif pars and kind == "shape":
+                text_box = node.find("p:nvSpPr/p:cNvSpPr", NS)
+                if text_box is not None and text_box.get("txBox") == "1":
                     kind = "text"
                 obj = {
                     "id": oid,
@@ -331,6 +341,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
         "resources": resources,
         "relationships": relationships,
         "fonts": [{"name": font, "status": "UNKNOWN"} for font in sorted(fonts)],
+        "declaredFonts": sorted(declared_fonts),
         "warnings": warnings,
     }
     report = analysis_report(manifest)
