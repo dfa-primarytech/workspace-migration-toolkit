@@ -234,6 +234,36 @@ function _removeBackground(root) {
  */
 const KEEP_PICTURES_FLOATING = true;
 
+/**
+ * Emit each text box as its own *floating* table positioned at the anchor's
+ * real coordinates, rather than as inline tables stacked in reading order.
+ *
+ * Google's importer honours OOXML floating-table positioning (w:tblpPr) --
+ * verified with a probe document: a table specified at tblpX=7200, tblpY=2880
+ * anchored to the page imported to exactly 5in from the page left and 2in from
+ * the top, with body text wrapping around it. So a text box can keep both its
+ * position and its editable text, which is the whole point of the conversion.
+ *
+ * Set false to fall back to inline tables ordered top-to-bottom and merged into
+ * rows -- the approximation used before floating tables were confirmed to work.
+ */
+const FLOAT_TEXTBOX_TABLES = true;
+
+/**
+ * When text boxes float, a text box sitting on a backing picture no longer has
+ * to displace it: both can occupy the same rectangle. Setting this true keeps
+ * the picture, restoring card designs that would otherwise lose their artwork.
+ *
+ * Default false because the importer's z-ordering between a floating table and
+ * a floating picture is unverified -- the table may land behind the image and
+ * hide the text. Turn it on and check a real card layout before relying on it.
+ * Ignored entirely when FLOAT_TEXTBOX_TABLES is false.
+ */
+const KEEP_BACKING_PICTURES = false;
+
+// Default gap between a floating table and the text wrapping around it (dxa).
+const DEFAULT_WRAP_GAP_DXA = 180;
+
 const EMU_PER_INCH = 914400;
 
 // Two anchors count as occupying the same rectangle when their offsets agree
@@ -252,6 +282,50 @@ const ROW_TOL_EMU = Math.round(0.35 * EMU_PER_INCH);
  * <wp:align> carries a keyword rather than a number, so map the keywords onto
  * nominal offsets purely so they sort sensibly against numeric siblings.
  */
+/**
+ * Word's positioning frames map onto the table-positioning ones directly:
+ * anything paragraph- or column-relative becomes "text", any margin variant
+ * becomes "margin", and the page stays the page.
+ */
+const ANCHOR_FRAMES = {
+  page: 'page',
+  margin: 'margin',
+  leftMargin: 'margin', rightMargin: 'margin',
+  topMargin: 'margin', bottomMargin: 'margin',
+  insideMargin: 'margin', outsideMargin: 'margin',
+  column: 'text', character: 'text',
+  paragraph: 'text', line: 'text',
+};
+
+const ALIGN_KEYWORDS = ['left', 'right', 'center', 'inside', 'outside', 'top', 'bottom'];
+
+/**
+ * Reads a <wp:positionH>/<wp:positionV> as structure rather than a single
+ * number: tblpPr expresses a keyword alignment (tblpXSpec) differently from an
+ * absolute offset (tblpX), so the distinction has to survive.
+ *
+ * Returns null when the anchor gives no usable hint on that axis.
+ */
+function _anchorPosition(anchor, axis) {
+  const pos = anchor.getChild('position' + axis, NS.wp);
+  if (!pos) return null;
+  const relAttr = pos.getAttribute('relativeFrom');
+  const rel = relAttr ? relAttr.getValue() : null;
+  const frame = (rel && ANCHOR_FRAMES[rel]) || 'text';
+
+  const off = pos.getChild('posOffset', NS.wp);
+  if (off) {
+    const emu = parseInt(off.getText(), 10);
+    if (!isNaN(emu)) return { mode: 'offset', emu: emu, frame: frame };
+  }
+  const align = pos.getChild('align', NS.wp);
+  if (align) {
+    const key = (align.getText() || '').trim();
+    if (ALIGN_KEYWORDS.indexOf(key) !== -1) return { mode: 'align', align: key, frame: frame };
+  }
+  return null;
+}
+
 function _anchorOffset(anchor, axis) {
   const pos = anchor.getChild('position' + axis, NS.wp);
   if (!pos) return null;
@@ -369,6 +443,10 @@ function _replaceAnchors(root) {
  * The text is the part that must stay editable, so the backing picture goes.
  */
 function _dropBackingPictures(items) {
+  // A floating text box sits on top of its backing picture rather than
+  // displacing it, so the picture can stay -- if the importer layers them the
+  // right way round. Unverified, hence opt-in.
+  if (FLOAT_TEXTBOX_TABLES && KEEP_BACKING_PICTURES) return;
   const boxes = items.filter(it => it.kind === 'textbox' && it.ext && it.h !== null && it.v !== null);
   items.forEach(pic => {
     if (pic.kind !== 'picture' || !pic.ext || pic.h === null || pic.v === null) return;
@@ -407,6 +485,24 @@ function _emitGroup(group) {
   const pParent = anchorP.getParentElement();
   if (!pParent) return;
 
+  // Floating tables carry their own coordinates, so none of the ordering work
+  // below applies: each text box is emitted as its own positioned table and
+  // Google places it. Document order is kept only so the underlying XML stays
+  // readable and so anything without a usable position still lands sensibly.
+  if (FLOAT_TEXTBOX_TABLES) {
+    const floated = [];
+    live.forEach(it => {
+      if (it.kind === 'textbox') {
+        floated.push(_buildTableFromTextboxes([it]));
+      } else if (it.kind === 'picture') {
+        const para = _buildPicturePara(it);
+        if (para) floated.push(para);
+      }
+    });
+    _insertBlocks(pParent, anchorP, floated);
+    return;
+  }
+
   // Stable sort: top-to-bottom, then left-to-right. Anchors with no usable
   // offset keep their document position by falling back to it.
   live.forEach((it, i) => { it._seq = i; });
@@ -441,6 +537,11 @@ function _emitGroup(group) {
     });
   });
 
+  _insertBlocks(pParent, anchorP, blocks);
+}
+
+/** Inserts generated blocks after the anchoring paragraph, in order. */
+function _insertBlocks(pParent, anchorP, blocks) {
   // Adjacent <w:tbl> siblings merge into a single table, so separate them.
   const spaced = [];
   blocks.forEach(b => {
@@ -601,6 +702,53 @@ function _shapeFillColor(anchor) {
  * two side-by-side boxes become a 1x2 table rather than two stacked 1x1s, which
  * is what keeps a two-column worksheet looking like two columns.
  */
+const EMU_PER_DXA = 635;
+
+function _emuToDxa(emu) { return Math.round(emu / EMU_PER_DXA); }
+
+/** Wrap gap on one side, taken from the anchor's dist* attribute if present. */
+function _wrapGap(anchor, attr) {
+  const a = anchor.getAttribute(attr);
+  if (!a) return DEFAULT_WRAP_GAP_DXA;
+  const emu = parseInt(a.getValue(), 10);
+  return isNaN(emu) ? DEFAULT_WRAP_GAP_DXA : _emuToDxa(emu);
+}
+
+/**
+ * Builds <w:tblpPr> -- the floating-table position -- from a text box anchor.
+ *
+ * Returns null when neither axis gives a usable position, in which case the
+ * caller emits an ordinary inline table rather than a float anchored nowhere.
+ */
+function _floatingTableProps(box) {
+  const h = _anchorPosition(box.anchor, 'H');
+  const v = _anchorPosition(box.anchor, 'V');
+  if (!h && !v) return null;
+
+  const pr = XmlService.createElement('tblpPr', NS.w);
+  pr.setAttribute('leftFromText', String(_wrapGap(box.anchor, 'distL')), NS.w);
+  pr.setAttribute('rightFromText', String(_wrapGap(box.anchor, 'distR')), NS.w);
+  pr.setAttribute('topFromText', String(_wrapGap(box.anchor, 'distT')), NS.w);
+  pr.setAttribute('bottomFromText', String(_wrapGap(box.anchor, 'distB')), NS.w);
+
+  // An axis with no usable position falls back to the frame the other axis
+  // uses, so the table is never anchored to two different coordinate systems.
+  const hFrame = (h && h.frame) || (v && v.frame) || 'text';
+  const vFrame = (v && v.frame) || (h && h.frame) || 'text';
+  pr.setAttribute('horzAnchor', hFrame, NS.w);
+  pr.setAttribute('vertAnchor', vFrame, NS.w);
+
+  if (h && h.mode === 'offset') pr.setAttribute('tblpX', String(_emuToDxa(h.emu)), NS.w);
+  else if (h && h.mode === 'align') pr.setAttribute('tblpXSpec', h.align, NS.w);
+  else pr.setAttribute('tblpX', '0', NS.w);
+
+  if (v && v.mode === 'offset') pr.setAttribute('tblpY', String(_emuToDxa(v.emu)), NS.w);
+  else if (v && v.mode === 'align') pr.setAttribute('tblpYSpec', v.align, NS.w);
+  else pr.setAttribute('tblpY', '0', NS.w);
+
+  return pr;
+}
+
 function _buildTableFromTextboxes(boxes) {
   if (!boxes.length) return null;
 
@@ -609,6 +757,18 @@ function _buildTableFromTextboxes(boxes) {
 
   const tbl = XmlService.createElement('tbl', NS.w);
   const tblPr = XmlService.createElement('tblPr', NS.w);
+
+  // Schema order inside <w:tblPr> is fixed: tblpPr and tblOverlap must precede
+  // tblW, or Word rejects the file and Google ignores the positioning.
+  if (FLOAT_TEXTBOX_TABLES && boxes.length === 1) {
+    const pos = _floatingTableProps(boxes[0]);
+    if (pos) {
+      tblPr.addContent(pos);
+      tblPr.addContent(XmlService.createElement('tblOverlap', NS.w)
+          .setAttribute('val', 'never', NS.w));
+    }
+  }
+
   tblPr.addContent(XmlService.createElement('tblW', NS.w)
       .setAttribute('w', String(totalDxa), NS.w).setAttribute('type', 'dxa', NS.w));
   const borders = XmlService.createElement('tblBorders', NS.w);

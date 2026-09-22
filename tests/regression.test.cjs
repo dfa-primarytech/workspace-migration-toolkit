@@ -314,3 +314,164 @@ test('a successful render clears an earlier error state', () => {
   b.upload().success({ url: 'https://docs.google.com/d/1', warnings: [] });
   assert.equal(b.status.className, '');
 });
+
+// ---------- floating tables ----------
+
+// Minimal stand-in for XmlService so built elements can be inspected. Only the
+// methods Code.gs actually calls are implemented.
+function xmlStub() {
+  function element(name) {
+    return {
+      name, children: [], attrs: {},
+      getName() { return this.name; },
+      addContent(child) { this.children.push(child); return this; },
+      setAttribute(n, v) { this.attrs[n] = v; return this; },
+      getAttribute(n) { return n in this.attrs ? { getValue: () => this.attrs[n] } : null; },
+      getChildren(n) { return n ? this.children.filter(c => c.name === n) : this.children; },
+      getChild(n) { return this.children.filter(c => c.name === n)[0] || null; },
+      removeContent(child) {
+        const i = this.children.indexOf(child);
+        if (i !== -1) this.children.splice(i, 1);
+      },
+    };
+  }
+  return {
+    createElement: name => element(name),
+    getNamespace: (...args) => ({ getURI: () => args.at(-1) }),
+  };
+}
+
+function positionEl(spec) {
+  return {
+    getAttribute: n => (n === 'relativeFrom' && spec.rel) ? { getValue: () => spec.rel } : null,
+    getChild: n => {
+      if (n === 'posOffset' && spec.offset !== undefined) return { getText: () => String(spec.offset) };
+      if (n === 'align' && spec.align !== undefined) return { getText: () => spec.align };
+      return null;
+    },
+  };
+}
+
+function anchorStub(h, v, dist) {
+  const d = dist || {};
+  return {
+    getChild: n => n === 'positionH' ? (h ? positionEl(h) : null)
+                 : n === 'positionV' ? (v ? positionEl(v) : null) : null,
+    getAttribute: n => n in d ? { getValue: () => String(d[n]) } : null,
+  };
+}
+
+function floatCtx() {
+  const ctx = server({ XmlService: xmlStub() });
+  ctx._shapeFillColor = () => null;
+  return ctx;
+}
+
+function boxFor(anchor, cx) {
+  return { anchor, txbx: { getChildren: () => [], removeContent() {} }, ext: { cx: cx || 3000000, cy: 1000000 } };
+}
+
+test('absolute offsets convert EMU to dxa and map the anchoring frame', () => {
+  const ctx = floatCtx();
+  // -0.5in and 1.0in, column/paragraph relative -> both anchor to "text".
+  const pr = ctx._floatingTableProps(boxFor(
+    anchorStub({ rel: 'column', offset: -457200 }, { rel: 'paragraph', offset: 914400 })));
+  assert.equal(pr.attrs.tblpX, '-720');
+  assert.equal(pr.attrs.tblpY, '1440');
+  assert.equal(pr.attrs.horzAnchor, 'text');
+  assert.equal(pr.attrs.vertAnchor, 'text');
+  assert.equal(pr.attrs.tblpXSpec, undefined);
+});
+
+test('page- and margin-relative anchors keep their own frames', () => {
+  const ctx = floatCtx();
+  const pr = ctx._floatingTableProps(boxFor(
+    anchorStub({ rel: 'page', offset: 0 }, { rel: 'topMargin', offset: 0 })));
+  assert.equal(pr.attrs.horzAnchor, 'page');
+  assert.equal(pr.attrs.vertAnchor, 'margin');
+});
+
+test('align keywords become tblpXSpec/tblpYSpec, not coordinates', () => {
+  const ctx = floatCtx();
+  const pr = ctx._floatingTableProps(boxFor(
+    anchorStub({ rel: 'margin', align: 'center' }, { rel: 'paragraph', align: 'top' })));
+  assert.equal(pr.attrs.tblpXSpec, 'center');
+  assert.equal(pr.attrs.tblpYSpec, 'top');
+  assert.equal(pr.attrs.tblpX, undefined);
+  assert.equal(pr.attrs.tblpY, undefined);
+});
+
+test('an unrecognised align keyword does not become a bogus spec', () => {
+  const ctx = floatCtx();
+  const pr = ctx._floatingTableProps(boxFor(
+    anchorStub({ rel: 'margin', align: 'sideways' }, { rel: 'paragraph', offset: 0 })));
+  assert.equal(pr.attrs.tblpXSpec, undefined);
+  assert.equal(pr.attrs.tblpX, '0');
+});
+
+test('an anchor with no usable position produces no float at all', () => {
+  const ctx = floatCtx();
+  assert.equal(ctx._floatingTableProps(boxFor(anchorStub(null, null))), null);
+});
+
+test('one axis missing borrows the other axis frame rather than mixing systems', () => {
+  const ctx = floatCtx();
+  const pr = ctx._floatingTableProps(boxFor(anchorStub({ rel: 'page', offset: 635000 }, null)));
+  assert.equal(pr.attrs.horzAnchor, 'page');
+  assert.equal(pr.attrs.vertAnchor, 'page');
+  assert.equal(pr.attrs.tblpY, '0');
+});
+
+test('wrap gaps come from the anchor dist* attributes, defaulting to 180 dxa', () => {
+  const ctx = floatCtx();
+  const pos = { rel: 'column', offset: 0 };
+  const withDist = ctx._floatingTableProps(boxFor(
+    anchorStub(pos, pos, { distL: 114300, distR: 114300 })));   // 0.125in -> 180
+  assert.equal(withDist.attrs.leftFromText, '180');
+  assert.equal(withDist.attrs.rightFromText, '180');
+  assert.equal(withDist.attrs.topFromText, '180', 'absent distT should default');
+
+  const custom = ctx._floatingTableProps(boxFor(anchorStub(pos, pos, { distL: 228600 })));
+  assert.equal(custom.attrs.leftFromText, '360');
+});
+
+test('tblpPr and tblOverlap precede tblW, as the schema requires', () => {
+  const ctx = floatCtx();
+  const tbl = ctx._buildTableFromTextboxes([boxFor(
+    anchorStub({ rel: 'column', offset: 0 }, { rel: 'paragraph', offset: 0 }))]);
+  const order = tbl.getChild('tblPr').children.map(c => c.name);
+  assert.deepEqual(order.slice(0, 3), ['tblpPr', 'tblOverlap', 'tblW']);
+  assert.equal(order.indexOf('tblpPr') < order.indexOf('tblBorders'), true);
+});
+
+test('a positionless text box still yields a valid inline table', () => {
+  const ctx = floatCtx();
+  const tbl = ctx._buildTableFromTextboxes([boxFor(anchorStub(null, null))]);
+  const names = tbl.getChild('tblPr').children.map(c => c.name);
+  assert.equal(names.indexOf('tblpPr'), -1);
+  assert.equal(names[0], 'tblW');
+});
+
+test('each text box becomes its own positioned table, never a merged row', () => {
+  const ctx = floatCtx();
+  const inserted = [];
+  ctx._contentIndex = () => 0;
+  const anchorP = { getParentElement: () => parent };
+  const parent = { addContent: (i, el) => inserted.push(el), getName: () => 'body' };
+
+  const pos = n => anchorStub({ rel: 'column', offset: n }, { rel: 'paragraph', offset: 0 });
+  // Two boxes on the same visual row: the inline path would merge these into
+  // one two-cell table. Floating must keep them independent.
+  const group = [-457200, 3000000].map(x => Object.assign(
+    boxFor(pos(x)), { kind: 'textbox', drawing: { removeContent() {} }, p: anchorP }));
+
+  ctx._emitGroup(group);
+
+  const tables = inserted.filter(el => el.getName() === 'tbl');
+  assert.equal(tables.length, 2, 'expected one table per text box');
+  tables.forEach(t => assert.equal(t.getChild('tblPr').children[0].name, 'tblpPr'));
+  // Each table holds exactly one cell.
+  tables.forEach(t => assert.equal(t.getChild('tr').getChildren('tc').length, 1));
+  // And they are separated, or Word would merge them into one table.
+  assert.equal(inserted.some(el => el.getName() === 'p'), true);
+});

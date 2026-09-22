@@ -41,8 +41,7 @@ See [Known limitations](#known-limitations).
 
 | Problem construct | Rewritten as |
 |---|---|
-| Floating / anchored text boxes | Inline 1×N tables, preserving text, inline images and the shape's fill colour as cell shading |
-| Side-by-side text boxes | A single multi-cell table row, so two-column layouts stay two columns |
+| Floating / anchored text boxes | **Floating tables positioned at the original coordinates**, preserving text, inline images and the shape's fill colour as cell shading |
 | Text boxes stacked on a backing picture | The text box alone — the backing image is dropped (see below) |
 | Floating pictures | Left as floating anchors, so Docs imports them with its own wrap/position controls |
 | Charts, SmartArt, grouped shapes, drawing canvases and anything else unrecognised | Preserved untouched for Google's importer, and **reported back to the user** so they know to check them |
@@ -53,17 +52,28 @@ See [Known limitations](#known-limitations).
 
 ### Layout preservation
 
-Anchored objects carry a position; inline content doesn't. Rather than dumping
-everything in XML order, the converter:
+Google Docs supports floating tables, and its `.docx` importer honours OOXML
+floating-table positioning (`w:tblpPr`) — verified with a probe document. So a
+text box becomes a table carrying the anchor's **actual coordinates**: editable
+text *and* original position, rather than a trade between them.
 
-1. Groups anchors by their anchoring paragraph — vertical offsets are
-   paragraph-relative, so they're only comparable within one group, and
-   document order already carries the page-level flow.
-2. Sorts each group top-to-bottom, then left-to-right.
-3. Merges anchors sharing a visual row into one multi-cell table row.
+The mapping is direct:
 
-On a sample of four real worksheets this reproduced two-column card layouts and
-a full-width label sheet correctly.
+| Anchor | Table |
+|---|---|
+| `posOffset` (EMU) | `tblpX` / `tblpY` (÷ 635 → dxa) |
+| `relativeFrom="column\|paragraph"` | `horzAnchor`/`vertAnchor="text"` |
+| `relativeFrom="margin"` (any variant) | `"margin"` |
+| `relativeFrom="page"` | `"page"` |
+| `wp:align` keyword | `tblpXSpec` / `tblpYSpec` |
+| `distL`/`distR`/`distT`/`distB` | `leftFromText` etc. |
+
+A text box with no usable position still produces a valid inline table.
+
+Setting `FLOAT_TEXTBOX_TABLES = false` restores the previous approach, which
+approximated layout by grouping anchors per paragraph, sorting them
+top-to-bottom then left-to-right, and merging same-row anchors into multi-cell
+table rows. Kept as a fallback.
 
 ### Backing pictures
 
@@ -92,6 +102,8 @@ Constants near the top of the anchor section in `src/Code.gs`:
 
 | Constant | Default | Effect |
 |---|---|---|
+| `FLOAT_TEXTBOX_TABLES` | `true` | Emit each text box as a floating table at its original coordinates. `false` falls back to inline tables ordered by position. |
+| `KEEP_BACKING_PICTURES` | `false` | Keep the artwork under a text box instead of dropping it. Only meaningful when text boxes float; z-ordering unverified. |
 | `KEEP_PICTURES_FLOATING` | `true` | Leave pictures as floating anchors so they stay draggable in Docs. Set `false` to force everything inline. |
 | `COINCIDENT_TOL_EMU` | 0.06" | Position tolerance for backing-picture detection |
 | `COINCIDENT_SIZE_TOL` | 0.03 | Size tolerance for the same |
@@ -99,16 +111,10 @@ Constants near the top of the anchor section in `src/Code.gs`:
 
 ## Known limitations
 
-- **Position is lost for text boxes.** They become inline tables stacked in
-  reading order, so a laid-out page becomes a linear one.
-
-  This is a limitation of the current implementation, not of Google Docs. Docs
-  gained floating tables in 2023, and its `.docx` importer **does** honour
-  OOXML floating-table positioning (`w:tblpPr`) — verified with a probe
-  document: a table specified at `tblpX=7200`, `tblpY=2880` imported to exactly
-  5in from the page left and 2in from the top, with text wrapping correctly.
-  Emitting positioned tables instead of inline ones would preserve both the
-  position and the editable text. Not yet implemented.
+- **Backing pictures are still dropped by default.** Now that text boxes float,
+  a card's artwork could be kept underneath it — but the importer's z-ordering
+  between a floating table and a floating picture is unverified, and getting it
+  wrong hides the text. Set `KEEP_BACKING_PICTURES = true` to try it.
 - **Only `word/document.xml` gets the structural passes.** Headers and footers
   get background-stripping only. Fine if your documents don't use them;
   a real gap if they do.
