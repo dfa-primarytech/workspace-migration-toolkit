@@ -20,6 +20,8 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     input[type=file] { display: none; }
+    .warnings { margin: 10px 0 0; padding-left: 20px; color: #b06000; font-size: 13px; }
+    .warnings li { margin: 2px 0; }
   </style>
 </head>
 <body>
@@ -52,6 +54,40 @@
       if (fileInput.files.length) handleFile(fileInput.files[0]);
     });
 
+    // Built with DOM calls rather than innerHTML: everything here is either
+    // server-supplied or derived from a filename, and neither is trustworthy
+    // enough to concatenate into markup.
+    function renderSuccess(res) {
+      status.className = '';
+      status.textContent = '';
+      status.appendChild(document.createTextNode('✅ Done — '));
+
+      const link = document.createElement('a');
+      link.href = safeUrl(res && res.url);
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'open the converted document';
+      status.appendChild(link);
+
+      const warnings = (res && res.warnings) || [];
+      if (!warnings.length) return;
+
+      const list = document.createElement('ul');
+      list.className = 'warnings';
+      warnings.forEach(text => {
+        const item = document.createElement('li');
+        item.textContent = text;
+        list.appendChild(item);
+      });
+      status.appendChild(list);
+    }
+
+    // A javascript: or data: URL in an href would execute on click, so only
+    // absolute https links are rendered as links at all.
+    function safeUrl(url) {
+      return typeof url === 'string' && /^https:\/\//i.test(url) ? url : '#';
+    }
+
     function handleFile(file) {
       if (file.size > 25 * 1024 * 1024) {
         status.className = 'error';
@@ -78,7 +114,7 @@
         const base64 = reader.result.split(',')[1];
         google.script.run
           .withSuccessHandler(res => {
-            status.innerHTML = '&#9989; Done &mdash; <a href="' + res.url + '" target="_blank">open the converted document</a>';
+            renderSuccess(res);
           })
           .withFailureHandler(err => {
             status.className = 'error';

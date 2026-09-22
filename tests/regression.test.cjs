@@ -69,23 +69,63 @@ test('valid upload still repairs and converts a document', () => {
   assert.equal(ctx.processUpload('AQI=', 'Worksheet.DOCX').id, '123');
 });
 
-function browser() {
-  const elements = Object.fromEntries(['dropzone', 'fileInput', 'status'].map(id => [id, {
-    addEventListener() {}, prepend() {}, textContent: '',
+function node(tag) {
+  return {
+    tag, children: [], textContent: '', className: '',
+    addEventListener() {},
+    appendChild(child) { this.children.push(child); return child; },
+    prepend(child) { this.children.unshift(child); return child; },
     set innerHTML(value) { assert.fail('unexpected HTML insertion: ' + value); },
-  }]));
+  };
+}
+
+// Everything the page rendered, as plain text -- if markup ever reaches the DOM
+// as a string it shows up here verbatim instead of becoming elements.
+function renderedText(el) {
+  return el.textContent + el.children.map(renderedText).join('');
+}
+
+function browser() {
+  const elements = Object.fromEntries(
+    ['dropzone', 'fileInput', 'status'].map(id => [id, node(id)]));
   let reads = 0;
   let reader;
+  const sent = [];
+  const handlers = {};
+  const run = {
+    withSuccessHandler(fn) { handlers.success = fn; return run; },
+    withFailureHandler(fn) { handlers.failure = fn; return run; },
+    processUpload(...args) { sent.push(args); return run; },
+  };
   const ctx = vm.createContext({
-    document: { getElementById: id => elements[id], createElement: () => ({}) },
+    document: {
+      getElementById: id => elements[id],
+      createElement: tag => node(tag),
+      createTextNode: textContent => ({ tag: '#text', textContent, children: [] }),
+    },
     FileReader: class {
       constructor() { reader = this; }
       readAsDataURL() { reads++; }
     },
+    google: { script: { run } },
   });
   const html = fs.readFileSync('src/Index.html', 'utf8');
   vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], ctx);
-  return { ctx, status: elements.status, reads: () => reads, reader: () => reader };
+  return {
+    ctx, status: elements.status, reads: () => reads, reader: () => reader,
+    sent, handlers,
+    // Drive a file all the way through to the point the server would reply.
+    upload(file = { name: 'sample.docx', size: 100 }) {
+      ctx.handleFile(file);
+      reader.result = 'data:application/octet-stream;base64,QUJD';
+      reader.onload();
+      return handlers;
+    },
+    links: () => elements.status.children.filter(c => c.tag === 'a'),
+    items: () => elements.status.children
+      .filter(c => c.tag === 'ul')
+      .flatMap(list => list.children),
+  };
 }
 
 test('oversize browser upload is rejected before reading bytes', () => {
@@ -119,7 +159,12 @@ test('compound anchor classification never extracts a descendant text box', () =
   const anchor = { getParentElement: () => drawing };
   ctx._findAllDeep = (root, name) => name === 'anchor' ? [anchor] : [];
   ctx._isCompoundAnchor = () => true;
-  ctx._findFirstDeep = () => assert.fail('compound content was extracted');
+  // Reading graphicData to label the object is fine; reaching in for its
+  // content is the thing that must never happen.
+  ctx._findFirstDeep = (root, name) => {
+    if (name !== 'graphicData') assert.fail('compound content was extracted: ' + name);
+    return null;
+  };
   ctx._enclosingParagraph = () => paragraph;
   ctx._markKey = () => 'p1';
   ctx._anchorExtent = () => null;
@@ -129,4 +174,143 @@ test('compound anchor classification never extracts a descendant text box', () =
   ctx._emitGroup = group => { classified = group[0].kind; };
   ctx._replaceAnchors({});
   assert.equal(classified, 'unknown');
+});
+
+// ---------- unsupported-object reporting ----------
+// Values crossing back from vm.createContext carry that realm's prototypes, so
+// deepStrictEqual fails on identity even when the contents match. Strings are
+// primitives, so a plain copy is enough to compare them here.
+function warningsOf(value) {
+  return Array.from(value);
+}
+
+
+function uriAnchor(uri) {
+  return { getAttribute: () => ({ getValue: () => uri }) };
+}
+
+test('charts and SmartArt are recognised as unsupported, not as pictures', () => {
+  const ctx = server();
+  for (const uri of [
+    'http://schemas.openxmlformats.org/drawingml/2006/chart',
+    'http://schemas.microsoft.com/office/drawing/2014/chartex',
+    'http://schemas.openxmlformats.org/drawingml/2006/diagram',
+  ]) {
+    ctx._findFirstDeep = () => uriAnchor(uri);
+    assert.equal(ctx._isCompoundAnchor({}), true, uri + ' should be preserved');
+  }
+  // A plain picture must still classify as a picture.
+  ctx._findFirstDeep = () => uriAnchor('http://schemas.openxmlformats.org/drawingml/2006/picture');
+  assert.equal(ctx._isCompoundAnchor({}), false);
+});
+
+test('descriptors name each unsupported type, falling back for unknown ones', () => {
+  const ctx = server();
+  const label = uri => {
+    ctx._findFirstDeep = () => (uri === null ? null : uriAnchor(uri));
+    return ctx._unsupportedDescriptor({}).one;
+  };
+  assert.equal(label('http://schemas.openxmlformats.org/drawingml/2006/chart'), 'chart');
+  assert.equal(label('http://schemas.openxmlformats.org/drawingml/2006/diagram'), 'SmartArt diagram');
+  assert.equal(label('http://schemas.microsoft.com/office/word/2010/wordprocessingGroup'), 'grouped shape');
+  assert.equal(label('http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas'), 'drawing canvas');
+  assert.equal(label('urn:something:unrecognised'), 'floating object');
+  assert.equal(label(null), 'floating object');
+});
+
+test('warnings count objects, pluralise, and reset between conversions', () => {
+  const ctx = server();
+  assert.deepEqual(warningsOf(ctx._conversionWarnings()), []);
+
+  ctx._noteUnsupported({ one: 'chart', many: 'charts' });
+  assert.deepEqual(warningsOf(ctx._conversionWarnings()),
+    ['1 chart could not be converted and was kept as-is -- check how it looks.']);
+
+  ctx._noteUnsupported({ one: 'chart', many: 'charts' });
+  ctx._noteUnsupported({ one: 'drawing canvas', many: 'drawing canvases' });
+  assert.deepEqual(warningsOf(ctx._conversionWarnings()), [
+    '2 charts could not be converted and were kept as-is -- check how they look.',
+    '1 drawing canvas could not be converted and was kept as-is -- check how it looks.',
+  ]);
+
+  ctx._resetConversionReport();
+  assert.deepEqual(warningsOf(ctx._conversionWarnings()), []);
+});
+
+test('unsupported anchors are counted once each during classification', () => {
+  const ctx = server();
+  const run = {};
+  const drawing = { getParentElement: () => run };
+  const anchors = [
+    { getParentElement: () => drawing },
+    { getParentElement: () => drawing },
+  ];
+  ctx._findAllDeep = (root, name) => name === 'anchor' ? anchors : [];
+  ctx._isCompoundAnchor = () => true;
+  ctx._unsupportedDescriptor = () => ({ one: 'chart', many: 'charts' });
+  ctx._enclosingParagraph = () => ({});
+  ctx._markKey = () => 'p1';
+  ctx._anchorExtent = () => null;
+  ctx._anchorOffset = () => null;
+  ctx._clearMarks = () => {};
+  ctx._emitGroup = () => {};
+  ctx._resetConversionReport();
+  ctx._replaceAnchors({});
+  assert.deepEqual(warningsOf(ctx._conversionWarnings()),
+    ['2 charts could not be converted and were kept as-is -- check how they look.']);
+});
+
+test('processUpload returns warnings alongside the document link', () => {
+  const blob = {};
+  const ctx = server({
+    Utilities: { base64Decode: () => [1, 2], newBlob: () => blob },
+    MimeType: { GOOGLE_DOCS: 'google-doc' },
+    Drive: { Files: { create: () => ({ id: '1', webViewLink: 'https://docs.google.com/d/1' }) } },
+  });
+  ctx.fixDocx = () => { ctx._noteUnsupported({ one: 'chart', many: 'charts' }); return blob; };
+  const result = ctx.processUpload('AQI=', 'Deck.docx');
+  assert.equal(result.url, 'https://docs.google.com/d/1');
+  assert.deepEqual(warningsOf(result.warnings),
+    ['1 chart could not be converted and was kept as-is -- check how it looks.']);
+});
+
+// ---------- success handler rendering ----------
+
+test('the success handler builds the result link without any HTML string', () => {
+  const b = browser();
+  b.upload().success({ url: 'https://docs.google.com/document/d/123/edit', warnings: [] });
+  const [link] = b.links();
+  assert.equal(link.href, 'https://docs.google.com/document/d/123/edit');
+  assert.equal(link.textContent, 'open the converted document');
+  assert.equal(link.rel, 'noopener noreferrer');
+  assert.match(renderedText(b.status), /Done/);
+  assert.equal(b.items().length, 0);
+});
+
+test('warnings render as list items, never as markup', () => {
+  const b = browser();
+  const hostile = '<img src=x onerror=alert(1)> 2 charts kept';
+  b.upload().success({ url: 'https://docs.google.com/d/1', warnings: [hostile, 'second'] });
+  const items = b.items();
+  assert.equal(items.length, 2);
+  // Present verbatim as text -- the innerHTML guard in node() would have fired
+  // had it been concatenated into markup.
+  assert.equal(items[0].textContent, hostile);
+  assert.equal(items[1].textContent, 'second');
+});
+
+test('a non-https result URL is never used as a link target', () => {
+  for (const url of ['javascript:alert(1)', 'data:text/html,<script>', 'http://example.com', undefined]) {
+    const b = browser();
+    b.upload().success({ url, warnings: [] });
+    assert.equal(b.links()[0].href, '#', 'unsafe URL was rendered: ' + url);
+  }
+});
+
+test('a successful render clears an earlier error state', () => {
+  const b = browser();
+  b.ctx.handleFile({ name: 'x.txt', size: 10 });
+  assert.equal(b.status.className, 'error');
+  b.upload().success({ url: 'https://docs.google.com/d/1', warnings: [] });
+  assert.equal(b.status.className, '');
 });

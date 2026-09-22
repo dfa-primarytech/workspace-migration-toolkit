@@ -45,7 +45,7 @@ See [Known limitations](#known-limitations).
 | Side-by-side text boxes | A single multi-cell table row, so two-column layouts stay two columns |
 | Text boxes stacked on a backing picture | The text box alone — the backing image is dropped (see below) |
 | Floating pictures | Left as floating anchors, so Docs imports them with its own wrap/position controls |
-| Unsupported anchors, grouped shapes and drawing canvases | Preserved for Google's importer; appearance still needs checking |
+| Charts, SmartArt, grouped shapes, drawing canvases and anything else unrecognised | Preserved untouched for Google's importer, and **reported back to the user** so they know to check them |
 | Legacy VML-only pictures | Modern inline DrawingML pictures |
 | Handwritten "ink" annotations | Removed |
 | `mc:Fallback` branches | Discarded; `mc:Choice` is promoted |
@@ -99,8 +99,16 @@ Constants near the top of the anchor section in `src/Code.gs`:
 
 ## Known limitations
 
-- **Position is lost for text boxes.** They become tables, and a table in Google
-  Docs is always inline. There is no floating table in the target format.
+- **Position is lost for text boxes.** They become inline tables stacked in
+  reading order, so a laid-out page becomes a linear one.
+
+  This is a limitation of the current implementation, not of Google Docs. Docs
+  gained floating tables in 2023, and its `.docx` importer **does** honour
+  OOXML floating-table positioning (`w:tblpPr`) — verified with a probe
+  document: a table specified at `tblpX=7200`, `tblpY=2880` imported to exactly
+  5in from the page left and 2in from the top, with text wrapping correctly.
+  Emitting positioned tables instead of inline ones would preserve both the
+  position and the editable text. Not yet implemented.
 - **Only `word/document.xml` gets the structural passes.** Headers and footers
   get background-stripping only. Fine if your documents don't use them;
   a real gap if they do.
@@ -114,6 +122,10 @@ Constants near the top of the anchor section in `src/Code.gs`:
   warns that files over 10 MiB may time out.
 - Only PNG and JPEG are measured for background detection; EMF/WMF/GIF
   backgrounds are kept.
+- **Charts, SmartArt, grouped shapes and canvases are preserved, not converted.**
+  Google imports them as uneditable drawings. The conversion result lists how
+  many were kept so they can be checked, but making them editable would mean
+  recursing into groups — see issue #4.
 
 ## Roadmap
 

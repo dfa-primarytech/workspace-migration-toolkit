@@ -40,6 +40,33 @@ const NS = {
   o:   XmlService.getNamespace('o',   'urn:schemas-microsoft-com:office:office'),
 };
 
+/**
+ * Per-execution tally of objects kept but not converted. Apps Script gives each
+ * execution a fresh global scope, so module state is safe here -- the same
+ * reason _nextDocPrId works. Reset at the start of every fixDocx().
+ */
+let _unsupportedKept = null;
+
+function _resetConversionReport() { _unsupportedKept = null; }
+
+function _noteUnsupported(desc) {
+  if (!_unsupportedKept) _unsupportedKept = {};
+  const entry = _unsupportedKept[desc.one] ||
+      (_unsupportedKept[desc.one] = { one: desc.one, many: desc.many, count: 0 });
+  entry.count++;
+}
+
+/** Plain-language warnings for the UI; empty when everything converted. */
+function _conversionWarnings() {
+  const kept = _unsupportedKept || {};
+  return Object.keys(kept).sort().map(key => {
+    const e = kept[key];
+    return e.count + ' ' + (e.count === 1 ? e.one : e.many) +
+        ' could not be converted and ' + (e.count === 1 ? 'was' : 'were') +
+        ' kept as-is -- check how ' + (e.count === 1 ? 'it looks' : 'they look') + '.';
+  });
+}
+
 let _nextDocPrId = 800001;
 function _newDocPrId() { return ++_nextDocPrId; }
 
@@ -81,7 +108,7 @@ function processUpload(base64Data, filename) {
     { fields: 'id,webViewLink' }
   );
 
-  return { url: file.webViewLink, id: file.id };
+  return { url: file.webViewLink, id: file.id, warnings: _conversionWarnings() };
 }
 
 // ================= Core fixer =================
@@ -91,6 +118,7 @@ function processUpload(base64Data, filename) {
  * caller decides whether/how to convert it to a Google Doc).
  */
 function fixDocx(inputBlob) {
+  _resetConversionReport();
   // A .docx *is* a zip, but Utilities.unzip() rejects anything not declared as
   // application/zip -- retype a copy rather than mutating the caller's blob.
   const zipBlob = inputBlob.copyBlob().setContentType(MimeType.ZIP);
@@ -198,8 +226,11 @@ function _removeBackground(root) {
  * floating images come through badly placed, at the cost of making them
  * un-draggable.
  *
- * Text boxes are converted regardless: they become tables, and a table in
- * Google Docs is always inline. That is a hard limit of the target format.
+ * Text boxes are converted regardless: they become inline tables, so their
+ * position is lost. That is a limit of this implementation rather than of the
+ * target format -- Google's importer does honour floating-table positioning
+ * (w:tblpPr), so emitting positioned tables would keep position and editable
+ * text together. Not yet implemented.
  */
 const KEEP_PICTURES_FLOATING = true;
 
@@ -292,6 +323,10 @@ function _replaceAnchors(root) {
       kind = 'unknown';
     }
 
+    // Anything we keep but cannot convert is reported back to the user, so a
+    // silent "that looked wrong" becomes something they know to check.
+    if (kind === 'unknown') _noteUnsupported(_unsupportedDescriptor(anchor));
+
     const encl = _enclosingParagraph(run);
     items.push({
       anchor: anchor, drawing: oldDrawing, run: run,
@@ -362,7 +397,7 @@ function _emitGroup(group) {
 
     // Everything else is detached first -- dropped ones simply never come back.
     it.drawing.removeContent(it.anchor);
-    if (it.kind === 'ink' || it.kind === 'unknown' || it.drop) return;
+    if (it.kind === 'ink' || it.drop) return;
     live.push(it);
   });
   if (!live.length) return;
@@ -421,13 +456,45 @@ function _emitGroup(group) {
   spaced.forEach(b => { pParent.addContent(at, b); at++; });
 }
 
-function _isCompoundAnchor(anchor) {
+/**
+ * Graphic types Google's importer cannot turn into editable Docs content, and
+ * which this converter therefore leaves untouched rather than rewriting.
+ *
+ * Listing charts and diagrams explicitly matters: a SmartArt diagram often
+ * carries a fallback <a:blip>, so without an entry here it would classify as a
+ * plain picture and could be discarded by _dropBackingPictures if it happened
+ * to sit behind a text box. Being on this list makes preservation deliberate.
+ */
+const UNSUPPORTED_GRAPHICS = {
+  'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup':
+    { one: 'grouped shape', many: 'grouped shapes' },
+  'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas':
+    { one: 'drawing canvas', many: 'drawing canvases' },
+  'http://schemas.openxmlformats.org/drawingml/2006/chart':
+    { one: 'chart', many: 'charts' },
+  'http://schemas.microsoft.com/office/drawing/2014/chartex':
+    { one: 'chart', many: 'charts' },
+  'http://schemas.openxmlformats.org/drawingml/2006/diagram':
+    { one: 'SmartArt diagram', many: 'SmartArt diagrams' },
+};
+
+const UNSUPPORTED_FALLBACK = { one: 'floating object', many: 'floating objects' };
+
+function _anchorGraphicUri(anchor) {
   const data = _findFirstDeep(anchor, 'graphicData', NS.a);
   const uri = data && data.getAttribute('uri');
-  return !!uri && [
-    'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup',
-    'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas',
-  ].indexOf(uri.getValue()) !== -1;
+  return uri ? uri.getValue() : null;
+}
+
+function _isCompoundAnchor(anchor) {
+  const uri = _anchorGraphicUri(anchor);
+  return !!uri && Object.prototype.hasOwnProperty.call(UNSUPPORTED_GRAPHICS, uri);
+}
+
+/** Human-readable name for an anchor we kept but could not convert. */
+function _unsupportedDescriptor(anchor) {
+  const uri = _anchorGraphicUri(anchor);
+  return (uri && UNSUPPORTED_GRAPHICS[uri]) || UNSUPPORTED_FALLBACK;
 }
 
 function _buildPicturePara(pic) {
