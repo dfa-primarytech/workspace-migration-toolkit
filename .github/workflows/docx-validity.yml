@@ -36,6 +36,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
 
       - name: Install LibreOffice
         # --no-install-recommends keeps this to roughly the Writer filters
@@ -48,10 +49,14 @@ jobs:
           pdftotext -v
 
       - name: Install the application
+        # The committed lock, then the package without re-resolving -- matching
+        # platform CI. An unpinned install here would let this job drift onto
+        # different dependency versions from every other check, which is how a
+        # green run stops meaning anything.
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
-          pip install pytest
+          pip install -r requirements-dev.lock
+          pip install --no-deps -e .
 
       - name: Convert and re-read with LibreOffice
         # Fails if any test is skipped: a silent skip here would report green
