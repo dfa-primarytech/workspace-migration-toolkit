@@ -1,0 +1,8 @@
+# Current state
+
+Main is at 730ecee after PR #7 merged the DOCX hardening. The Apps Script DOCX
+fixer has 10 passing Node regression tests. The shared FastAPI platform and PPTX
+preflight/native-import prototype are on feat/platform-pptx-preflight. Its local
+tests use synthetic PPTX packages and mocked Google APIs; live OAuth, real Google
+conversion and visual fidelity are not yet verified. Publisher is deferred. No
+GCP resources are deployed.
