@@ -648,6 +648,7 @@ def render(package: Package, destination: Path) -> dict:
         "pictures": 0,
         "ink": 0,
         "legacyPictures": 0,
+        "equations": 0,
         "unsupported": {},
         "parts": [],
     }
@@ -660,6 +661,7 @@ def render(package: Package, destination: Path) -> dict:
             # Body text only. Drive's plain-text export does not reliably
             # include headers, so counting them would invent mismatches.
             tokens = Counter(source_text(root).split())
+            report["equations"] = count_equations(root)
         part_report = transform(root, ids)
         rewritten[name] = serialise(root)
         report["parts"].append(name)
@@ -715,8 +717,36 @@ def _same_size(a: dict, b: dict) -> bool:
 
 
 def source_text(root: Element) -> str:
-    """All body text, used only to check nothing vanished during import."""
+    """All body text, used only to check nothing vanished during import.
+
+    Equation text lives in `<m:t>`, not `<w:t>`, and is deliberately left out
+    -- see count_equations for why counting it would invent mismatches rather
+    than catch them.
+    """
     return " ".join((node.text or "") for node in root.iter(q("w", "t")))
+
+
+def count_equations(root: Element) -> int:
+    """How many equations the document contains.
+
+    Equations are the one kind of content this converter can neither rewrite
+    nor check. They survive the transform intact -- they are relocated like any
+    other markup -- but whether Google's importer keeps them is unknown, and
+    unknowable until a real conversion is observed.
+
+    The obvious move would be to fold `<m:t>` into the token check so a lost
+    equation shows up as missing text. That is a trap: if Google's plain-text
+    export omits equation content -- which is entirely plausible, since an
+    equation is not a run of text -- every maths document would report missing
+    text it had not actually lost. A warning that cries wolf on every worksheet
+    is worse than no warning, because people learn to dismiss it.
+
+    The same reasoning already keeps headers out of the token count. So the
+    count is reported and reviewers are told to look, which is honest about
+    what is known: the equation left here intact, and nobody has checked what
+    arrived.
+    """
+    return sum(1 for _ in root.iter(q("m", "oMath")))
 
 
 def render_path(source: Path, destination: Path, settings) -> dict:
@@ -728,7 +758,7 @@ def render_path(source: Path, destination: Path, settings) -> dict:
         package.close()
 
 
-def verify(tokens: dict, exported: str) -> list[dict]:
+def verify(tokens: dict, exported: str, equations: int = 0) -> list[dict]:
     """Compares the converted document's text against the source's.
 
     A whitespace-normalised token multiset catches text that went missing or
@@ -747,6 +777,17 @@ def verify(tokens: dict, exported: str) -> list[dict]:
                 "text_mismatch",
                 "Some source text could not be verified after import.",
                 missingTokenCount=sum(missing.values()),
+                classification=C.UNSUPPORTED,
+            )
+        )
+    if equations:
+        findings.append(
+            warning(
+                "equations_not_verified",
+                "This document contains equations. They were passed through "
+                "unchanged, but whether they survived the import has not been "
+                "checked automatically -- open the document and confirm.",
+                equationCount=equations,
                 classification=C.UNSUPPORTED,
             )
         )
@@ -816,9 +857,17 @@ async def convert(
 
         render_report = json.loads((result / "render.json").read_text(encoding="utf-8"))
         exported = await google.export_text(uploaded["id"])
-        report["warnings"].extend(verify(render_report.get("tokens", {}), exported))
+        report["warnings"].extend(
+            verify(
+                render_report.get("tokens", {}),
+                exported,
+                equations=render_report.get("equations", 0),
+            )
+        )
         report["conversion"] = {
-            k: v for k, v in render_report.items() if k in {"textboxes", "pictures", "ink"}
+            k: v
+            for k, v in render_report.items()
+            if k in {"textboxes", "pictures", "ink", "equations"}
         }
         report["conversion"]["unsupportedKept"] = render_report.get("unsupported", {})
         report["verification"] = "text_checked"
