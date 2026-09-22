@@ -95,3 +95,19 @@ The Apps Script version matched "pt" only and silently skipped anything else,
 which loses the picture entirely. The port reads pt, in, cm, mm, pc and px. An
 unmeasurable shape is left as-is rather than dropped: a picture we cannot resize
 is still a picture.
+
+## 2026-09-22: Four APIs, one scope
+Enable the Drive, Slides, Docs and Sheets APIs in the Google Cloud project, but
+keep the OAuth scope at drive.file alone.
+
+Creating a Doc, Slide deck or Sheet needs only Drive: upload with the target
+Google MIME type and Drive converts it. The other three APIs are for reading
+back or editing what was created -- Slides is already used for PPTX read-back
+verification, Docs would give DOCX a structural read-back instead of the
+current plain-text export, Sheets is for future XLSX work.
+
+All three accept drive.file for files the application created, so none of them
+requires a broader grant. drive.file is non-sensitive; documents, presentations,
+spreadsheets and full drive are sensitive or restricted and would widen what
+staff consent to across their entire Drive. The application only ever touches
+files it created, so the narrow scope is accurate rather than limiting.
