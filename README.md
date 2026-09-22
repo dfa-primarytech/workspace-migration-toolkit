@@ -45,7 +45,7 @@ See [Known limitations](#known-limitations).
 | Side-by-side text boxes | A single multi-cell table row, so two-column layouts stay two columns |
 | Text boxes stacked on a backing picture | The text box alone — the backing image is dropped (see below) |
 | Floating pictures | Left as floating anchors, so Docs imports them with its own wrap/position controls |
-| Unsupported anchors, grouped shapes and drawing canvases | Preserved for Google's importer; appearance still needs checking |
+| Charts, SmartArt, grouped shapes, drawing canvases and anything else unrecognised | Preserved untouched for Google's importer, and **reported back to the user** so they know to check them |
 | Legacy VML-only pictures | Modern inline DrawingML pictures |
 | Handwritten "ink" annotations | Removed |
 | `mc:Fallback` branches | Discarded; `mc:Choice` is promoted |
@@ -114,6 +114,10 @@ Constants near the top of the anchor section in `src/Code.gs`:
   warns that files over 10 MiB may time out.
 - Only PNG and JPEG are measured for background detection; EMF/WMF/GIF
   backgrounds are kept.
+- **Charts, SmartArt, grouped shapes and canvases are preserved, not converted.**
+  Google imports them as uneditable drawings. The conversion result lists how
+  many were kept so they can be checked, but making them editable would mean
+  recursing into groups — see issue #4.
 
 ## Roadmap
 
