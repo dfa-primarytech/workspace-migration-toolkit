@@ -23,6 +23,16 @@ Still unmeasured: whether the offsets of in-cell floating images survive, and
 whether Google de-duplicates images stacked at identical offsets. The latter
 is the standing explanation for 12 lost image placements and is not yet tested.
 
+**Saved assets are named, not digested.** Every private copy went to Drive as a
+bare SHA-256 with no extension, which made the safety net unusable: putting a
+picture back into a deck by hand means knowing which slide wanted it. Copies are
+now named `<source> - slide NN - image N.ext`, numbered in deck order, with the
+slide numbers zero-padded so the folder sorts the way the deck runs. A document
+gets no page number, because nothing in a `.docx` manifest links an asset to a
+page and its `pages` are section breaks rather than printed pages. The asset id
+moves into the report beside the name, so a file in Drive can still be matched
+to the manifest. Asked for by the human.
+
 
 ## Coordination
 

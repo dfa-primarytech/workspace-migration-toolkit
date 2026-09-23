@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
+import re
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -334,21 +336,150 @@ def verify(manifest: dict, presentation: dict) -> list[dict]:
     return findings
 
 
+# A saved asset called "9f3c1a2b…" with no extension tells you nothing. To put a
+# picture back into a deck by hand you need to know which slide wanted it, so
+# that is what these names carry: the deck, the slide, and a suffix the
+# computer recognises.
+SEPARATOR = " – "  # en dash, matching the converted file's own name
+NAME_LIMIT = 80  # characters of the source's name kept in every asset name
+SLIDES_LISTED = 3  # beyond this, an asset is a logo or a background, not content
+
+# Drive itself accepts almost anything, but these names are meant to survive
+# being downloaded onto a desktop, where they are not.
+UNSAFE = re.compile(r"[\\/:*?\"<>|]")
+
+# mimetypes.guess_extension answers ".jpe" for a JPEG and nothing at all for
+# the Office-only formats, so the ones we actually extract are named here.
+EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tif",
+    "image/webp": ".webp",
+    "image/svg+xml": ".svg",
+    "image/x-emf": ".emf",
+    "image/x-wmf": ".wmf",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+}
+
+
+def clean_name(name: str) -> str:
+    """A source file's own name, made safe to put inside a Drive filename."""
+    stripped = "".join(character for character in name if ord(character) >= 32)
+    return " ".join(UNSAFE.sub(" ", stripped).split())[:NAME_LIMIT].strip()
+
+
+def extension(mime: str) -> str:
+    """The suffix to give a saved asset, or nothing if the type is unknown."""
+    kind = mime.split(";", 1)[0].strip().lower()
+    known = EXTENSIONS.get(kind)
+    if known:
+        return known
+    guessed = mimetypes.guess_extension(kind) or ""
+    return guessed if re.fullmatch(r"\.[a-z0-9]{1,8}", guessed) else ""
+
+
+def _slide_phrase(numbers: list[int], width: int) -> str:
+    """Which slides used an asset, in words. Empty when nothing placed it."""
+    if not numbers:
+        return ""
+    shown = [f"{number:0{width}d}" for number in numbers[:SLIDES_LISTED]]
+    if len(numbers) == 1:
+        return f"slide {shown[0]}"
+    if len(numbers) <= SLIDES_LISTED:
+        return "slides " + ", ".join(shown)
+    return f"slides {shown[0]} and {len(numbers) - 1} more"
+
+
+def _placements(manifest: dict) -> dict[str, list[int]]:
+    """The slide numbers each asset appears on, in slide order.
+
+    Only a presentation records this: a document's elements never name the
+    assets they draw, and its "pages" are section breaks rather than the pages
+    a reader would count, so numbering them would say something untrue.
+    """
+    if manifest.get("source", {}).get("type") != "pptx":
+        return {}
+    placed: dict[str, list[int]] = {}
+    for page in manifest.get("pages") or []:
+        index = page.get("index")
+        if not isinstance(index, int):
+            continue
+        number = index + 1  # the manifest counts slides from zero; people do not
+        for element in page.get("elements") or []:
+            for asset_id in element.get("assetIds") or []:
+                slides = placed.setdefault(asset_id, [])
+                if number not in slides:
+                    slides.append(number)
+    return placed
+
+
+def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
+    """A name for every asset that says where it came from, keyed by asset id.
+
+    Assets are numbered in the order they first appear, so the numbering
+    follows the deck rather than the order the archive happened to store them
+    in. An asset nothing placed -- one used only by a layout or a master --
+    keeps a name without a slide rather than being given a misleading one.
+    """
+    placed = _placements(manifest)
+    width = len(str(max((slides[-1] for slides in placed.values()), default=0)))
+    deck = clean_name(original_name)
+    assets = list(manifest.get("assets", {}).values())
+    # Unplaced assets sort last, and ties keep the manifest's own order.
+    ranked = sorted(
+        enumerate(assets),
+        key=lambda pair: (placed.get(pair[1]["id"], [10**9])[0], pair[0]),
+    )
+    counts: Counter[str] = Counter()
+    names: dict[str, str] = {}
+    for _, asset in ranked:
+        kind = asset.get("kind") or "file"
+        counts[kind] += 1
+        parts = [
+            part
+            for part in (
+                deck,
+                _slide_phrase(placed.get(asset["id"], []), width),
+                f"{kind} {counts[kind]}",
+            )
+            if part
+        ]
+        names[asset["id"]] = SEPARATOR.join(parts) + extension(asset.get("mimeType", ""))
+    return names
+
+
 async def save_assets(
-    result: Path, manifest: dict, google: Google, folder: str, report: dict
+    result: Path,
+    manifest: dict,
+    google: Google,
+    folder: str,
+    report: dict,
+    original_name: str = "",
 ) -> None:
     """Copies every extracted asset beside the converted file.
 
     These copies are a safety net, not the deliverable: they exist so anything the
     importer drops is still recoverable by hand. So one refused copy must not
     abandon the rest, and must never stop the document itself being verified.
+
+    Recovering by hand means finding the right picture and putting it back where
+    it belongs, so each copy is named after the deck and the slide it came from.
+    The report keeps the asset id beside that name, so a file in Drive can still
+    be matched to the manifest.
     """
+    names = asset_names(manifest, original_name)
     failures: list[str] = []
     for asset in manifest["assets"].values():
         try:
             saved = await google.upload(
                 result / asset["path"],
-                asset["id"],
+                names[asset["id"]],
                 asset["mimeType"],
                 folder,
                 retry=True,
@@ -359,6 +490,7 @@ async def save_assets(
         report["assetOutputs"].append(
             {
                 "assetId": asset["id"],
+                "name": names[asset["id"]],
                 "kind": asset["kind"],
                 "driveFileId": saved["id"],
                 "url": "https://drive.google.com/file/d/" + saved["id"] + "/view",
@@ -384,9 +516,11 @@ async def convert(
     manifest: dict,
     google: Google,
     progress: dict | None = None,
-    output_name: str = "Converted presentation",
+    original_name: str = "",
 ) -> dict:
     report = progress if progress is not None else {}
+    deck = clean_name(original_name)
+    output_name = f"{deck}{SEPARATOR}converted" if deck else "Converted presentation"
     report.update(analysis_report(manifest))
     report.update(status="converting", outputs=[], assetOutputs=[])
     try:
@@ -412,7 +546,7 @@ async def convert(
         report["url"] = "https://docs.google.com/presentation/d/" + result["id"] + "/edit"
         # Preserve every extracted asset privately, including audio/video that the
         # native importer might omit. No public permissions or automatic execution.
-        await save_assets(root / "result", manifest, google, folder, report)
+        await save_assets(root / "result", manifest, google, folder, report, original_name)
         presentation = await google.inspect(result["id"])
         report["warnings"].extend(verify(manifest, presentation))
         render_report = root / "result" / "render.json"

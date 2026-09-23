@@ -1338,11 +1338,14 @@ async def convert(
     manifest: dict,
     google,
     progress: dict | None = None,
-    output_name: str = "Converted document",
+    original_name: str = "",
 ) -> dict:
     """Uploads the rendered .docx for native import, then checks what came back."""
-    from .google import DOCS_MIME, DRIVE, save_assets  # imported here to avoid a cycle
+    # imported here to avoid a cycle
+    from .google import DOCS_MIME, DRIVE, SEPARATOR, clean_name, save_assets
 
+    document = clean_name(original_name)
+    output_name = f"{document}{SEPARATOR}converted" if document else "Converted document"
     report = progress if progress is not None else {}
     report.update(analysis_report(manifest))
     report.update(status="converting", outputs=[], assetOutputs=[])
@@ -1373,7 +1376,7 @@ async def convert(
 
         # Keep every extracted asset privately alongside the document, so
         # anything the importer drops is still recoverable by hand.
-        await save_assets(result, manifest, google, folder, report)
+        await save_assets(result, manifest, google, folder, report, original_name)
 
         render_report = json.loads((result / "render.json").read_text(encoding="utf-8"))
         exported = await google.export_text(uploaded["id"])

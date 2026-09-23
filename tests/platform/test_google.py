@@ -7,7 +7,7 @@ import httpx
 import pytest
 from workspace_toolkit.config import Settings
 from workspace_toolkit.errors import ToolkitError
-from workspace_toolkit.google import Google, convert, google_text, verify
+from workspace_toolkit.google import Google, asset_names, convert, google_text, verify
 from workspace_toolkit.package import PPTX_MIME
 from workspace_toolkit.pptx import analyse, render_path
 
@@ -140,7 +140,7 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
                 root,
                 manifest,
                 Google("test-token", client),
-                output_name="School assembly – converted",
+                original_name="School assembly",
             )
 
     report = asyncio.run(run())
@@ -149,6 +149,11 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
     assert len(report["assetOutputs"]) == 3
     assert uploads[0]["mimeType"] == "application/vnd.google-apps.presentation"
     assert uploads[0]["name"] == "School assembly – converted"
+    # The saved copies reach Drive under the names, not the digests: this is the
+    # point of naming them, and it is the upload call that has to carry it.
+    saved = [upload["name"] for upload in uploads[1:-1]]
+    assert saved and all(name.startswith("School assembly – ") for name in saved), saved
+    assert saved == [output["name"] for output in report["assetOutputs"]]
     assert {u["mimeType"] for u in uploads} >= {"video/mp4", "audio/wav", "application/json"}
     assert all(u["parents"] == ["folder1"] for u in uploads)
     assert report["reportUrl"].startswith("https://drive.google.com/")
@@ -376,3 +381,108 @@ def test_the_document_upload_is_never_retried(tmp_path, monkeypatch):
 
     asyncio.run(run())
     assert len(attempts) == 1, "the document must never be uploaded twice"
+
+
+def deck(*slides: list[str], assets: dict[str, str] | None = None) -> dict:
+    """A manifest carrying only what asset naming reads: slides and assets."""
+    return {
+        "source": {"type": "pptx"},
+        "pages": [
+            {
+                "index": index,
+                "elements": [{"assetIds": [asset_id]} for asset_id in ids],
+            }
+            for index, ids in enumerate(slides)
+        ],
+        "assets": {
+            asset_id: {
+                "id": asset_id,
+                # The same rule both extractors use.
+                "kind": mime.split("/", 1)[0]
+                if mime.startswith(("image/", "audio/", "video/"))
+                else "embedded",
+                "mimeType": mime,
+            }
+            for asset_id, mime in (assets or {}).items()
+        },
+    }
+
+
+def test_a_saved_picture_is_named_after_its_deck_and_slide():
+    manifest = deck([], ["sha1"], assets={"sha1": "image/png"})
+    assert asset_names(manifest, "Place Value") == {"sha1": "Place Value – slide 2 – image 1.png"}
+
+
+def test_slide_numbers_are_padded_so_the_folder_sorts_in_deck_order():
+    # Ten slides means two digits, or "slide 10" would sort before "slide 2".
+    slides = [[] for _ in range(9)] + [["sha1"]]
+    names = asset_names(deck(*slides, assets={"sha1": "image/png"}), "Assembly")
+    assert names["sha1"] == "Assembly – slide 10 – image 1.png"
+    one_digit = asset_names(deck([], ["sha1"], assets={"sha1": "image/png"}), "Assembly")
+    assert one_digit["sha1"] == "Assembly – slide 2 – image 1.png"
+
+
+def test_a_picture_reused_across_slides_names_every_slide_it_is_on():
+    manifest = deck(["sha1"], ["sha1"], ["sha1"], assets={"sha1": "image/png"})
+    assert asset_names(manifest, "Topic")["sha1"] == "Topic – slides 1, 2, 3 – image 1.png"
+
+
+def test_a_logo_on_every_slide_is_summarised_rather_than_listed():
+    manifest = deck(*[["sha1"] for _ in range(12)], assets={"sha1": "image/png"})
+    assert asset_names(manifest, "Topic")["sha1"] == "Topic – slides 01 and 11 more – image 1.png"
+
+
+def test_a_picture_no_slide_placed_is_not_given_a_slide_it_was_never_on():
+    # An asset only a layout or a master uses. Naming it "slide 1" would be a lie.
+    manifest = deck([], [], assets={"sha1": "image/png"})
+    assert asset_names(manifest, "Topic")["sha1"] == "Topic – image 1.png"
+
+
+def test_assets_are_numbered_in_deck_order_not_archive_order():
+    manifest = deck(["late"], ["early"], assets={"early": "image/png", "late": "image/png"})
+    names = asset_names(manifest, "Topic")
+    assert names["late"] == "Topic – slide 1 – image 1.png"
+    assert names["early"] == "Topic – slide 2 – image 2.png"
+
+
+def test_each_kind_is_numbered_separately():
+    manifest = deck(
+        ["a"], ["b"], ["c"], assets={"a": "image/png", "b": "video/mp4", "c": "image/jpeg"}
+    )
+    names = asset_names(manifest, "Topic")
+    assert names["a"].endswith("image 1.png")
+    assert names["b"].endswith("video 1.mp4")
+    assert names["c"].endswith("image 2.jpg")
+
+
+def test_a_document_gets_no_slide_number_because_it_has_no_slides():
+    # A .docx manifest has "pages", but they are section breaks rather than the
+    # pages a reader counts, and nothing links an asset to one.
+    manifest = {
+        "source": {"type": "docx"},
+        "pages": [{"index": 0, "elements": [{"assetIds": ["sha1"]}]}],
+        "assets": {"sha1": {"id": "sha1", "kind": "image", "mimeType": "image/png"}},
+    }
+    assert asset_names(manifest, "Worksheet")["sha1"] == "Worksheet – image 1.png"
+
+
+def test_a_name_that_could_break_a_download_is_made_safe():
+    manifest = deck([], assets={"sha1": "image/png"})
+    names = asset_names(manifest, 'Year 3/4: "maths"\tterm\n1')
+    assert names["sha1"] == "Year 3 4 maths term1 – image 1.png"
+
+
+def test_a_very_long_name_is_shortened_rather_than_refused():
+    manifest = deck([], assets={"sha1": "image/png"})
+    name = asset_names(manifest, "W" * 300)["sha1"]
+    assert name == "W" * 80 + " – image 1.png"
+
+
+def test_an_unknown_type_is_named_without_inventing_a_suffix():
+    manifest = deck([], assets={"sha1": "application/x-not-a-real-type"})
+    assert asset_names(manifest, "Topic")["sha1"] == "Topic – embedded 1"
+
+
+def test_without_a_source_name_an_asset_is_still_named_usefully():
+    manifest = deck([], ["sha1"], assets={"sha1": "image/png"})
+    assert asset_names(manifest, "")["sha1"] == "slide 2 – image 1.png"

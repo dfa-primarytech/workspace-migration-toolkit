@@ -475,7 +475,7 @@ def converted_job(tmp_path, body, **kwargs):
     google = FakeGoogle(**kwargs)
     from workspace_toolkit.docs import convert
 
-    report = asyncio.run(convert(root, manifest, google, output_name="Worksheet – converted"))
+    report = asyncio.run(convert(root, manifest, google, original_name="Worksheet"))
     return report, google
 
 
@@ -530,8 +530,13 @@ def test_an_account_without_word_import_fails_before_uploading(tmp_path):
 def test_recovered_media_is_saved_alongside_the_document(tmp_path):
     body = anchor(PICTURE) + SECTION
     report, google = converted_job(tmp_path, body)
-    assert [u["name"] for u in google.uploads[1:-1]], "assets should be uploaded"
+    saved = [u["name"] for u in google.uploads[1:-1]]
+    # Named after the document, with a suffix, rather than left as a digest. A
+    # document gets no page number: nothing in its manifest links a picture to
+    # one, and its "pages" are section breaks rather than printed pages.
+    assert saved == ["Worksheet – image 1.png"], saved
     assert report["assetOutputs"][0]["kind"] == "image"
+    assert report["assetOutputs"][0]["name"] == "Worksheet – image 1.png"
     assert google.uploads[-1]["name"] == "Conversion report.json"
 
 
