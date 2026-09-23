@@ -337,7 +337,8 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
             )
     font_catalogue = catalogue(fonts)
     declared_font_catalogue = catalogue(declared_fonts)
-    for font in font_catalogue:
+    font_requirements = catalogue(fonts | declared_fonts)
+    for font in font_requirements:
         if font["status"] == FontStatus.SUBSTITUTED:
             warnings.append(
                 warning(
@@ -374,6 +375,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
         "fonts": font_catalogue,
         "declaredFonts": sorted(declared_fonts),
         "declaredFontCompatibility": declared_font_catalogue,
+        "fontRequirements": font_requirements,
         "warnings": warnings,
     }
     report = analysis_report(manifest)
@@ -402,7 +404,7 @@ def analysis_report(manifest: dict) -> dict:
         },
         "elementCounts": dict(counts),
         "assetCounts": dict(Counter(a["kind"] for a in manifest["assets"].values())),
-        "fonts": manifest["fonts"],
+        "fonts": manifest.get("fontRequirements", manifest["fonts"]),
         "warnings": warnings,
         "verification": "not_converted",
         "classificationBasis": "Preflight candidates, not verified Google compatibility.",

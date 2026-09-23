@@ -42,6 +42,7 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
     ]
     assert manifest["declaredFontCompatibility"][0]["replacement"] == "Carlito"
     assert manifest["declaredFonts"] == ["Aptos"]
+    assert {font["name"] for font in manifest["fontRequirements"]} == {"Aptos", "Calibri"}
     assert text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontFamily"] == "Calibri"
     assert (
         text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontCompatibility"]["replacement"]
@@ -56,6 +57,11 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
         "embedded_asset",
         "font_substitution",
     }
+    assert {
+        warning["font"]
+        for warning in manifest["warnings"]
+        if warning["code"] == "font_substitution"
+    } == {"Aptos", "Calibri"}
     unknown = manifest["pages"][0]["elements"][-1]
     assert unknown["type"] == "unknown" and unknown["classification"] == "UNSUPPORTED"
     assert pptx.read_bytes() == before
