@@ -21,3 +21,12 @@
 6. Publisher → Google Slides renderer, only after that breadth exists
    (PROJECT.md section 38 stop point).
 7. XLSX preflight and import.
+8. Resolve DOCX fonts properly before wiring the shared substitution service.
+   `docx.fonts()` reads literal `w:rFonts` values only, so a document using
+   Word's **default theme fonts reports no fonts at all**, as does one whose
+   fonts live in its styles. Requirements and measured evidence in
+   `docs/font-substitution.md`. The mapping table itself is owned by the shared
+   service, not by this stream.
+9. Empty `<w:drawing>` residue left by every converted anchor (issue #20).
+   Recorded only: no cleanup until a before/after rendering case shows an
+   effect.

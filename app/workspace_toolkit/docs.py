@@ -649,6 +649,7 @@ def render(package: Package, destination: Path) -> dict:
         "ink": 0,
         "legacyPictures": 0,
         "equations": 0,
+        "regeneratedFields": 0,
         "unsupported": {},
         "parts": [],
     }
@@ -670,6 +671,7 @@ def render(package: Package, destination: Path) -> dict:
         # Counted after the transform, so a construct restated inside
         # mc:Fallback is counted once rather than twice.
         report["equations"] += count_equations(root)
+        report["regeneratedFields"] += count_regenerated_fields(root)
         rewritten[name] = serialise(root)
         report["parts"].append(name)
         for key in ("textboxes", "pictures", "ink", "legacyPictures"):
@@ -723,13 +725,115 @@ def _same_size(a: dict, b: dict) -> bool:
     )
 
 
+# Fields whose displayed value is computed from page layout or the clock
+# rather than authored. What any particular reader does with them after an
+# import -- recalculate, leave the cached value stale, or flatten the field to
+# plain text -- is not something this converter knows, so the cached value is
+# not treated as text it was responsible for carrying across.
+REGENERATED_FIELDS = {
+    "TOC",
+    "TOA",
+    "INDEX",
+    "PAGE",
+    "NUMPAGES",
+    "SECTIONPAGES",
+    "PAGEREF",
+    "SEQ",
+    "STYLEREF",
+    "DATE",
+    "TIME",
+    "CREATEDATE",
+    "SAVEDATE",
+    "PRINTDATE",
+    "REVNUM",
+}
+
+
+def field_name(instruction: str) -> str:
+    """The field's type, from the start of its instruction text."""
+    stripped = instruction.strip().lstrip("\\").strip()
+    return stripped.split(" ", 1)[0].upper() if stripped else ""
+
+
+def _regenerated(instruction: str) -> bool:
+    return field_name(instruction) in REGENERATED_FIELDS
+
+
+def _cached_result_text(root: Element) -> set[int]:
+    """Identifies `<w:t>` nodes holding the cached result of a computed field.
+
+    Word stores what a field *displayed* when it was last updated, between
+    `fldChar separate` and `fldChar end`, or inside `<w:fldSimple>`. For a
+    table of contents that cache is the entry text and its page numbers.
+    """
+    skip: set[int] = set()
+
+    for simple in root.iter(q("w", "fldSimple")):
+        if _regenerated(simple.get(q("w", "instr")) or ""):
+            skip.update(id(node) for node in simple.iter(q("w", "t")))
+
+    # Complex fields are a flat run of markers, not a subtree, so they need a
+    # state machine rather than a containment test. They nest: a PAGEREF sits
+    # inside the TOC result, and its own end marker must not close the TOC.
+    stack: list[dict[str, Any]] = []
+    for node in root.iter():
+        tag = local(node.tag)
+        if tag == "fldChar":
+            kind = node.get(q("w", "fldCharType"))
+            if kind == "begin":
+                stack.append({"instruction": "", "in_result": False})
+            elif kind == "separate" and stack:
+                stack[-1]["in_result"] = True
+            elif kind == "end" and stack:
+                stack.pop()
+        elif tag == "instrText" and stack:
+            stack[-1]["instruction"] += node.text or ""
+        elif tag == "t" and any(f["in_result"] and _regenerated(f["instruction"]) for f in stack):
+            skip.add(id(node))
+    return skip
+
+
 def source_text(root: Element) -> str:
     """All body text, used only to check nothing vanished during import.
 
-    Equation text is `<m:t>`, not `<w:t>`, and is deliberately left out; see
-    count_equations.
+    Two deliberate omissions, for opposite reasons.
+
+    Equation text is `<m:t>`, not `<w:t>`, so it never appeared here at all;
+    see count_equations.
+
+    The cached result of a computed field *is* `<w:t>` and did appear, which
+    was worse. A table of contents caches its entries and page numbers as
+    ordinary text. Those values depend on pagination, so a reader that lays the
+    document out differently may show different ones -- and a reader that does
+    not recalculate may show the old ones. Either way the comparison cannot
+    tell a renumbered contents page from a lost one, so counting them produced
+    a missing-text report per entry on documents that had lost nothing.
+
+    The field instruction is preserved either way; what is dropped here is only
+    the stale answer, not the question.
     """
-    return " ".join((node.text or "") for node in root.iter(q("w", "t")))
+    skip = _cached_result_text(root)
+    return " ".join((node.text or "") for node in root.iter(q("w", "t")) if id(node) not in skip)
+
+
+def count_regenerated_fields(root: Element) -> int:
+    """Fields whose displayed value is computed rather than authored."""
+    total = sum(
+        1 for s in root.iter(q("w", "fldSimple")) if _regenerated(s.get(q("w", "instr")) or "")
+    )
+    stack: list[str] = []
+    for node in root.iter():
+        tag = local(node.tag)
+        if tag == "fldChar":
+            kind = node.get(q("w", "fldCharType"))
+            if kind == "begin":
+                stack.append("")
+            elif kind == "end" and stack:
+                if _regenerated(stack.pop()):
+                    total += 1
+        elif tag == "instrText" and stack:
+            stack[-1] += node.text or ""
+    return total
 
 
 def count_equations(root: Element) -> int:
@@ -757,7 +861,9 @@ def render_path(source: Path, destination: Path, settings) -> dict:
         package.close()
 
 
-def verify(tokens: dict, exported: str, equations: int = 0) -> list[dict]:
+def verify(
+    tokens: dict, exported: str, equations: int = 0, regenerated_fields: int = 0
+) -> list[dict]:
     """Compares the converted document's text against the source's.
 
     A whitespace-normalised token multiset catches text that went missing or
@@ -788,6 +894,20 @@ def verify(tokens: dict, exported: str, equations: int = 0) -> list[dict]:
                 "checked automatically -- open the document and confirm.",
                 equationCount=equations,
                 classification=C.UNSUPPORTED,
+            )
+        )
+    if regenerated_fields:
+        findings.append(
+            warning(
+                "fields_need_regeneration",
+                "This document contains fields whose displayed values -- table "
+                "of contents entries, page numbers, dates -- are calculated "
+                "from page layout or the date rather than typed in. After "
+                "import they may be recalculated, or may still show the old "
+                "values. Open the contents page and any page numbering and "
+                "check them rather than assuming they carried across.",
+                fieldCount=regenerated_fields,
+                classification=C.SUBSTITUTED,
             )
         )
     findings.append(
@@ -861,12 +981,13 @@ async def convert(
                 render_report.get("tokens", {}),
                 exported,
                 equations=render_report.get("equations", 0),
+                regenerated_fields=render_report.get("regeneratedFields", 0),
             )
         )
         report["conversion"] = {
             k: v
             for k, v in render_report.items()
-            if k in {"textboxes", "pictures", "ink", "equations"}
+            if k in {"textboxes", "pictures", "ink", "equations", "regeneratedFields"}
         }
         report["conversion"]["unsupportedKept"] = render_report.get("unsupported", {})
         report["verification"] = "text_checked"
