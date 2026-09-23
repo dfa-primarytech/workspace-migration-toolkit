@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import mimetypes
 import re
 from collections import Counter
 from datetime import UTC, datetime
@@ -348,8 +347,7 @@ SLIDES_LISTED = 3  # beyond this, an asset is a logo or a background, not conten
 # being downloaded onto a desktop, where they are not.
 UNSAFE = re.compile(r"[\\/:*?\"<>|]")
 
-# mimetypes.guess_extension answers ".jpe" for a JPEG and nothing at all for
-# the Office-only formats, so the ones we actually extract are named here.
+# Every type we extract, named here rather than guessed: see extension().
 EXTENSIONS = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -375,13 +373,14 @@ def clean_name(name: str) -> str:
 
 
 def extension(mime: str) -> str:
-    """The suffix to give a saved asset, or nothing if the type is unknown."""
-    kind = mime.split(";", 1)[0].strip().lower()
-    known = EXTENSIONS.get(kind)
-    if known:
-        return known
-    guessed = mimetypes.guess_extension(kind) or ""
-    return guessed if re.fullmatch(r"\.[a-z0-9]{1,8}", guessed) else ""
+    """The suffix to give a saved asset, or nothing if the type is unlisted.
+
+    Deliberately not `mimetypes.guess_extension`: its answers come from the
+    host's registry or /etc/mime.types, so the same file would be named one
+    thing on a laptop and another in the container. A name that changes with
+    the machine is worse than a name with no suffix at all.
+    """
+    return EXTENSIONS.get(mime.split(";", 1)[0].strip().lower(), "")
 
 
 def _slide_phrase(numbers: list[int], width: int) -> str:
