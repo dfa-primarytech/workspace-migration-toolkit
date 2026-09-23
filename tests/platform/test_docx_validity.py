@@ -302,14 +302,18 @@ def _strip_empty_drawings(source: Path, destination: Path) -> int:
     from xml.etree.ElementTree import tostring  # nosec B405 -- our own output
 
     from defusedxml import ElementTree as SafeET
-    from workspace_toolkit.docs import XML_DECLARATION
+    from workspace_toolkit.docs import HEADER_FOOTER, XML_DECLARATION
     from workspace_toolkit.docx import parents, q
 
     removed = 0
     with zf.ZipFile(source) as original, zf.ZipFile(destination, "w", zf.ZIP_DEFLATED) as out:
         for name in original.namelist():
             data = original.read(name)
-            if name == "word/document.xml":
+            # Headers and footers get the same passes as the body, so they
+            # collect the same residue. Stripping only the body would compare
+            # two documents that still differed in their headers and call the
+            # result "no difference".
+            if name == "word/document.xml" or HEADER_FOOTER.match(name):
                 root = SafeET.fromstring(data)
                 parent_of = parents(root)
                 for drawing in list(root.iter(q("w", "drawing"))):
@@ -336,18 +340,25 @@ def test_whether_the_empty_drawing_residue_changes_the_rendered_page(tmp_path):
     `-layout` preserves horizontal position and line breaks, so a shifted line
     or an extra one shows up as a difference.
 
-    If this passes, the residue is inert and issue #20 closes as a note on
-    `_detach`. If it fails, the residue moves content and should be removed --
-    and the failure output says how. Either result is worth having; the
-    present state is that nobody knows.
+    What a pass establishes is narrow and worth stating exactly: *this*
+    reader, laying out *this* fixture, puts the text in the same place either
+    way. It does not establish that Word or Google ignore an empty drawing,
+    and it cannot -- neither has been asked. It is still strictly better than
+    the previous position, which was that the file opens and looks fine.
+
+    If it fails, the residue moves content and the failure output says how.
+    Either result is worth having; the present state is that nobody knows.
     """
     body = CARD + SECOND_BOX + LEGACY_PICT + anchor(INK) + SECTION
-    converted = convert_fixture(tmp_path, body)
+    header = anchor(TEXTBOX, h=("margin", offset(0)), v=("paragraph", offset(0)))
+    converted = convert_fixture(tmp_path, body, header=header)
 
     stripped = tmp_path / "stripped.docx"
     removed = _strip_empty_drawings(converted, stripped)
-    # Control: with no residue to remove the comparison proves nothing.
-    assert removed >= 2, f"the fixture left no empty drawings to measure: {removed}"
+    # Control: with no residue to remove the comparison proves nothing. Three
+    # because the header carries a converted box of its own, and a body-only
+    # strip would leave that one in place on both sides of the comparison.
+    assert removed >= 3, f"the fixture left too little residue to measure: {removed}"
 
     with_residue = rendered_text(soffice_convert(converted, "pdf", tmp_path / "with"))
     without_residue = rendered_text(soffice_convert(stripped, "pdf", tmp_path / "without"))
