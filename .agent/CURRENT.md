@@ -143,7 +143,11 @@ text insertions, 12 image placements over 11 deduplicated assets, one 1x3 table,
 two paths, one rendering layer and three fonts. It runs locally only -- the
 document is a real school booklet and must never be committed -- so the CI job
 reports NOT RUN ON CI rather than claiming a pass. 55 Python tests pass with
-the fixture supplied; 22 skip without it. The C++ suite is now 105 tests.
+the fixture supplied; 22 skip without it. The C++ suite is now 107 tests.
+The Publisher font audit (`docs/publisher-font-audit.md`) found that a `.pub`
+yields font names only, except for embedded EOT fonts, and that PUB-001's
+Sassoon names miss the shared service's keys -- a miss that currently also
+prevents an automatic handwriting-font substitution.
 
 #12 has merged. What remains unverified for Publisher is breadth, not depth:
 only one real document has been parsed.
