@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -16,6 +18,33 @@ from .pptx import analysis_report
 SLIDES_MIME = "application/vnd.google-apps.presentation"
 DOCS_MIME = "application/vnd.google-apps.document"
 DRIVE = "https://www.googleapis.com/drive/v3"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+# One home for every conversion, with a dated subfolder per job inside it.
+LIBRARY = "Workspace conversions"
+
+# Drive throttles a burst of uploads per user. These are the replies worth
+# waiting out; anything else is a real refusal and retrying only hides it.
+TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
+UPLOAD_ATTEMPTS = 4
+
+
+def http_status(exc: BaseException) -> int | None:
+    """The status Google replied with, when the failure came back as a reply."""
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
+def failure_detail(exc: BaseException) -> str:
+    """A short, safe hint about a failure: the status, or the transport fault."""
+    status = http_status(exc)
+    return f"http_{status}" if status is not None else type(exc).__name__
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Whether waiting and asking again could plausibly succeed."""
+    status = http_status(exc)
+    if status is not None:
+        return status in TRANSIENT
+    return isinstance(exc, httpx.TransportError)
 
 
 class Google:
@@ -36,14 +65,15 @@ class Google:
                 "google_failed",
                 "Google could not complete this operation. Check the report before retrying.",
                 502,
+                detail=failure_detail(exc),
             ) from exc
 
-    async def folder(self) -> str:
+    async def make_folder(self, name: str, parent: str | None = None) -> str:
+        metadata: dict = {"name": name, "mimeType": FOLDER_MIME}
+        if parent:
+            metadata["parents"] = [parent]
         result = await self.request(
-            "POST",
-            DRIVE + "/files",
-            json={"name": "Workspace conversion", "mimeType": "application/vnd.google-apps.folder"},
-            params={"fields": "id"},
+            "POST", DRIVE + "/files", json=metadata, params={"fields": "id"}
         )
         folder_id = result.get("id")
         if not isinstance(folder_id, str) or not folder_id:
@@ -51,6 +81,34 @@ class Google:
                 "google_failed", "Google could not create the conversion folder.", 502
             )
         return folder_id
+
+    async def library(self) -> str:
+        """The one top-level folder that holds every conversion, made once.
+
+        Under the `drive.file` scope a search only ever returns files this app
+        created, so this can never adopt a folder of the person's own that
+        happens to share the name.
+        """
+        found = await self.request(
+            "GET",
+            DRIVE + "/files",
+            params={
+                "q": f"mimeType='{FOLDER_MIME}' and name='{LIBRARY}' and trashed=false",
+                "fields": "files(id)",
+                "orderBy": "createdTime",
+                "pageSize": 1,
+                "spaces": "drive",
+            },
+        )
+        existing = found.get("files") or []
+        if existing and isinstance(existing[0].get("id"), str):
+            return existing[0]["id"]
+        return await self.make_folder(LIBRARY)
+
+    async def folder(self, job_name: str = "Conversion") -> str:
+        """A fresh subfolder for this job, inside the shared library folder."""
+        stamp = datetime.now(UTC).strftime("%Y-%m-%d %H%M%S")
+        return await self.make_folder(f"{job_name} ({stamp} UTC)", await self.library())
 
     async def upload(
         self,
@@ -60,54 +118,82 @@ class Google:
         parent: str,
         convert: bool = False,
         target: str = SLIDES_MIME,
+        retry: bool = False,
+    ) -> dict:
+        """Uploads one file. `retry` is for copies a duplicate would not spoil.
+
+        The document itself is uploaded without retrying: a lost reply can still
+        mean success, and asking twice would leave the person with two of them.
+        A private asset copy has no such hazard, so a throttled one is worth
+        waiting out rather than abandoning.
+        """
+        attempts = UPLOAD_ATTEMPTS if retry else 1
+        delay = 1.0
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._upload_once(path, name, mime, parent, convert, target)
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
+                if attempt == attempts or not is_transient(exc):
+                    # Never retry creation blindly: a lost response can still mean success.
+                    raise ToolkitError(
+                        "upload_uncertain",
+                        "A Google upload failed or its result is uncertain. "
+                        "Check the conversion folder before retrying.",
+                        502,
+                        detail=failure_detail(exc),
+                    ) from exc
+                await asyncio.sleep(delay)
+                delay *= 2
+        raise AssertionError("unreachable")
+
+    async def _upload_once(
+        self,
+        path: Path,
+        name: str,
+        mime: str,
+        parent: str,
+        convert: bool,
+        target: str,
     ) -> dict:
         metadata = {"name": name, "mimeType": target if convert else mime, "parents": [parent]}
-        try:
-            response = await self.client.post(
-                "https://www.googleapis.com/upload/drive/v3/files",
-                params={"uploadType": "resumable", "fields": "id,webViewLink,mimeType"},
-                headers={
-                    **self.headers,
-                    "X-Upload-Content-Type": mime,
-                    "X-Upload-Content-Length": str(path.stat().st_size),
-                },
-                json=metadata,
-            )
-            response.raise_for_status()
-            location = response.headers["Location"]
-            parsed = urlsplit(location)
-            if parsed.scheme != "https" or parsed.hostname not in {
-                "www.googleapis.com",
-                "content.googleapis.com",
-            }:
-                raise ValueError("Invalid upload destination")
+        response = await self.client.post(
+            "https://www.googleapis.com/upload/drive/v3/files",
+            params={"uploadType": "resumable", "fields": "id,webViewLink,mimeType"},
+            headers={
+                **self.headers,
+                "X-Upload-Content-Type": mime,
+                "X-Upload-Content-Length": str(path.stat().st_size),
+            },
+            json=metadata,
+        )
+        response.raise_for_status()
+        location = response.headers["Location"]
+        parsed = urlsplit(location)
+        if parsed.scheme != "https" or parsed.hostname not in {
+            "www.googleapis.com",
+            "content.googleapis.com",
+        }:
+            raise ValueError("Invalid upload destination")
 
-            async def chunks():
-                with path.open("rb") as stream:
-                    while block := stream.read(256 * 1024):
-                        yield block
+        async def chunks():
+            with path.open("rb") as stream:
+                while block := stream.read(256 * 1024):
+                    yield block
 
-            uploaded = await self.client.put(
-                location,
-                headers={
-                    **self.headers,
-                    "Content-Type": mime,
-                    "Content-Length": str(path.stat().st_size),
-                },
-                content=chunks(),
-            )
-            uploaded.raise_for_status()
-            result = uploaded.json()
-            if not isinstance(result, dict) or not isinstance(result.get("id"), str):
-                raise ValueError("Unexpected upload response")
-            return result
-        except (httpx.HTTPError, KeyError, ValueError) as exc:
-            # Never retry creation blindly: a lost response can still mean success.
-            raise ToolkitError(
-                "upload_uncertain",
-                "A Google upload failed or its result is uncertain. Check the conversion folder before retrying.",
-                502,
-            ) from exc
+        uploaded = await self.client.put(
+            location,
+            headers={
+                **self.headers,
+                "Content-Type": mime,
+                "Content-Length": str(path.stat().st_size),
+            },
+            content=chunks(),
+        )
+        uploaded.raise_for_status()
+        result = uploaded.json()
+        if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+            raise ValueError("Unexpected upload response")
+        return result
 
     async def export_text(self, file_id: str) -> str:
         """Reads a converted file back as plain text.
@@ -248,6 +334,51 @@ def verify(manifest: dict, presentation: dict) -> list[dict]:
     return findings
 
 
+async def save_assets(
+    result: Path, manifest: dict, google: Google, folder: str, report: dict
+) -> None:
+    """Copies every extracted asset beside the converted file.
+
+    These copies are a safety net, not the deliverable: they exist so anything the
+    importer drops is still recoverable by hand. So one refused copy must not
+    abandon the rest, and must never stop the document itself being verified.
+    """
+    failures: list[str] = []
+    for asset in manifest["assets"].values():
+        try:
+            saved = await google.upload(
+                result / asset["path"],
+                asset["id"],
+                asset["mimeType"],
+                folder,
+                retry=True,
+            )
+        except ToolkitError as exc:
+            failures.append(exc.detail or "unknown")
+            continue
+        report["assetOutputs"].append(
+            {
+                "assetId": asset["id"],
+                "kind": asset["kind"],
+                "driveFileId": saved["id"],
+                "url": "https://drive.google.com/file/d/" + saved["id"] + "/view",
+            }
+        )
+    if failures:
+        report["warnings"].append(
+            warning(
+                "asset_copies_incomplete",
+                f"{len(failures)} of {len(manifest['assets'])} private asset copies "
+                "could not be saved to Drive. The converted file itself is unaffected; "
+                "these copies are only a fallback for recovering anything the importer drops.",
+                classification=C.IGNORED,
+                attempted=len(manifest["assets"]),
+                saved=len(manifest["assets"]) - len(failures),
+                reasons=sorted(set(failures)),
+            )
+        )
+
+
 async def convert(
     root: Path,
     manifest: dict,
@@ -266,7 +397,7 @@ async def convert(
                 "Google does not currently offer PowerPoint conversion for this account.",
                 422,
             )
-        folder = await google.folder()
+        folder = await google.folder(output_name)
         report["folderUrl"] = "https://drive.google.com/drive/folders/" + folder
         rendered = root / "result" / "converted.pptx"
         result = await google.upload(
@@ -281,18 +412,7 @@ async def convert(
         report["url"] = "https://docs.google.com/presentation/d/" + result["id"] + "/edit"
         # Preserve every extracted asset privately, including audio/video that the
         # native importer might omit. No public permissions or automatic execution.
-        for asset in manifest["assets"].values():
-            uploaded = await google.upload(
-                root / "result" / asset["path"], asset["id"], asset["mimeType"], folder
-            )
-            report["assetOutputs"].append(
-                {
-                    "assetId": asset["id"],
-                    "kind": asset["kind"],
-                    "driveFileId": uploaded["id"],
-                    "url": "https://drive.google.com/file/d/" + uploaded["id"] + "/view",
-                }
-            )
+        await save_assets(root / "result", manifest, google, folder, report)
         presentation = await google.inspect(result["id"])
         report["warnings"].extend(verify(manifest, presentation))
         render_report = root / "result" / "render.json"
@@ -305,7 +425,11 @@ async def convert(
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:
         report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
-        report["warnings"].append(warning(exc.code, exc.message, classification=C.UNSUPPORTED))
+        report["warnings"].append(
+            warning(exc.code, exc.message, classification=C.UNSUPPORTED, detail=exc.detail)
+            if exc.detail
+            else warning(exc.code, exc.message, classification=C.UNSUPPORTED)
+        )
         report["verification"] = "incomplete"
     if report.get("folderUrl"):
         report_path = root / "conversion-report.json"

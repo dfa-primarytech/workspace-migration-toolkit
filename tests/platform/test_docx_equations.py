@@ -56,7 +56,7 @@ class FakeGoogle:
     async def request(self, method: str, url: str, **kwargs: object) -> dict:
         return {"importFormats": {DOCX.mime: [DOCS_MIME]}}
 
-    async def folder(self) -> str:
+    async def folder(self, job_name: str = "Conversion") -> str:
         return "folder1"
 
     async def upload(self, path: Path, name: str, mime: str, folder: str, **kwargs: object) -> dict:
