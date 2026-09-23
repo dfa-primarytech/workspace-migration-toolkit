@@ -412,7 +412,9 @@ VML_LENGTH = re.compile(r"(-?[\d.]+)\s*(pt|in|cm|mm|pc|px)", re.IGNORECASE)
 
 def vml_length(style: str, name: str) -> int | None:
     """Reads one dimension out of a VML style attribute, in EMU."""
-    match = re.search(name + r"\s*:\s*([^;]+)", style, re.IGNORECASE)
+    # Anchored to a property boundary: unanchored, "width" also matches inside
+    # mso-width-percent, and the wrong number is read as the picture's size.
+    match = re.search(r"(?:^|;)\s*" + name + r"\s*:\s*([^;]+)", style, re.IGNORECASE)
     if not match:
         return None
     size = VML_LENGTH.match(match.group(1).strip())
@@ -424,7 +426,49 @@ def vml_length(style: str, name: str) -> int | None:
         return None
 
 
-def fix_legacy_pictures(root: Element, ids: Ids) -> int:
+VML_TEXT_TAGS = ("textbox", "textpath")
+
+
+def _legacy_content(pict: Element) -> tuple[Element, Element] | str:
+    """The one shape and image worth rewriting, or why this <w:pict> is kept.
+
+    The old rule took any `v:shape` and any `v:imagedata` anywhere beneath the
+    element and threw the rest away. A captioned photo -- a `v:group` holding a
+    picture and a text box, which is what a document that began life as a .doc
+    is full of -- came out as the picture alone, with the caption deleted and
+    counted as a successful conversion.
+    """
+    if pict.find(".//" + q("v", "group")) is not None:
+        return "grouped legacy shape"
+    if any(pict.find(".//" + q("v", tag)) is not None for tag in VML_TEXT_TAGS):
+        return "text in a legacy shape"
+    shapes = pict.findall(".//" + q("v", "shape"))
+    if len(shapes) != 1:
+        return "several legacy shapes"
+    images = shapes[0].findall(".//" + q("v", "imagedata"))
+    if len(images) != 1:
+        return "legacy shape without a single image"
+    if _is_floating_vml(shapes[0]):
+        return "legacy watermark or background"
+    return shapes[0], images[0]
+
+
+def _is_floating_vml(shape: Element) -> bool:
+    """Whether a VML shape is placed over the page rather than in the text.
+
+    Word writes a picture watermark as an absolutely positioned header shape
+    with a negative z-index. Rebuilt as *inline* content it stops being a
+    backdrop: it takes up its full height in the header and pushes the page
+    down.
+    """
+    style = (shape.get("style") or "").lower()
+    if re.search(r"(?:^|;)\s*position\s*:\s*absolute", style):
+        return True
+    depth = re.search(r"(?:^|;)\s*z-index\s*:\s*(-?\d+)", style)
+    return bool(depth and int(depth.group(1)) < 0)
+
+
+def fix_legacy_pictures(root: Element, ids: Ids) -> dict:
     """Rewrites VML-only pictures as modern inline DrawingML.
 
     Word keeps some images as <w:pict> with a VML shape and no DrawingML
@@ -432,30 +476,42 @@ def fix_legacy_pictures(root: Element, ids: Ids) -> int:
     them entirely, so the picture simply disappears. Rebuilding them as an
     inline <w:drawing> referencing the same relationship keeps the image.
 
+    Only a <w:pict> that holds nothing but that one picture is rewritten.
+    Anything else -- a group, a caption, a watermark -- is left exactly as it
+    was and named in the report, because replacing it means destroying the part
+    we cannot carry across.
+
     Only touches a <w:pict> whose parent is a run: it also appears inside
     <w:object>, where a <w:drawing> is not a legal child.
     """
-    converted = 0
+    report: dict = {"legacyPictures": 0, "legacyKept": {}}
     for container, pict in _pairs(root, q("w", "pict")):
         if local(container.tag) != "r":
             continue
-        shape = pict.find(".//" + q("v", "shape"))
-        image = pict.find(".//" + q("v", "imagedata"))
-        if shape is None or image is None:
+        content = _legacy_content(pict)
+        if isinstance(content, str):
+            report["legacyKept"][content] = report["legacyKept"].get(content, 0) + 1
             continue
+        shape, image = content
         rid = image.get(q("r", "id"))
         if not rid:
+            report["legacyKept"]["legacy shape without a stored image"] = (
+                report["legacyKept"].get("legacy shape without a stored image", 0) + 1
+            )
             continue
         style = shape.get("style") or ""
         cx = vml_length(style, "width")
         cy = vml_length(style, "height")
         if not cx or not cy:
+            report["legacyKept"]["legacy shape without a stated size"] = (
+                report["legacyKept"].get("legacy shape without a stated size", 0) + 1
+            )
             continue
         at = list(container).index(pict)
         container.remove(pict)
         container.insert(at, make_inline_drawing(rid, cx, cy, shape.get("alt") or "Picture", ids))
-        converted += 1
-    return converted
+        report["legacyPictures"] += 1
+    return report
 
 
 def make_inline_drawing(rid: str, cx: int, cy: int, name: str, ids: Ids) -> Element:
@@ -1214,7 +1270,12 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     report["ink"] += ink
     # After the anchors: a legacy picture inside a text box only becomes
     # reachable once that text box has been moved into its table.
-    report["legacyPictures"] = fix_legacy_pictures(root, ids)
+    legacy = fix_legacy_pictures(root, ids)
+    report["legacyPictures"] = legacy["legacyPictures"]
+    # Kept, not converted: named beside the other things we could not carry
+    # across, so a person knows to look at them.
+    for label, count in legacy["legacyKept"].items():
+        report["unsupported"][label] = report["unsupported"].get(label, 0) + count
     # Last: the tables must hold every picture that is going to end up in them
     # before they can be measured against the page.
     # Before the tables are measured: a picture that lands in a cell changes
