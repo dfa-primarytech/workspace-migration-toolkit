@@ -76,6 +76,7 @@ add_executable(pubir-tests
   tests/test_bundle.cpp
   tests/test_collector.cpp
   tests/test_json.cpp
+  tests/test_libmspub_shapes.cpp
   tests/test_limits.cpp
   tests/test_sha256.cpp
   tests/test_tables.cpp

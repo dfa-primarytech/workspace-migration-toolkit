@@ -85,6 +85,8 @@ TEST(text_keeps_explicit_spaces_tabs_and_line_breaks_as_items) {
   CHECK_EQ(doc.counts.textInsertions, 2LL);
 }
 
+// Not reachable from a .pub: libmspub 0.1.4 never emits this callback (see
+// test_libmspub_shapes.cpp). Kept because the IR is source-independent.
 TEST(text_fields_are_recorded_without_inventing_their_value) {
   IrCollector collector;
   collector.startDocument(RVNGPropertyList());
@@ -202,6 +204,8 @@ TEST(text_empty_frames_are_kept_and_flagged) {
   CHECK(hasWarning(firstText(doc), "empty-text-frame"));
 }
 
+// Not reachable from a .pub: libmspub 0.1.4 never emits this callback (see
+// test_libmspub_shapes.cpp). Kept because the IR is source-independent.
 TEST(text_list_levels_are_recorded_on_paragraphs) {
   IrCollector collector;
   collector.startDocument(RVNGPropertyList());
@@ -224,6 +228,8 @@ TEST(text_list_levels_are_recorded_on_paragraphs) {
   CHECK_EQ(paragraph.listLevel, 1);
 }
 
+// Not reachable from a .pub: libmspub 0.1.4 never emits this callback (see
+// test_libmspub_shapes.cpp). Kept because the IR is source-independent.
 TEST(text_link_targets_attach_to_runs) {
   IrCollector collector;
   collector.startDocument(RVNGPropertyList());
