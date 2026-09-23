@@ -51,7 +51,23 @@ Four further DOCX milestones merged (#18 `2d5e0f3`, #19 `e7ec4d3`, #21
   `<w:t>` tokens only, so a lost equation was invisible to it. Counted and
   reported as unverified instead.
 
-186 Python tests pass, 41 skip (LibreOffice and Publisher fixtures). Ruff,
+Two further milestones merged: computed-field handling (#22 `9d2c51e`) and
+the shared font service (#23 `af5ff6c`, coordinator's).
+
+* **Contents pages.** A TOC's cached page numbers are ordinary `<w:t>`, so
+  they counted as body text. Any difference in pagination then read as lost
+  content -- a correct but renumbered contents page reported missing text once
+  per entry. Computed field results are now excluded from the comparison and
+  reported as a count instead; authored results such as a HYPERLINK's display
+  text still count.
+* **Fonts.** `fonts()` read literal `w:rFonts` only, so a document using
+  Word's default theme fonts reported *no fonts at all*, as did one whose
+  fonts lived in its styles. `font_requirements()` now resolves themes and
+  style inheritance, keeps the script dimension, attaches `fontTable.xml`
+  matching metadata, and marks symbol fonts as a class that must not be
+  substituted.
+
+217 Python tests pass, 41 skip (LibreOffice and Publisher fixtures). Ruff,
 formatting, mypy, Bandit and the secret scan are clean, and CI is green on
 main.
 

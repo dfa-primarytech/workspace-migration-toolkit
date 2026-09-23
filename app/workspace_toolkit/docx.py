@@ -22,6 +22,7 @@ position, instead of trading one for the other.
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -93,6 +94,10 @@ ALIGN_KEYWORDS = {"left", "right", "center", "inside", "outside", "top", "bottom
 # closely. Measured spreads in real card layouts are around 0.01in.
 COINCIDENT_TOL_EMU = round(0.06 * EMU_PER_INCH)
 COINCIDENT_SIZE_TOL = 0.03
+
+# ST_OnOff spells false three ways. <w:bidi w:val="off"/> is as much an
+# instruction as w:val="0", and so is <w:b w:val="off"/>.
+OFF_VALUES = {"0", "false", "off"}
 
 
 def q(prefix: str, tag: str) -> str:
@@ -265,6 +270,7 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
         "pages": pages,
         "assets": {},
         "fonts": sorted(fonts(root)),
+        "fontRequirements": font_requirements(package),
         "warnings": [],
     }
 
@@ -300,6 +306,7 @@ def empty_manifest(filename: str, source_sha: str) -> dict:
         "pages": [],
         "assets": {},
         "fonts": [],
+        "fontRequirements": [],
         "warnings": [warning("empty_document", "The document has no body content.")],
     }
 
@@ -338,6 +345,12 @@ def section_index(body: Element, count: int):
 
 
 def fonts(root: Element) -> set[str]:
+    """Families named directly on runs in this part.
+
+    Kept as it was: a flat set of literal names, used where only names are
+    wanted. It deliberately answers a narrower question than
+    font_requirements, which resolves themes and styles across the package.
+    """
     names = set()
     for element in root.iter(q("w", "rFonts")):
         for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
@@ -345,6 +358,330 @@ def fonts(root: Element) -> set[str]:
             if value:
                 names.add(value)
     return names
+
+
+# --------------------------------------------------------------------------
+# Font resolution
+#
+# A family name on its own is not enough to substitute from, and often is not
+# even present: Word applies theme fonts by default and a well-built template
+# keeps its fonts in styles, so the run may name nothing at all. See
+# docs/font-substitution.md.
+# --------------------------------------------------------------------------
+
+# One run names a family per script range, not one family. Substituting the
+# Latin family and applying it to all of them renders Arabic in a font with no
+# Arabic coverage.
+SCRIPT_OF_SLOT = {
+    "ascii": "latin",
+    "hAnsi": "latin",
+    "cs": "complexScript",
+    "eastAsia": "eastAsian",
+}
+THEME_SLOT = {
+    "asciiTheme": "latin",
+    "hAnsiTheme": "latin",
+    "cstheme": "complexScript",
+    "eastAsiaTheme": "eastAsian",
+}
+
+THEME_PART = "word/theme/theme1.xml"
+STYLES_PART = "word/styles.xml"
+FONT_TABLE_PART = "word/fontTable.xml"
+STORY_PARTS = re.compile(r"^word/(document|header\d*|footer\d*|numbering)\.xml$")
+
+# A theme reference is carried through resolution behind this marker, so it is
+# never mistaken for a family called "minorHAnsi".
+THEME_MARK = "\x00theme:"
+
+# w:charset 02 is the symbol charset and PANOSE family kind 5 is Latin
+# Pictorial. Either marks a font whose glyphs are code-point mapped rather than
+# shaped: the glyph at F0FC is a tick because the font says so, not because
+# that code point means tick. Substituting one turns a tick-box worksheet into
+# letters, so the class is detected rather than kept as a list of names.
+SYMBOL_CHARSET = "02"
+SYMBOL_PANOSE_FAMILY = "05"
+
+
+def theme_fonts(package: Package) -> dict[str, str]:
+    """Theme tokens to real families, from theme1.xml."""
+    if THEME_PART not in package.names:
+        return {}
+    scheme = package.xml(THEME_PART).find(".//" + q("a", "fontScheme"))
+    if scheme is None:
+        return {}
+    resolved: dict[str, str] = {}
+    for prefix, group in (("major", "majorFont"), ("minor", "minorFont")):
+        entry = scheme.find(q("a", group))
+        if entry is None:
+            continue
+        for element, token in (("latin", "HAnsi"), ("cs", "Bidi"), ("ea", "EastAsia")):
+            node = entry.find(q("a", element))
+            typeface = node.get("typeface") if node is not None else None
+            if typeface:
+                resolved[prefix + token] = typeface
+    return resolved
+
+
+def _slot_fonts(properties: Element | None) -> dict[str, str]:
+    """Families an rPr names, keyed by script. Literal names beat theme ones."""
+    if properties is None:
+        return {}
+    element = properties.find(q("w", "rFonts"))
+    if element is None:
+        return {}
+    found: dict[str, str] = {}
+    for slot, script in SCRIPT_OF_SLOT.items():
+        value = element.get(q("w", slot))
+        if value:
+            found.setdefault(script, value)
+    for slot, script in THEME_SLOT.items():
+        token = element.get(q("w", slot))
+        if token:
+            found.setdefault(script, THEME_MARK + token)
+    return found
+
+
+def _emphasis(properties: Element | None, tag: str) -> bool | None:
+    """Tri-state, because a style turning bold *off* is not the same as silence."""
+    if properties is None:
+        return None
+    node = properties.find(q("w", tag))
+    if node is None:
+        return None
+    return node.get(q("w", "val")) not in OFF_VALUES
+
+
+def _formatting(properties: Element | None) -> dict:
+    """Fonts and weight from one rPr, with "not stated" kept distinct."""
+    return {
+        "fonts": _slot_fonts(properties),
+        "bold": _emphasis(properties, "b"),
+        "italic": _emphasis(properties, "i"),
+    }
+
+
+def _merge(base: dict, over: dict) -> dict:
+    """Later formatting wins, but only where it actually says something."""
+    merged = {
+        "fonts": {**base.get("fonts", {}), **over.get("fonts", {})},
+        "bold": base.get("bold"),
+        "italic": base.get("italic"),
+    }
+    for key in ("bold", "italic"):
+        if over.get(key) is not None:
+            merged[key] = over[key]
+    return merged
+
+
+def style_fonts(package: Package) -> tuple[dict[str, dict], dict, dict[str, str]]:
+    """Resolved style formatting, document defaults, and default style IDs."""
+    if STYLES_PART not in package.names:
+        return {}, {}, {}
+    root = package.xml(STYLES_PART)
+    defaults = _formatting(
+        root.find(f"{q('w', 'docDefaults')}/{q('w', 'rPrDefault')}/{q('w', 'rPr')}")
+    )
+
+    direct: dict[str, dict] = {}
+    parent_of: dict[str, str] = {}
+    default_styles: dict[str, str] = {}
+    for style in root.findall(q("w", "style")):
+        identifier = style.get(q("w", "styleId"))
+        if not identifier:
+            continue
+        direct[identifier] = _formatting(style.find(q("w", "rPr")))
+        style_type = style.get(q("w", "type"))
+        default_value = style.get(q("w", "default"))
+        if style_type and default_value is not None and default_value not in OFF_VALUES:
+            default_styles[style_type] = identifier
+        parent = style.find(q("w", "basedOn"))
+        value = parent.get(q("w", "val")) if parent is not None else None
+        if value:
+            parent_of[identifier] = value
+
+    resolved: dict[str, dict] = {}
+
+    def walk(identifier: str, seen: set[str]) -> dict:
+        if identifier in resolved:
+            return resolved[identifier]
+        # A basedOn cycle is malformed but does occur; stopping beats recursing.
+        if identifier in seen or identifier not in direct:
+            return {"fonts": {}, "bold": None, "italic": None}
+        seen.add(identifier)
+        inherited = (
+            walk(parent_of[identifier], seen)
+            if identifier in parent_of
+            else {"fonts": {}, "bold": None, "italic": None}
+        )
+        merged = _merge(inherited, direct[identifier])
+        resolved[identifier] = merged
+        return merged
+
+    for identifier in direct:
+        walk(identifier, set())
+    return resolved, defaults, default_styles
+
+
+def font_table(package: Package) -> dict[str, dict]:
+    """Matching metadata per family, from fontTable.xml.
+
+    Word writes only what it knew when the document was saved, so an entry can
+    carry a name and nothing else. Absent properties stay absent rather than
+    being filled with a default, because an invented PANOSE would be scored as
+    though it were evidence.
+    """
+    if FONT_TABLE_PART not in package.names:
+        return {}
+    entries: dict[str, dict] = {}
+    for font in package.xml(FONT_TABLE_PART).findall(q("w", "font")):
+        name = font.get(q("w", "name"))
+        if not name:
+            continue
+
+        def value_of(tag: str, element: Element = font) -> str | None:
+            node = element.find(q("w", tag))
+            return node.get(q("w", "val")) if node is not None else None
+
+        signature = font.find(q("w", "sig"))
+        entry: dict[str, object] = {
+            "panose": value_of("panose1"),
+            "family": value_of("family"),
+            "pitch": value_of("pitch"),
+            "charset": value_of("charset"),
+            "altName": value_of("altName"),
+            "embedded": sorted(
+                local(child.tag) for child in font if local(child.tag).startswith("embed")
+            ),
+        }
+        if signature is not None:
+            entry["unicodeRanges"] = [
+                signature.get(q("w", bits)) for bits in ("usb0", "usb1", "usb2", "usb3")
+            ]
+            entry["codePages"] = [signature.get(q("w", bits)) for bits in ("csb0", "csb1")]
+        entries[name] = {k: v for k, v in entry.items() if v not in (None, [])}
+    return entries
+
+
+def is_symbol_font(metadata: dict | None) -> bool:
+    """Whether this family's glyphs are code-point mapped rather than shaped."""
+    if not metadata:
+        return False
+    if metadata.get("charset") == SYMBOL_CHARSET:
+        return True
+    return (metadata.get("panose") or "")[:2] == SYMBOL_PANOSE_FAMILY
+
+
+def _nearest_paragraph(parent_of: dict, node: Element | None) -> Element | None:
+    while node is not None:
+        if local(node.tag) == "p":
+            return node
+        node = parent_of.get(node)
+    return None
+
+
+def _style_id(properties: Element | None, tag: str) -> str | None:
+    if properties is None:
+        return None
+    style = properties.find(q("w", tag))
+    return style.get(q("w", "val")) if style is not None else None
+
+
+def font_requirements(package: Package) -> list[dict]:
+    """Every (family, script) pair the document actually asks for.
+
+    Resolution order per run, each step overriding the last: document
+    defaults, the paragraph's style, the run's character style, the run's own
+    properties. A family that appears
+    only in a style is therefore found, which is the case an ordinary
+    well-built template consists of almost entirely.
+
+    Headers, footers and numbering are included. A letterhead's font is as
+    real as the body's, and a bullet glyph font is the one staff notice
+    first when it substitutes badly.
+
+    Requirements with no family resolved contribute nothing. Nothing is
+    invented for a run that names no font anywhere: the honest answer is that
+    the document did not say.
+    """
+    from .fonts import catalogue, normalise_family
+
+    themes = theme_fonts(package)
+    styles, defaults, default_styles = style_fonts(package)
+    table = {normalise_family(family): metadata for family, metadata in font_table(package).items()}
+
+    def resolve(family: str) -> str | None:
+        if not family.startswith(THEME_MARK):
+            return family
+        return themes.get(family[len(THEME_MARK) :])
+
+    seen: dict[tuple[str, str], dict] = {}
+    for name in sorted(package.names):
+        if not STORY_PARTS.match(name):
+            continue
+        root = package.xml(name)
+
+        # Numbering levels carry their own rFonts in a w:rPr that belongs to
+        # the level, not to any run -- a bullet has no text to be a run of. A
+        # run-only scan misses them entirely, and a substituted bullet glyph
+        # is on every page of a policy.
+        if name.endswith("numbering.xml"):
+            for level in root.iter(q("w", "lvl")):
+                for script, raw in _slot_fonts(level.find(q("w", "rPr"))).items():
+                    family = resolve(raw)
+                    if family:
+                        seen.setdefault(
+                            (family, script),
+                            {
+                                "family": family,
+                                "script": script,
+                                "bold": False,
+                                "italic": False,
+                            },
+                        )
+            continue
+
+        parent_of = parents(root)
+        for run in root.iter(q("w", "r")):
+            properties = run.find(q("w", "rPr"))
+            paragraph = _nearest_paragraph(parent_of, parent_of.get(run))
+            paragraph_properties = paragraph.find(q("w", "pPr")) if paragraph is not None else None
+
+            blank: dict = {"fonts": {}, "bold": None, "italic": None}
+            state = _merge(blank, defaults)
+            paragraph_style = _style_id(paragraph_properties, "pStyle") or default_styles.get(
+                "paragraph", ""
+            )
+            state = _merge(state, styles.get(paragraph_style, blank))
+            character_style = _style_id(properties, "rStyle") or default_styles.get("character", "")
+            state = _merge(state, styles.get(character_style, blank))
+            state = _merge(state, _formatting(properties))
+
+            bold = bool(state["bold"])
+            italic = bool(state["italic"])
+            for script, raw in state["fonts"].items():
+                family = resolve(raw)
+                if not family:
+                    continue
+                entry = seen.setdefault(
+                    (family, script),
+                    {"family": family, "script": script, "bold": False, "italic": False},
+                )
+                entry["bold"] = entry["bold"] or bold
+                entry["italic"] = entry["italic"] or italic
+
+    requirements = [seen[key] for key in sorted(seen)]
+    compatibility_of = {
+        entry["name"]: entry for entry in catalogue({r["family"] for r in requirements})
+    }
+    for requirement in requirements:
+        metadata = table.get(normalise_family(requirement["family"]))
+        if metadata:
+            requirement["metadata"] = metadata
+            requirement["embedded"] = bool(metadata.get("embedded"))
+        requirement["symbol"] = is_symbol_font(metadata)
+        requirement["compatibility"] = compatibility_of.get(requirement["family"])
+    return requirements
 
 
 # --------------------------------------------------------------------------
@@ -419,6 +756,7 @@ def analysis_report(manifest: dict) -> dict:
         "elementCounts": dict(counts),
         "assetCounts": dict(Counter(a["kind"] for a in manifest["assets"].values())),
         "fonts": manifest["fonts"],
+        "fontRequirements": manifest.get("fontRequirements", []),
         "warnings": warnings,
         "verification": "not_converted",
         "classificationBasis": "Preflight candidates, not verified Google compatibility.",

@@ -39,10 +39,11 @@ embeds the family, the glyphs travel with the document. Whether Google's
 importer honours embedded fonts is unverified — but the service should be told,
 rather than substituting something already present.
 
-## What this converter reports today
+## What this converter reported before resolution
 
-`docx.fonts()` collects literal `w:rFonts` attribute values and nothing else.
-Measured against four fixtures:
+Recorded because it explains what `fonts()` still is. `docx.fonts()` collects
+literal `w:rFonts` attribute values from one part and nothing else. Measured
+against four fixtures:
 
 | Document | Reported |
 |---|---|
@@ -81,6 +82,13 @@ receiving that set cannot tell which substitution rules apply to which.
 
 Items 1 and 2 are the ones that change the numbers; the rest change their
 shape. None of them require deciding what to substitute.
+
+**All six are now closed.** `font_requirements()` resolves theme references
+against `theme1.xml`, walks `docDefaults` and the `w:basedOn` chain, keeps one
+entry per (family, script), resolves weight through the same chain, attaches
+`fontTable.xml` metadata, flags embedded families, marks the symbol class, and
+scans headers, footers and `numbering.xml` as well as the body. `fonts()` is
+unchanged and still answers its narrower question.
 
 ## Against the shared API
 

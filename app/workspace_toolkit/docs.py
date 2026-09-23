@@ -37,6 +37,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring  # nosec B405
 from .docx import (
     COINCIDENT_SIZE_TOL,
     COINCIDENT_TOL_EMU,
+    OFF_VALUES,
     analysis_report,
     anchor_extent,
     anchor_position,
@@ -201,11 +202,6 @@ def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> None:
 def _ends_section(paragraph: Element) -> bool:
     properties = paragraph.find(q("w", "pPr"))
     return properties is not None and properties.find(q("w", "sectPr")) is not None
-
-
-# ST_OnOff spells false three ways, and <w:bidi w:val="off"/> is as much an
-# instruction to read left to right as w:val="0" is.
-OFF_VALUES = {"0", "false", "off"}
 
 
 def stated_direction(paragraph: Element | None) -> bool | None:
