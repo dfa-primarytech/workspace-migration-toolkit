@@ -225,3 +225,24 @@ def test_the_parser_reports_these_documents_without_inventing_elements(tmp_path)
     manifest = parse_body(tmp_path, body)
     assert manifest["pages"][0]["elements"] == []
     assert manifest["document"]["pageCount"] == 1
+
+
+def test_a_long_ordinary_document_is_not_refused_as_too_complex(tmp_path):
+    """Issue #46: about 130 pages of plain paragraphs was refused as "too complex".
+
+    The old cap of 100,000 elements, counted after parsing, bound long before
+    the 8 MiB XML size limit did. A document this long must now analyse.
+    """
+    from workspace_toolkit.config import Settings
+    from workspace_toolkit.docx import analyse
+
+    from .test_docx import write_docx
+
+    paragraph = (
+        "<w:p><w:pPr><w:spacing w:after='120'/><w:jc w:val='both'/></w:pPr>"
+        + "<w:r><w:rPr><w:rFonts w:ascii='Arial'/><w:sz w:val='22'/></w:rPr>"
+        "<w:t>word word word</w:t></w:r>" * 3 + "</w:p>"
+    )
+    source = write_docx(tmp_path / "long.docx", paragraph * 6000 + SECTION)
+    manifest = analyse(source, tmp_path / "out", Settings())
+    assert manifest["document"]["pageCount"] == 1

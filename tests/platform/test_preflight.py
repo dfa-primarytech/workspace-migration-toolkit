@@ -120,6 +120,7 @@ def test_duplicate_paths_rejected(pptx):
         ({"max_expanded_bytes": 50}, "zip_limits"),
         ({"max_compression_ratio": 1}, "zip_limits"),
         ({"max_xml_bytes": 20}, "part_limit"),
+        ({"max_xml_elements": 2}, "xml_limit"),
         ({"max_upload_bytes": 2}, "upload_too_large"),
     ],
 )
