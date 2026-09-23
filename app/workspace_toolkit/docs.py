@@ -924,12 +924,27 @@ ACROSS_FRAMES = {"column", "margin", "insideMargin", "leftMargin", "text"}
 PAGE_FRAMES = {"page"}
 
 
-def _left_margin(root: Element) -> int | None:
-    """The left margin in EMU, from the section that ends the body."""
+def _margin(root: Element, side: str) -> int | None:
+    """One page margin in EMU, from the section that ends the body."""
     body = root.find(q("w", "body"))
     sections = list(body.iter(q("w", "sectPr"))) if body is not None else []
-    margin = _measure(sections[-1].find(q("w", "pgMar")), "left") if sections else None
+    margin = _measure(sections[-1].find(q("w", "pgMar")), side) if sections else None
     return None if margin is None else margin * EMU_PER_DXA
+
+
+def _starts_the_page(root: Element, paragraph: Element) -> bool:
+    """Whether this paragraph's top is the top of the text area, exactly.
+
+    Only then is the constant between a page-relative and a paragraph-relative
+    vertical offset a known quantity -- the top margin -- rather than something
+    to be guessed at. It has to be the body's first block, with nothing above it
+    and no space asked for before it.
+    """
+    body = root.find(q("w", "body"))
+    if body is None or len(body) == 0 or body[0] is not paragraph:
+        return False
+    spacing = paragraph.find(q("w", "pPr") + "/" + q("w", "spacing"))
+    return spacing is None or spacing.get(q("w", "before")) in (None, "0")
 
 
 def _offset(anchor: Element, axis: str) -> tuple[str, int] | None:
@@ -958,9 +973,9 @@ def _bands(offsets: list[int]) -> list[list[int]]:
     return grouped
 
 
-def _free_rows(table: Element, column: int, parent_of: dict) -> list[Element]:
-    """Cells in one column that hold a question number and nothing else."""
-    free = []
+def _candidate_rows(table: Element, column: int, parent_of: dict, holding: int) -> list[Element]:
+    """Cells in one column holding a question number and exactly `holding` pictures."""
+    found = []
     for row in table.findall(q("w", "tr")):
         cells = [
             cell
@@ -970,12 +985,35 @@ def _free_rows(table: Element, column: int, parent_of: dict) -> list[Element]:
         if column >= len(cells):
             return []
         cell = cells[column]
-        if list(cell.iter(q("wp", "inline"))) or list(cell.iter(q("wp", "anchor"))):
+        # Something is still floating inside this cell; whatever it is, this row
+        # is not settled and nothing should be dropped into it.
+        if list(cell.iter(q("wp", "anchor"))):
+            continue
+        if len(list(cell.iter(q("wp", "inline")))) != holding:
             continue
         text = "".join(node.text or "" for node in cell.iter(q("w", "t"))).strip()
         if len(text) <= LABEL_CHARS:
-            free.append(cell)
-    return free
+            found.append(cell)
+    return found
+
+
+def _target_rows(table: Element, column: int, parent_of: dict) -> list[Element]:
+    """The cells in one column waiting for a picture.
+
+    Usually the empty ones. But a worksheet often gives each question two
+    pictures -- one in the cell and one floating over it -- and once #34 has
+    inlined the first, every cell already holds exactly one. Measured on a real
+    worksheet: 10 pictures above a table whose ten cells were already full, all
+    of them a different image at a different size from the one below. Appending
+    a second to each is then the only reading that places anything at all.
+    """
+    empty = _candidate_rows(table, column, parent_of, 0)
+    return empty or _candidate_rows(table, column, parent_of, 1)
+
+
+def _page_anchored(anchor: Element) -> bool:
+    down = _offset(anchor, "V")
+    return down is not None and down[0] == "page"
 
 
 def place_orphan_pictures(root: Element, ids: Ids) -> dict:
@@ -1025,7 +1063,7 @@ def _place_above(
         edges.append((running, running + width * EMU_PER_DXA))
         running += width * EMU_PER_DXA
 
-    margin = _left_margin(root)
+    margin = _margin(root, "left")
     placed: dict[int, list[tuple[int, Element]]] = {}
     frames: set[str] = set()
     for anchor in pictures:
@@ -1054,13 +1092,21 @@ def _place_above(
         placed.setdefault(column, []).append((down[1], anchor))
 
     if len(frames) > 1:
-        # Two origins ranked against each other would order them arbitrarily.
-        report["picturesUnplaced"] += len(anchors)
-        return
+        # Two origins ranked against each other would order the pictures
+        # arbitrarily -- unless the constant between them is known exactly,
+        # which it is when the paragraph starts the text area.
+        top = _margin(root, "top")
+        if frames != {"page", "paragraph"} or top is None or not _starts_the_page(root, paragraph):
+            report["picturesUnplaced"] += len(anchors)
+            return
+        for column, found in placed.items():
+            placed[column] = [
+                (down - top if _page_anchored(anchor) else down, anchor) for down, anchor in found
+            ]
 
     targets: list[tuple[Element, Element]] = []
     for column, found in placed.items():
-        rows = _free_rows(table, column, parent_of)
+        rows = _target_rows(table, column, parent_of)
         # Sorted by offset only: two pictures at the same height must not be
         # compared as elements, which has no meaning and no stable answer.
         ordered = sorted(found, key=lambda pair: pair[0])
