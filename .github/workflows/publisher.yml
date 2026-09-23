@@ -14,6 +14,10 @@ on:
       - 'tests/fixtures/publisher/**'
       - 'docker/publisher.Dockerfile'
       - '.github/workflows/publisher.yml'
+      # The lint job reads ruff's rules from pyproject.toml and its version
+      # from requirements-dev.lock; a change to either must re-run it.
+      - 'pyproject.toml'
+      - 'requirements-dev.lock'
   pull_request:
     paths:
       - 'native/pub-parser/**'
@@ -22,12 +26,33 @@ on:
       - 'tests/fixtures/publisher/**'
       - 'docker/publisher.Dockerfile'
       - '.github/workflows/publisher.yml'
+      - 'pyproject.toml'
+      - 'requirements-dev.lock'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  lint:
+    name: Python lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install ruff at the platform's pinned version
+        # One version for the whole repository: taken from the platform's
+        # lock rather than pinned again here, so the two cannot drift.
+        run: python -m pip install "$(grep '^ruff==' requirements-dev.lock)"
+      - name: Lint and format check
+        # Platform CI lints app and tests/platform only; this covers the
+        # Publisher's Python under the same pyproject.toml rules.
+        run: |
+          ruff check tests/publisher packages/document-model
+          ruff format --check tests/publisher packages/document-model
+
   native:
     name: Native adapter (Linux)
     runs-on: ubuntu-latest

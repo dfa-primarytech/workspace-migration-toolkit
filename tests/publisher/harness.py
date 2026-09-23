@@ -16,7 +16,6 @@ import sys
 import tempfile
 import types
 import unittest
-from typing import Optional
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 MODEL_DIR = os.path.join(REPO_ROOT, "packages", "document-model")
@@ -57,7 +56,7 @@ DEFAULT_PARSER = os.path.join(REPO_ROOT, "native", "pub-parser", "build", "publi
 PARSER_TIMEOUT_SECONDS = 120
 
 
-def parser_path() -> Optional[str]:
+def parser_path() -> str | None:
     candidate = os.environ.get(PARSER_ENV) or DEFAULT_PARSER
     return candidate if os.path.isfile(candidate) and os.access(candidate, os.X_OK) else None
 
@@ -65,12 +64,11 @@ def parser_path() -> Optional[str]:
 def require_parser(test: unittest.TestCase) -> str:
     path = parser_path()
     if path is None:
-        test.skipTest(
-            f"publisher-parser is not built; build native/pub-parser or set {PARSER_ENV}")
+        test.skipTest(f"publisher-parser is not built; build native/pub-parser or set {PARSER_ENV}")
     return path
 
 
-def pub001_path() -> Optional[str]:
+def pub001_path() -> str | None:
     path = os.environ.get(PUB001_ENV)
     return path if path and os.path.isfile(path) else None
 
@@ -80,7 +78,8 @@ def require_pub001(test: unittest.TestCase) -> str:
     if path is None:
         test.skipTest(
             f"the private PUB-001 fixture is not available; set {PUB001_ENV} to its path. "
-            "It is a real school document and is never committed.")
+            "It is a real school document and is never committed."
+        )
     return path
 
 
@@ -101,9 +100,17 @@ class ParserRun:
 
 
 def run_parser(parser: str, source: str, output_dir: str, *extra: str) -> ParserRun:
-    completed = subprocess.run(
+    # S603 reviewed: an argument list, never a shell. The executable is the
+    # in-repo build or PUBLISHER_PARSER_BIN, set by CI or the developer and
+    # checked by parser_path(); every argument is chosen by the test. The
+    # untrusted input is the document's content, which the parser reads as
+    # data -- nothing in it selects what is executed.
+    completed = subprocess.run(  # noqa: S603
         [parser, *extra, source, output_dir],
-        capture_output=True, text=True, timeout=PARSER_TIMEOUT_SECONDS, check=False,
+        capture_output=True,
+        text=True,
+        timeout=PARSER_TIMEOUT_SECONDS,
+        check=False,
     )
     return ParserRun(completed.returncode, completed.stdout, completed.stderr, output_dir)
 
