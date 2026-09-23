@@ -725,10 +725,11 @@ def _same_size(a: dict, b: dict) -> bool:
     )
 
 
-# Fields whose displayed value is computed from page layout or the clock, so
-# it is expected to differ after an import rather than to survive it. A page
-# number is not content the converter can lose; it is a number the next
-# renderer works out for itself.
+# Fields whose displayed value is computed from page layout or the clock
+# rather than authored. What any particular reader does with them after an
+# import -- recalculate, leave the cached value stale, or flatten the field to
+# plain text -- is not something this converter knows, so the cached value is
+# not treated as text it was responsible for carrying across.
 REGENERATED_FIELDS = {
     "TOC",
     "TOA",
@@ -802,18 +803,21 @@ def source_text(root: Element) -> str:
 
     The cached result of a computed field *is* `<w:t>` and did appear, which
     was worse. A table of contents caches its entries and page numbers as
-    ordinary text, and the importer is expected to renumber them -- Google's
-    pagination is not Word's. Counting them meant a document whose TOC came
-    back correct but renumbered reported missing text it had not lost, once
-    per entry. The field instruction is preserved either way; what is dropped
-    here is only the stale answer, not the question.
+    ordinary text. Those values depend on pagination, so a reader that lays the
+    document out differently may show different ones -- and a reader that does
+    not recalculate may show the old ones. Either way the comparison cannot
+    tell a renumbered contents page from a lost one, so counting them produced
+    a missing-text report per entry on documents that had lost nothing.
+
+    The field instruction is preserved either way; what is dropped here is only
+    the stale answer, not the question.
     """
     skip = _cached_result_text(root)
     return " ".join((node.text or "") for node in root.iter(q("w", "t")) if id(node) not in skip)
 
 
 def count_regenerated_fields(root: Element) -> int:
-    """Fields whose displayed value the next renderer has to work out again."""
+    """Fields whose displayed value is computed rather than authored."""
     total = sum(
         1 for s in root.iter(q("w", "fldSimple")) if _regenerated(s.get(q("w", "instr")) or "")
     )
@@ -897,9 +901,11 @@ def verify(
             warning(
                 "fields_need_regeneration",
                 "This document contains fields whose displayed values -- table "
-                "of contents entries, page numbers, dates -- are worked out by "
-                "the reader. Google will renumber them for its own layout, so "
-                "check the contents page rather than assuming it carried over.",
+                "of contents entries, page numbers, dates -- are calculated "
+                "from page layout or the date rather than typed in. After "
+                "import they may be recalculated, or may still show the old "
+                "values. Open the contents page and any page numbering and "
+                "check them rather than assuming they carried across.",
                 fieldCount=regenerated_fields,
                 classification=C.SUBSTITUTED,
             )

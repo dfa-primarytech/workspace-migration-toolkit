@@ -82,25 +82,60 @@ receiving that set cannot tell which substitution rules apply to which.
 Items 1 and 2 are the ones that change the numbers; the rest change their
 shape. None of them require deciding what to substitute.
 
-## Interface this stream expects to call
+## Against the shared API
 
-Shape only — the shared service owns the real signature. What matters is that
-the call is per distinct *requirement*, not per run, and that the answer can
-say "no substitution needed".
+The shared service is `workspace_toolkit.fonts`:
 
 ```
-substitute(
-    family: str,                  # resolved, never a theme token
-    script: "latin" | "complexScript" | "eastAsian" | "symbol",
-    bold: bool, italic: bool,
-    language: str | None,         # BCP-47, from w:lang
-    embedded: bool,
-) -> { family: str, exact: bool, note: str | None }
+compatibility(family: str) -> { name, status, replacement, confidence,
+                                basis, workspaceAvailability, manualReview }
+catalogue(families) -> deduplicated, deterministically ordered
 ```
 
-`exact=False` is what a conversion report should surface, per family, in the
-same way equations and regenerated fields are surfaced now: state what changed
-and let a person look, rather than claiming a fidelity nobody has verified.
+It takes **a family name and nothing else**. The audit above says a
+substitution decision depends on five things: family, script, weight,
+language and whether the font is embedded.
+
+That is not a fault today, because of how the service fails. An unmapped
+family returns `UNKNOWN` with `replacement: None` and `manualReview: True` —
+nothing is changed and a person is asked. The missing inputs therefore do not
+cause wrong output now; they bound what can safely be added later. Three
+specifics, in the order they will bite:
+
+**Script is the one that matters.** A single run can name four families, one
+per script range. `compatibility("Arabic Typesetting")` sees a string. If a
+mapping for it is ever added by name alone and the replacement lacks Arabic
+coverage, the text renders as boxes — and the call site had the information
+that would have prevented it. Either the input grows a script argument, or
+script-specific families stay unmapped deliberately rather than by accident.
+
+**Symbol fonts must never be mapped by name.** Wingdings, Symbol, Webdings
+and Marlett are code-point mapped, not shaped: the glyph at `F0FC` is a tick
+only because the font says so. Substituting any text family turns a tick-box
+worksheet into letters. The catalogue currently contains none of them, so
+today's behaviour is correct — this is a note to keep it that way, not a
+defect report.
+
+**Embedded fonts need no substitution at all.** `fontTable.xml` embedding
+means the glyphs travel with the document. Without that input the service
+will recommend replacing a family that is already present. This is the
+cheapest of the three to add and the least likely to be noticed if missed.
+
+What the service already covers well is exactly this trust's estate: Century
+Gothic, Comic Sans and Sassoon Primary/Infant all have reviewed mappings, and
+the accessibility-sensitive ones are marked `manualReview`.
+
+## Sequencing
+
+DOCX cannot supply any of this yet. The theme and style gaps above mean the
+font list itself is unreliable, so integration has to wait on resolution
+rather than the other way round:
+
+1. resolve theme, style, script and font-table inputs (items 1–3, 5 above)
+2. then call `catalogue()` over the resolved families
+3. report each non-`AVAILABLE` family in the conversion report, in the same
+   shape as equations and computed fields: say what changed, name what was not
+   verified, and let a person look
 
 ## Not claimed here
 

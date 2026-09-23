@@ -9,17 +9,20 @@ Both are stored, and they are not the same kind of thing.
 
 The transform preserves both already, which these tests pin. The problem was
 in the check afterwards. Cached page numbers are ordinary `<w:t>`, so they were
-counted as body text -- and Google repaginates, because its layout is not
-Word's. A contents page that came back perfectly correct but renumbered would
-report missing text, once per entry.
+counted as body text. Those values depend on pagination, and a reader laying
+the document out differently may show different ones -- while a reader that
+does not recalculate may show the old ones. The comparison cannot tell a
+renumbered contents page from a lost one, so it reported missing text, once
+per entry, on documents that had lost nothing.
 
 This is the exact mirror of the equations case. There, content was invisible to
 the check and loss went unnoticed. Here, non-content was visible and would be
 reported as loss. Both end in a report nobody can act on.
 
-Nothing here claims Google regenerates a TOC, or does so well. That needs a
-real conversion. What is claimed is that we hand over the instruction intact
-and stop counting the stale answer as content.
+Nothing here claims what Google does with a TOC -- recalculate it, leave it
+stale, or flatten it to plain text. That needs a real conversion to find out.
+What is claimed is that we hand over the instruction intact and stop counting
+the stale answer as content we were responsible for carrying across.
 """
 
 from __future__ import annotations
@@ -142,7 +145,12 @@ def test_a_field_paragraph_is_not_collected_as_empty(tmp_path):
 
 
 def test_cached_page_numbers_are_not_counted_as_body_text(tmp_path):
-    """The false alarm this exists to prevent."""
+    """The false alarm this exists to prevent.
+
+    A page number is not text the converter carries; it is a value computed
+    from a layout. Counting it means any difference in pagination reads as
+    lost content.
+    """
     root, _ = transform_body(tmp_path, POLICY)
     tokens = source_text(root).split()
     assert "7" not in tokens, (
