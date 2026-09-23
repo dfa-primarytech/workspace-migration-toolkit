@@ -154,7 +154,9 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
     assert report["reportUrl"].startswith("https://drive.google.com/")
     assert report["conversion"]["fontSubstitutions"] == rendered["fontSubstitutions"]
     with zipfile.ZipFile(io.BytesIO(bodies[0])) as converted:
-        assert b'typeface="Carlito"' in converted.read("ppt/slides/slide2.xml")
+        # Calibri is present in Google Docs, so it is preserved rather than
+        # swapped for Carlito; only genuinely absent families are replaced.
+        assert b'typeface="Calibri"' in converted.read("ppt/slides/slide2.xml")
 
 
 def test_partial_failure_keeps_recovery_links(pptx, tmp_path):
