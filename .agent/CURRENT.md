@@ -128,7 +128,7 @@ permissions problem** -- that session signs in as Scrappy995, which already hold
 write, and Codex pushes fine as the same account. See BACKLOG item 2.
 
 #12 has now been built and tested on Linux CI, and all five checks are green.
-The container build passes and runs the 92 C++ unit tests on a clean Ubuntu
+The container build passes and runs the C++ unit tests on a clean Ubuntu
 base during the image build. Two CI failures were found and fixed on the way,
 both in platform-owned files that the Publisher session could not have reached:
 `.dockerignore` excluded `**` and re-included only the platform image's files,
@@ -142,15 +142,23 @@ and the parser reproduced every expected count with zero diagnostics: 4 pages at
 text insertions, 12 image placements over 11 deduplicated assets, one 1x3 table,
 two paths, one rendering layer and three fonts. It runs locally only -- the
 document is a real school booklet and must never be committed -- so the CI job
-reports NOT RUN ON CI rather than claiming a pass. 92 C++ tests and 55 Python
-tests pass with the fixture supplied; 22 skip without it.
+reports NOT RUN ON CI rather than claiming a pass. 55 Python tests pass with
+the fixture supplied; 22 skip without it. The C++ suite is now 105 tests.
 
-What remains unverified for Publisher is breadth, not depth: only one real
-document has been parsed. PUB-001 contains no authored group, no
-`drawGraphicObject`, no master page, no metafile image, no embedded font, no
-list, no link and no rotated object. Those paths have synthetic callback tests
-only. PUB-002 onwards are the next real dependency, and #12 stays draft until
-then.
+#12 has merged. What remains unverified for Publisher is breadth, not depth:
+only one real document has been parsed.
+
+**Reading libmspub 0.1.4's source changed the picture (2026-09-23).** It never
+calls `openGroup`, `startMasterPage`, the list callbacks, `openLink` or
+`insertField`. It emits authored groups as layers, folds rotation and flips of
+everything but text into the outline, paints master content into every page, and
+calls `drawGraphicObject` only for BorderArt tiles. The parser now models all of
+that (layers classified at close, rotation recovered from outlines, flips and
+border art flagged), and the "a layer is never a group" decision is superseded.
+See DECISIONS.md and `docs/publisher-parser.md`. **PUB-001 acceptance must be
+re-run locally**, because its one layer is asserted to be a wrapper.
+Lists, links and fields are not recoverable from a `.pub` at all through this
+library.
 
 Live OAuth, real Google conversion and visual fidelity remain unverified for
 both PPTX and DOCX. Every Google interaction is covered by test doubles only.

@@ -646,7 +646,7 @@
         },
         "isAuthoredGroup": {
           "type": "boolean",
-          "description": "False for a rendering wrapper. startLayer is not evidence that the author grouped anything."
+          "description": "True for an explicit group, or a layer the parser inferred to be an authored group (kind 'layer', with a probable-authored-group warning stating the evidence). libmspub emits authored groups as layers and never calls openGroup, but it also wraps a single shape painted in several passes in a layer; those stay false."
         }
       },
       "required": [

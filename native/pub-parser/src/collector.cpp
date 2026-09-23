@@ -362,8 +362,63 @@ void IrCollector::readGeometry(Element &element, const librevenge::RVNGPropertyL
       const bool pairB = std::fabs(pts[0].x - pts[1].x) < eps && std::fabs(pts[1].y - pts[2].y) < eps &&
                          std::fabs(pts[2].x - pts[3].x) < eps && std::fabs(pts[3].y - pts[0].y) < eps;
       element.polygonIsRectangular = pairA || pairB;
+      readRectangleOrientation(element, pts);
     }
   }
+}
+
+// libmspub 0.1.4 reports rotation (librevenge:rotate) for text frames only.
+// For every other shape it folds rotation and flips into the outline's
+// coordinates, so a rotated picture arrives as a rotated rectangle -- which
+// without this would be read as a non-rectangular outline acting as a mask.
+void IrCollector::readRectangleOrientation(Element &element, const std::vector<Point2> &pts) {
+  const double ax = pts[1].x - pts[0].x, ay = pts[1].y - pts[0].y;
+  const double bx = pts[2].x - pts[1].x, by = pts[2].y - pts[1].y;
+  const double cx = pts[3].x - pts[2].x, cy = pts[3].y - pts[2].y;
+  const double dx = pts[0].x - pts[3].x, dy = pts[0].y - pts[3].y;
+  const double lengthA = std::hypot(ax, ay);
+  const double lengthB = std::hypot(bx, by);
+  if (lengthA <= 0.0 || lengthB <= 0.0) return;
+
+  const double eps = 0.01; // a hundredth of a point, as for axis alignment
+  const bool parallelogram = std::fabs(ax + cx) < eps && std::fabs(ay + cy) < eps &&
+                             std::fabs(bx + dx) < eps && std::fabs(by + dy) < eps;
+  const bool rightAngle = std::fabs(ax * bx + ay * by) / (lengthA * lengthB) < 1e-4;
+  if (!parallelogram || !rightAngle) return;
+
+  // Winding. libmspub's rectangle outline runs top-left, top-right,
+  // bottom-right, bottom-left, which is clockwise on a page whose y axis
+  // points down. Wound the other way, the shape was flipped once.
+  double twiceArea = 0.0;
+  for (std::size_t i = 0; i < pts.size(); i++) {
+    const Point2 &p = pts[i];
+    const Point2 &q = pts[(i + 1) % pts.size()];
+    twiceArea += p.x * q.y - q.x * p.y;
+  }
+  if (twiceArea < 0.0) {
+    element.outlineIsMirrored = true;
+    element.warnings.push_back(
+        {"outline-mirrored",
+         "the rectangular outline is wound opposite to an unflipped one, which usually means the "
+         "shape was flipped; libmspub does not report flips, and a bitmap fill is not mirrored "
+         "with its outline"});
+  }
+
+  if (element.polygonIsRectangular) return;
+  element.outlineIsRotatedRectangle = true;
+  if (!element.hasRotation) {
+    // Counter-clockwise on the page, in degrees, matching librevenge:rotate.
+    constexpr double kPi = 3.14159265358979323846;
+    double degrees = std::atan2(-ay, ax) * 180.0 / kPi;
+    if (degrees < 0.0) degrees += 360.0;
+    element.hasRotation = true;
+    element.rotationDegrees = degrees;
+  }
+  element.warnings.push_back(
+      {"rotation-from-outline",
+       "the rotation was recovered from a rotated rectangular outline, not reported by the "
+       "import filter; bounds are the outline's axis-aligned extent and the points are the "
+       "rotated frame"});
 }
 
 // --- assets ----------------------------------------------------------------
@@ -669,10 +724,25 @@ void IrCollector::drawShape(const char *callback, const std::string &shapeKind,
   element->shapeKind = shapeKind;
   readGeometry(*element, props);
 
+  // A rotated rectangle is still a rectangular placement; only the angle
+  // differs. See readRectangleOrientation.
+  // drawRectangle carries a box rather than points, so it never sets
+  // polygonIsRectangular -- but it is rectangular by definition.
+  const bool rectangularPlacement = shapeKind == "rectangle" || element->polygonIsRectangular ||
+                                    element->outlineIsRotatedRectangle;
+
   if (bitmapFill) {
     element->imageRoute = "bitmapFillShape";
     element->assetId = currentFillAssetId_;
-    if (!element->polygonIsRectangular && shapeKind == "polygon") {
+    for (const SourceProperty &prop : currentStyle_) {
+      if (prop.key != "librevenge:rotate") continue;
+      element->warnings.push_back(
+          {"fill-rotated", "the bitmap fill declares its own rotation (" + prop.value +
+                               ") inside the outline; it is kept in the style properties "
+                               "and not applied"});
+      break;
+    }
+    if (!rectangularPlacement && shapeKind == "polygon") {
       element->warnings.push_back({"bitmap-fill-not-rectangular",
                                    "a bitmap fill was painted into a non-rectangular outline; the "
                                    "outline is retained because it may be acting as a mask"});
@@ -686,8 +756,10 @@ void IrCollector::drawShape(const char *callback, const std::string &shapeKind,
   if (bitmapFill) {
     element->compatibility = Compatibility::Native;
     element->compatibilityEvidence =
-        "a raster payload with a rectangular placement maps to a Slides image";
-    if (!element->polygonIsRectangular) {
+        element->outlineIsRotatedRectangle
+            ? "a raster payload in a rotated rectangular placement maps to a rotated Slides image"
+            : "a raster payload with a rectangular placement maps to a Slides image";
+    if (!rectangularPlacement) {
       element->compatibility = Compatibility::Flattened;
       element->compatibilityEvidence =
           "a bitmap fill in a non-rectangular outline has no direct Slides equivalent";
@@ -752,7 +824,80 @@ void IrCollector::endWrapper(const std::string &wrapperKind, const char *callbac
              std::string(callback) + " closed a container opened as " + element->wrapperKind,
              eventIndex, element->id);
   }
+  if (element->wrapperKind == "layer") classifyLayer(*element);
   finishElement(element, eventIndex);
+}
+
+// libmspub 0.1.4 never calls openGroup. It uses startLayer for two things:
+//
+//  - an authored group: a shape with children opens a layer with no
+//    properties, paints each child, then closes it (paintShape, isGroup);
+//  - one shape painted in several passes: border art, or any two of stroke,
+//    fill and text, are wrapped in a layer -- carrying svg:clip-path when
+//    the shape is cropped.
+//
+// Both empty kinds look identical when they open, so the decision is made
+// at close from what the layer contains. A multi-pass layer holds pieces of
+// one shape, all within or just around its box, and never a nested layer.
+// A group holds separately placed shapes, and any multi-pass child opens a
+// layer of its own. The rule is deliberately conservative: a group whose
+// largest child happens to contain the others stays a wrapper, which loses
+// the grouping but no content.
+void IrCollector::classifyLayer(Element &layer) {
+  if (!layer.sourceProperties.empty()) {
+    layer.warnings.push_back(
+        {"layer-clip-path",
+         "this layer carries a clip path, which libmspub emits for a cropped shape; the path is "
+         "kept in sourceProperties and is not applied"});
+    return;
+  }
+
+  bool nestedLayer = false;
+  std::vector<Bounds> boxes;
+  for (const Element &child : doc_.elements) {
+    if (child.parentId != layer.id) continue;
+    if (child.wrapperKind == "layer") nestedLayer = true;
+    if (child.bounds.valid) boxes.push_back(child.bounds);
+  }
+
+  bool scattered = false;
+  if (boxes.size() >= 2) {
+    std::size_t largest = 0;
+    for (std::size_t i = 1; i < boxes.size(); i++) {
+      if (boxes[i].width * boxes[i].height > boxes[largest].width * boxes[largest].height) {
+        largest = i;
+      }
+    }
+    const Bounds &frame = boxes[largest];
+    // Allows for an outline drawn outside the shape and for the inset
+    // libmspub gives a text frame inside its border.
+    const double tolerance = std::max(3.0, 0.05 * std::max(frame.width, frame.height));
+    for (const Bounds &b : boxes) {
+      if (b.x < frame.x - tolerance || b.y < frame.y - tolerance ||
+          b.x + b.width > frame.x + frame.width + tolerance ||
+          b.y + b.height > frame.y + frame.height + tolerance) {
+        scattered = true;
+        break;
+      }
+    }
+  }
+  if (!nestedLayer && !scattered) return;
+
+  layer.type = "group";
+  layer.compatibility = Compatibility::Native;
+  layer.compatibilityEvidence = "a probable authored group maps to a Slides group";
+  layer.warnings.erase(std::remove_if(layer.warnings.begin(), layer.warnings.end(),
+                                      [](const Note &note) {
+                                        return note.code == "wrapper-not-a-group";
+                                      }),
+                       layer.warnings.end());
+  layer.warnings.push_back(
+      {"probable-authored-group",
+       nestedLayer
+           ? "inferred from a layer that contains another layer: libmspub opens a layer inside a "
+             "group for each multi-pass child, and never inside a single shape"
+           : "inferred from a layer whose children are placed separately rather than around one "
+             "shape; libmspub emits authored groups as layers and never calls openGroup"});
 }
 
 // --- RVNGDrawingInterface --------------------------------------------------
@@ -976,6 +1121,13 @@ void IrCollector::drawGraphicObject(const librevenge::RVNGPropertyList &props) {
   if (element == nullptr) return;
   element->imageRoute = "drawGraphicObject";
   readGeometry(*element, props);
+  // Content pictures arrive as bitmap fills. libmspub 0.1.4 calls
+  // drawGraphicObject only from its BorderArt code, once per tile, so a
+  // decorative border becomes dozens of small images.
+  element->warnings.push_back(
+      {"probable-border-art",
+       "libmspub 0.1.4 emits drawGraphicObject only for BorderArt tiles, so this image is "
+       "probably one tile of a decorative border rather than a content picture"});
 
   const std::string mime = propString(props, "librevenge:mime-type");
   const librevenge::RVNGProperty *payload = props["office:binary-data"];
