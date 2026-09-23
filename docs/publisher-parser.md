@@ -18,7 +18,7 @@ input.pub → libmspub → native adapter → document.json
 
 | Part | State |
 |---|---|
-| Callback adapter and IR model | Implemented, 105 unit tests passing |
+| Callback adapter and IR model | Implemented, 107 unit tests passing |
 | `publisher-parser` CLI | Implemented; failure and limit paths tested end to end |
 | Schema and validator | Implemented |
 | PUB-001 regression | **Passing** against the real document — see [PUB-001](#pub-001) |
@@ -213,7 +213,7 @@ Neither needs a Google API, credentials or a network. The Python tests
 skip the CLI suite if the binary is not built, and skip the PUB-001 suite
 if the private fixture is not supplied.
 
-With the fixture supplied: **105 C++ tests and 55 Python tests pass, none
+With the fixture supplied: **107 C++ tests and 55 Python tests pass, none
 skipped.**
 
 ## PUB-001

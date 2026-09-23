@@ -17,6 +17,25 @@ std::string propString(const librevenge::RVNGPropertyList &props, const char *na
   return s.cstr() == nullptr ? std::string() : std::string(s.cstr());
 }
 
+// Bytes a base64 string decodes to, without decoding it. Whitespace is
+// skipped and trailing '=' padding subtracted; any other character counts,
+// so a malformed string is measured, not rejected.
+long long base64DecodedLength(const char *text) {
+  if (text == nullptr) return 0;
+  long long symbols = 0;
+  long long padding = 0;
+  for (const char *c = text; *c != '\0'; ++c) {
+    if (*c == ' ' || *c == '\n' || *c == '\r' || *c == '\t') continue;
+    if (*c == '=') {
+      padding++;
+    } else {
+      symbols += 1 + padding; // '=' before the end was not padding after all
+      padding = 0;
+    }
+  }
+  return (symbols + padding) / 4 * 3 - std::min(padding, 2LL);
+}
+
 int propInt(const librevenge::RVNGPropertyList &props, const char *name, int fallback) {
   const librevenge::RVNGProperty *p = props[name];
   return p == nullptr ? fallback : p->getInt();
@@ -535,6 +554,12 @@ void IrCollector::noteFont(const std::string &family, long long eventIndex) {
   if (family.empty()) return;
   for (FontUse &font : doc_.fonts) {
     if (font.family == family) {
+      if (font.usageCount == 0) {
+        // Defined (embedded) before its first use: record where that use is.
+        font.firstPageIndex =
+            openPage_ >= 0 ? doc_.pages[static_cast<std::size_t>(openPage_)].index : -1;
+        font.firstEventIndex = eventIndex;
+      }
       font.usageCount++;
       return;
     }
@@ -923,18 +948,33 @@ void IrCollector::setDocumentMetaData(const librevenge::RVNGPropertyList &props)
 void IrCollector::defineEmbeddedFont(const librevenge::RVNGPropertyList &props) {
   const long long event = enter("defineEmbeddedFont");
   const std::string name = propString(props, "librevenge:name");
-  noteFont(name, event);
-  for (FontUse &font : doc_.fonts) {
-    if (font.family != name) continue;
-    font.embedded = true;
-    font.embeddedMime = normaliseMime(propString(props, "librevenge:mime-type"));
+  // A definition is not a use: usageCount counts runs set in the font, so a
+  // font embedded but never used must report zero. libmspub defines embedded
+  // fonts before any page, so the entry normally does not exist yet.
+  FontUse *font = nullptr;
+  for (FontUse &existing : doc_.fonts) {
+    if (existing.family == name) font = &existing;
+  }
+  if (font == nullptr && !name.empty()) {
+    FontUse added;
+    added.family = name;
+    added.firstPageIndex = -1;
+    added.firstEventIndex = event;
+    doc_.fonts.push_back(std::move(added));
+    font = &doc_.fonts.back();
+  }
+  if (font != nullptr) {
+    font->embedded = true;
+    font->embeddedMime = normaliseMime(propString(props, "librevenge:mime-type"));
     const librevenge::RVNGProperty *data = props["office:binary-data"];
     if (data != nullptr) {
       // Size only. The font binary is not extracted: redistributing an
-      // embedded typeface is a licensing decision, not a parser's.
-      font.embeddedByteLength = static_cast<long long>(data->getStr().size());
+      // embedded typeface is a licensing decision, not a parser's. The
+      // property reads back as base64 text, so the byte length is derived
+      // from it rather than taken as the text's length -- which would
+      // over-report by a third -- and without decoding the font into memory.
+      font->embeddedByteLength = base64DecodedLength(data->getStr().cstr());
     }
-    break;
   }
   limitation("embedded-fonts-not-extracted",
              "embedded font payloads are recorded but not extracted; redistributing a bundled "
