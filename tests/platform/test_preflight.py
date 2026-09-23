@@ -192,3 +192,56 @@ def test_cleanup_on_failure(tmp_path):
         (root / "source.pptx").write_bytes(b"bad")
         asyncio.run(preflight(root, settings))
     assert not root.exists()
+
+
+# ---------------------------------------- dangling relationship targets (#47)
+
+
+def test_a_link_to_a_part_that_is_not_there_does_not_reject_the_file(tmp_path):
+    """Some generators write Target="../NULL" for an image they removed, and
+    PowerPoint opens those files quite happily. Refusing the whole
+    presentation rejects a document its own application accepts."""
+
+    parts = fixture_parts()
+    parts["ppt/slides/_rels/slide2.xml.rels"] = parts["ppt/slides/_rels/slide2.xml.rels"].replace(
+        "</Relationships>",
+        f'<Relationship Id="gone" Type="{NS["r"]}/image" Target="../NULL"/></Relationships>',
+    )
+    manifest = analyse(write_pptx(tmp_path / "gap.pptx", parts), tmp_path / "out")
+
+    missing = [w for w in manifest["warnings"] if w["code"] == "relationship_target_missing"]
+    assert len(missing) == 1, [w["code"] for w in manifest["warnings"]]
+    assert missing[0]["relationshipId"] == "gone"
+    gone = next(
+        rel for rel in manifest["relationships"]["ppt/slides/slide2.xml"] if rel["id"] == "gone"
+    )
+    assert gone["resolved"] is None and gone["missing"] is True
+
+
+def test_a_part_name_is_matched_without_regard_to_case(tmp_path):
+    # OPC part names are case-insensitive, so this is a match, not a miss.
+
+    parts = fixture_parts()
+    parts["ppt/slides/_rels/slide2.xml.rels"] = parts["ppt/slides/_rels/slide2.xml.rels"].replace(
+        "../media/image.png", "../Media/Image.PNG"
+    )
+    manifest = analyse(write_pptx(tmp_path / "case.pptx", parts), tmp_path / "out")
+
+    assert not [w for w in manifest["warnings"] if w["code"] == "relationship_target_missing"]
+    image = next(
+        rel for rel in manifest["relationships"]["ppt/slides/slide2.xml"] if rel["id"] == "image"
+    )
+    assert image["resolved"] == "ppt/media/image.png"
+
+
+def test_a_link_escaping_the_package_is_still_refused(tmp_path):
+
+    parts = fixture_parts()
+    parts["ppt/slides/_rels/slide2.xml.rels"] = parts["ppt/slides/_rels/slide2.xml.rels"].replace(
+        "</Relationships>",
+        f'<Relationship Id="out" Type="{NS["r"]}/image" '
+        f'Target="../../../../etc/passwd"/></Relationships>',
+    )
+    with pytest.raises(ToolkitError) as excinfo:
+        analyse(write_pptx(tmp_path / "escape.pptx", parts), tmp_path / "out")
+    assert excinfo.value.code == "unsafe_relationship"

@@ -104,6 +104,8 @@ class Package:
         if len(infos) > self.settings.max_entries:
             raise ToolkitError("zip_entries", "This file contains too many package entries.")
         self.names: set[str] = set()
+        # Built on first use: most packages never need a case-insensitive lookup.
+        self._folded: dict[str, str] | None = None
         seen: set[str] = set()
         total = 0
         for info in infos:
@@ -223,6 +225,7 @@ class Package:
             target = rel.get("Target", "")
             external = rel.get("TargetMode") == "External"
             resolved = None
+            missing = False
             if not external:
                 decoded = unquote(target)
                 if "\\" in decoded or "\x00" in decoded or urlsplit(decoded).scheme:
@@ -235,11 +238,21 @@ class Package:
                     if decoded.startswith("/")
                     else posixpath.join(posixpath.dirname(part), decoded)
                 )
-                if resolved.startswith("../") or resolved == ".." or resolved not in self.names:
+                if resolved.startswith("../") or resolved == "..":
+                    # An escape from the package is unsafe, not merely absent.
                     raise ToolkitError(
-                        "missing_relationship",
-                        "The file contains a missing or unsafe component link.",
+                        "unsafe_relationship", "The file contains an unsafe component link."
                     )
+                # OPC part names are case-insensitive, so Target="Styles.xml"
+                # naming word/styles.xml is a match, not a miss.
+                resolved = self._part_named(resolved)
+                if resolved is None:
+                    # A link to a part that is not there. Some generators write
+                    # Target="../NULL" for an image they removed, and PowerPoint
+                    # opens those files quite happily -- so refusing the whole
+                    # presentation over it rejects a document its own
+                    # application accepts. Recorded and carried on from.
+                    missing = True
             result.append(
                 {
                     "id": rid,
@@ -247,9 +260,18 @@ class Package:
                     "target": target,
                     "external": external,
                     "resolved": resolved,
+                    "missing": missing,
                 }
             )
         return result
+
+    def _part_named(self, name: str) -> str | None:
+        """The archive's own spelling of a part name, matched without case."""
+        if name in self.names:
+            return name
+        if self._folded is None:
+            self._folded = {entry.casefold(): entry for entry in self.names}
+        return self._folded.get(name.casefold())
 
     def close(self) -> None:
         self.zip.close()

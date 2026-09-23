@@ -182,6 +182,17 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                         classification=C.UNSUPPORTED,
                     )
                 )
+            if rel["missing"]:
+                warnings.append(
+                    warning(
+                        "relationship_target_missing",
+                        "A link points at a part that is not in the file. "
+                        "Whatever it referred to is not there to convert.",
+                        part=part,
+                        relationshipId=rel["id"],
+                        classification=C.IGNORED,
+                    )
+                )
     presentation = package.xml("ppt/presentation.xml")
     if presentation.tag != f"{{{NS['p']}}}presentation":
         raise ToolkitError("unsupported_namespace", "This PowerPoint format is not supported yet.")
@@ -206,6 +217,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
             not slide_ref
             or slide_ref["external"]
             or not slide_ref["type"].endswith("/slide")
+            or not slide_ref["resolved"]
             or slide_ref["resolved"] in seen_slides
         ):
             raise ToolkitError("invalid_slide_order", "The presentation's slide order is invalid.")
