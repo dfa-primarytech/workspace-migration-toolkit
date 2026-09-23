@@ -474,10 +474,10 @@ def _merge(base: dict, over: dict) -> dict:
     return merged
 
 
-def style_fonts(package: Package) -> tuple[dict[str, dict], dict]:
-    """Per-style formatting with w:basedOn resolved, and the document defaults."""
+def style_fonts(package: Package) -> tuple[dict[str, dict], dict, dict[str, str]]:
+    """Resolved style formatting, document defaults, and default style IDs."""
     if STYLES_PART not in package.names:
-        return {}, {}
+        return {}, {}, {}
     root = package.xml(STYLES_PART)
     defaults = _formatting(
         root.find(f"{q('w', 'docDefaults')}/{q('w', 'rPrDefault')}/{q('w', 'rPr')}")
@@ -485,11 +485,16 @@ def style_fonts(package: Package) -> tuple[dict[str, dict], dict]:
 
     direct: dict[str, dict] = {}
     parent_of: dict[str, str] = {}
+    default_styles: dict[str, str] = {}
     for style in root.findall(q("w", "style")):
         identifier = style.get(q("w", "styleId"))
         if not identifier:
             continue
         direct[identifier] = _formatting(style.find(q("w", "rPr")))
+        style_type = style.get(q("w", "type"))
+        default_value = style.get(q("w", "default"))
+        if style_type and default_value is not None and default_value not in OFF_VALUES:
+            default_styles[style_type] = identifier
         parent = style.find(q("w", "basedOn"))
         value = parent.get(q("w", "val")) if parent is not None else None
         if value:
@@ -515,7 +520,7 @@ def style_fonts(package: Package) -> tuple[dict[str, dict], dict]:
 
     for identifier in direct:
         walk(identifier, set())
-    return resolved, defaults
+    return resolved, defaults, default_styles
 
 
 def font_table(package: Package) -> dict[str, dict]:
@@ -586,8 +591,8 @@ def font_requirements(package: Package) -> list[dict]:
     """Every (family, script) pair the document actually asks for.
 
     Resolution order per run, each step overriding the last: document
-    defaults, the paragraph's style, the paragraph's own run properties, the
-    run's character style, the run's own properties. A family that appears
+    defaults, the paragraph's style, the run's character style, the run's own
+    properties. A family that appears
     only in a style is therefore found, which is the case an ordinary
     well-built template consists of almost entirely.
 
@@ -599,11 +604,11 @@ def font_requirements(package: Package) -> list[dict]:
     invented for a run that names no font anywhere: the honest answer is that
     the document did not say.
     """
-    from .fonts import catalogue
+    from .fonts import catalogue, normalise_family
 
     themes = theme_fonts(package)
-    styles, defaults = style_fonts(package)
-    table = font_table(package)
+    styles, defaults, default_styles = style_fonts(package)
+    table = {normalise_family(family): metadata for family, metadata in font_table(package).items()}
 
     def resolve(family: str) -> str | None:
         if not family.startswith(THEME_MARK):
@@ -644,12 +649,12 @@ def font_requirements(package: Package) -> list[dict]:
 
             blank: dict = {"fonts": {}, "bold": None, "italic": None}
             state = _merge(blank, defaults)
-            state = _merge(
-                state, styles.get(_style_id(paragraph_properties, "pStyle") or "", blank)
+            paragraph_style = _style_id(paragraph_properties, "pStyle") or default_styles.get(
+                "paragraph", ""
             )
-            if paragraph_properties is not None:
-                state = _merge(state, _formatting(paragraph_properties.find(q("w", "rPr"))))
-            state = _merge(state, styles.get(_style_id(properties, "rStyle") or "", blank))
+            state = _merge(state, styles.get(paragraph_style, blank))
+            character_style = _style_id(properties, "rStyle") or default_styles.get("character", "")
+            state = _merge(state, styles.get(character_style, blank))
             state = _merge(state, _formatting(properties))
 
             bold = bool(state["bold"])
@@ -670,7 +675,7 @@ def font_requirements(package: Package) -> list[dict]:
         entry["name"]: entry for entry in catalogue({r["family"] for r in requirements})
     }
     for requirement in requirements:
-        metadata = table.get(requirement["family"])
+        metadata = table.get(normalise_family(requirement["family"]))
         if metadata:
             requirement["metadata"] = metadata
             requirement["embedded"] = bool(metadata.get("embedded"))

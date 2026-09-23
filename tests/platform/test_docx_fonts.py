@@ -135,6 +135,37 @@ def test_a_font_inherited_through_a_style_chain_resolves(tmp_path):
     )
 
 
+def test_the_default_paragraph_style_applies_without_an_explicit_style_id(tmp_path):
+    """Word applies the default paragraph style when w:pStyle is absent."""
+    styles = (
+        f'<w:styles {W}><w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
+        '<w:rPr><w:rFonts w:ascii="Century Gothic"/></w:rPr>'
+        "</w:style></w:styles>"
+    )
+    found = requirements(
+        tmp_path,
+        "<w:p><w:r><w:t>Body</w:t></w:r></w:p>",
+        styles=styles,
+        theme=f"<a:theme {A}></a:theme>",
+    )
+    assert ("Century Gothic", "latin") in found
+
+
+def test_paragraph_mark_properties_do_not_restyle_the_paragraph_text(tmp_path):
+    """w:pPr/w:rPr formats the paragraph mark, not every run in the paragraph."""
+    body = (
+        '<w:p><w:pPr><w:rPr><w:rFonts w:ascii="Courier New"/></w:rPr></w:pPr>'
+        "<w:r><w:t>Body</w:t></w:r></w:p>"
+    )
+    found = requirements(
+        tmp_path,
+        body,
+        styles=f"<w:styles {W}></w:styles>",
+        theme=f"<a:theme {A}></a:theme>",
+    )
+    assert ("Courier New", "latin") not in found
+
+
 def test_weight_is_resolved_through_the_style_too(tmp_path):
     """Whether a bold face is needed decides whether a substitute is adequate."""
     body = '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>'
@@ -225,6 +256,13 @@ def test_matching_metadata_is_attached(tmp_path):
     assert metadata["pitch"] == "variable"
     assert metadata["altName"] == "Questrial"
     assert metadata["unicodeRanges"][0] == "A00002EF"
+
+
+def test_font_table_metadata_lookup_is_case_insensitive(tmp_path):
+    """Family casing can differ between rFonts and fontTable.xml."""
+    body = run_with('<w:rFonts w:ascii="century gothic"/>')
+    metadata = requirements(tmp_path, body)[("century gothic", "latin")]["metadata"]
+    assert metadata["panose"] == "020B0502020202020204"
 
 
 def test_a_family_the_font_table_says_nothing_about_stays_thin(tmp_path):
