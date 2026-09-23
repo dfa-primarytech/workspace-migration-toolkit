@@ -82,14 +82,22 @@ def document(body):
 SECTION = '<w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr></w:p>'
 
 
-def docx_parts(body):
+MEDIA_TYPES = {"png": "image/png", "emf": "image/x-emf", "wav": "audio/wav"}
+
+
+def docx_parts(body, media=None):
+    media = {"image1.png": b"\x89PNG\r\n\x1a\nfixture", **(media or {})}
+    defaults = "".join(
+        f'<Default Extension="{extension}" ContentType="{MEDIA_TYPES[extension]}"/>'
+        for extension in sorted({name.rsplit(".", 1)[1] for name in media})
+    )
     return {
         "[Content_Types].xml": (
             f'<Types xmlns="{CONTENT_NS}">'
             '<Default Extension="xml" ContentType="application/xml"/>'
             '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.'
             'relationships+xml"/>'
-            '<Default Extension="png" ContentType="image/png"/>'
+            f"{defaults}"
             f'<Override PartName="/word/document.xml" ContentType="{DOCX_MAIN_MIME}"/>'
             "</Types>"
         ),
@@ -98,13 +106,13 @@ def docx_parts(body):
             f'Type="{NS["r"]}/officeDocument" Target="word/document.xml"/></Relationships>'
         ),
         "word/document.xml": document(body),
-        "word/media/image1.png": b"\x89PNG\r\n\x1a\nfixture",
+        **{"word/media/" + name: data for name, data in media.items()},
     }
 
 
-def write_docx(path, body):
+def write_docx(path, body, media=None):
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name, content in docx_parts(body).items():
+        for name, content in docx_parts(body, media).items():
             archive.writestr(name, content)
     return path
 
@@ -467,15 +475,15 @@ class FakeGoogle:
         return self.exported
 
 
-def converted_job(tmp_path, body, **kwargs):
+def converted_job(tmp_path, body, media=None, **kwargs):
     root = tmp_path / "job"
     root.mkdir()
-    write_docx(root / "source.docx", body)
+    write_docx(root / "source.docx", body, media)
     manifest = asyncio.run(preflight_manifest(root))
     google = FakeGoogle(**kwargs)
     from workspace_toolkit.docs import convert
 
-    report = asyncio.run(convert(root, manifest, google, output_name="Worksheet – converted"))
+    report = asyncio.run(convert(root, manifest, google, original_name="Worksheet"))
     return report, google
 
 
@@ -527,12 +535,34 @@ def test_an_account_without_word_import_fails_before_uploading(tmp_path):
     assert [w for w in report["warnings"] if w["code"] == "conversion_unavailable"]
 
 
-def test_recovered_media_is_saved_alongside_the_document(tmp_path):
+def test_a_picture_the_importer_keeps_is_not_copied_out_beside_the_document(tmp_path):
+    """The copies are for what the import drops, not for what it carries.
+
+    A worksheet of 65 photographs produced 65 uploads, 65 files to scroll past
+    and 65 chances to be throttled -- all for pictures that had already arrived
+    inside the document safely.
+    """
     body = anchor(PICTURE) + SECTION
     report, google = converted_job(tmp_path, body)
-    assert [u["name"] for u in google.uploads[1:-1]], "assets should be uploaded"
-    assert report["assetOutputs"][0]["kind"] == "image"
+
+    assert report["assetOutputs"] == [], "an ordinary PNG needs no second copy"
+    assert report["assetsNotCopied"] == 1, "and the report should say one was skipped"
     assert google.uploads[-1]["name"] == "Conversion report.json"
+
+
+def test_media_the_importer_drops_is_copied_out_and_named(tmp_path):
+    """Sound on a slide, an OLE object, a picture format no browser draws."""
+    body = anchor(PICTURE) + SECTION
+    report, google = converted_job(tmp_path, body, media={"clip.wav": b"RIFF\x00\x00\x00\x00WAVE"})
+
+    saved = [u["name"] for u in google.uploads[1:-1]]
+    # Named after the document, with a suffix, rather than left as a digest. A
+    # document gets no page number: nothing in its manifest links a picture to
+    # one, and its "pages" are section breaks rather than printed pages.
+    assert saved == ["Worksheet – audio 1.wav"], saved
+    assert report["assetOutputs"][0]["kind"] == "audio"
+    assert report["assetOutputs"][0]["name"] == "Worksheet – audio 1.wav"
+    assert report["assetsNotCopied"] == 1, "the PNG beside it is still skipped"
 
 
 def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
@@ -766,7 +796,9 @@ def test_a_refused_asset_copy_still_leaves_the_document_verified(tmp_path):
     document's own verification -- reporting a good conversion as failed.
     """
     body = anchor(PICTURE) + SECTION
-    report, google = converted_job(tmp_path, body, refuse_assets=True)
+    report, google = converted_job(
+        tmp_path, body, media={"clip.wav": b"RIFF\x00\x00\x00\x00WAVE"}, refuse_assets=True
+    )
 
     assert report["status"] == "completed_with_warnings", "the document itself uploaded fine"
     assert report["verification"] == "text_checked", "verification must not be skipped"

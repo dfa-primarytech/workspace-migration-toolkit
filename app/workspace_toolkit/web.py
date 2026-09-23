@@ -176,7 +176,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 manifest,
                                 Google(session["access_token"], client),
                                 progress,
-                                output_name=Path(filename).stem + " – converted",
+                                original_name=Path(filename).stem,
                             )
                 except TimeoutError:
                     if progress.get("folderUrl"):

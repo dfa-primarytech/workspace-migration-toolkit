@@ -23,6 +23,23 @@ Still unmeasured: whether the offsets of in-cell floating images survive, and
 whether Google de-duplicates images stacked at identical offsets. The latter
 is the standing explanation for 12 lost image placements and is not yet tested.
 
+**Only what the import drops is copied, and it is named.** Every picture in
+a document was being copied out beside it: 65 photographs became 65 uploads,
+65 files to scroll past and 65 chances to be throttled, for pictures the
+importer had already carried in safely. Only embedded audio, video, OLE
+objects and picture formats no browser draws are copied now -- which was the
+original point of the copies. Corrected by the human.
+
+The copies that remain are named. Every private copy went to Drive as a
+bare SHA-256 with no extension, which made the safety net unusable: putting a
+picture back into a deck by hand means knowing which slide wanted it. Copies are
+now named `<source> - slide NN - image N.ext`, numbered in deck order, with the
+slide numbers zero-padded so the folder sorts the way the deck runs. A document
+gets no page number, because nothing in a `.docx` manifest links an asset to a
+page and its `pages` are section breaks rather than printed pages. The asset id
+moves into the report beside the name, so a file in Drive can still be matched
+to the manifest. Asked for by the human.
+
 
 ## Coordination
 
