@@ -373,8 +373,13 @@ def test_pipeline_selection_is_driven_by_the_filename():
 
     assert resolve("term plan.docx").fmt.key == "docx"
     assert resolve("assembly.PPTX").fmt.key == "pptx"
+    # Spreadsheets became supported when the XLSX pipeline landed; this
+    # previously asserted they were not, which is how the capability change
+    # announced itself.
+    assert resolve("budget.xlsx").fmt.key == "xlsx"
+    assert resolve("budget.xlsm").fmt.key == "xlsm"
     with pytest.raises(ToolkitError) as excinfo:
-        resolve("budget.xlsx")
+        resolve("newsletter.pub")
     assert excinfo.value.code == "unsupported_type"
 
 

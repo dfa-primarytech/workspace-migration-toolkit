@@ -10,10 +10,11 @@ from .docx import analyse as analyse_docx
 from .errors import ToolkitError
 from .pptx import analyse as analyse_pptx
 from .pptx import render_path as render_pptx
+from .xlsx import analyse as analyse_xlsx
 
 # Deliberately not importing the pipelines registry: that pulls in the Google
 # client, and this subprocess must never hold credentials or reach the network.
-ANALYSERS = {"pptx": analyse_pptx, "docx": analyse_docx}
+ANALYSERS = {"pptx": analyse_pptx, "docx": analyse_docx, "xlsx": analyse_xlsx, "xlsm": analyse_xlsx}
 
 
 def main() -> None:

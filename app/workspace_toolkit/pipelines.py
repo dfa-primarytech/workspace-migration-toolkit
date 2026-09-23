@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import docs, docx, google, pptx
+from . import docs, docx, google, pptx, sheets, xlsx
 from .errors import ToolkitError
-from .package import DOCX, PPTX, Format
+from .package import DOCX, PPTX, XLSM, XLSX, Format
 
-SUPPORTED = ".pptx and .docx"
+SUPPORTED = ".pptx, .docx, .xlsx and .xlsm"
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,20 @@ PIPELINES: dict[str, Pipeline] = {
         convert=docs.convert,
         kind="document",
         destination="Google Docs",
+    ),
+    ".xlsx": Pipeline(
+        fmt=XLSX,
+        analysis_report=xlsx.analysis_report,
+        convert=sheets.convert,
+        kind="spreadsheet",
+        destination="Google Sheets",
+    ),
+    ".xlsm": Pipeline(
+        fmt=XLSM,
+        analysis_report=xlsx.analysis_report,
+        convert=sheets.convert,
+        kind="spreadsheet",
+        destination="Google Sheets",
     ),
 }
 
