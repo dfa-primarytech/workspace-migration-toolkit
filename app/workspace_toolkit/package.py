@@ -142,6 +142,7 @@ class Package:
             ):
                 raise ToolkitError("zip_limits", "The expanded file exceeds processing limits.")
             self.names.add(name)
+        self._by_casefold = {name.casefold(): name for name in self.names}
         fmt = self.format
         if "[Content_Types].xml" not in self.names or fmt.main_part not in self.names:
             raise ToolkitError("invalid_package", f"The file is not a valid {fmt.key} package.")
@@ -238,6 +239,7 @@ class Package:
             target = rel.get("Target", "")
             external = rel.get("TargetMode") == "External"
             resolved = None
+            missing = False
             if not external:
                 decoded = unquote(target)
                 if "\\" in decoded or "\x00" in decoded or urlsplit(decoded).scheme:
@@ -250,11 +252,18 @@ class Package:
                     if decoded.startswith("/")
                     else posixpath.join(posixpath.dirname(part), decoded)
                 )
-                if resolved.startswith("../") or resolved == ".." or resolved not in self.names:
+                if resolved.startswith("../") or resolved == "..":
                     raise ToolkitError(
-                        "missing_relationship",
-                        "The file contains a missing or unsafe component link.",
+                        "unsafe_relationship", "The file contains an unsafe component link."
                     )
+                # OPC part names are case-insensitive, so Word and PowerPoint
+                # follow "Styles.xml" to word/styles.xml; so do we.
+                resolved = self._by_casefold.get(resolved.casefold())
+                # A link to a part that is not there is a defect, not a threat:
+                # some generators write Target="../NULL" for a removed picture,
+                # and Office opens those files. Record it for the caller to
+                # report rather than refusing the whole file (issue #47).
+                missing = resolved is None
             result.append(
                 {
                     "id": rid,
@@ -262,6 +271,7 @@ class Package:
                     "target": target,
                     "external": external,
                     "resolved": resolved,
+                    "missing": missing,
                 }
             )
         return result

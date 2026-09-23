@@ -156,6 +156,46 @@ def test_relationship_escape_rejected(tmp_path):
         analyse(write_pptx(tmp_path / "bad.pptx", parts), tmp_path / "out")
 
 
+def test_a_link_to_a_missing_part_is_reported_not_fatal(tmp_path):
+    """Issue #47: some generators write Target="../NULL" for a removed picture.
+
+    PowerPoint opens those files, so refusing the whole presentation over one
+    dead link is worse than useless. It is read, and the link is reported.
+    """
+    parts = fixture_parts()
+    rels = "ppt/slides/_rels/slide2.xml.rels"
+    parts[rels] = parts[rels].replace(
+        "</Relationships>",
+        f'<Relationship Id="dead" Type="{NS["r"]}/image" Target="../NULL"/></Relationships>',
+    )
+    manifest = analyse(write_pptx(tmp_path / "null.pptx", parts), tmp_path / "out")
+    missing = [w for w in manifest["warnings"] if w["code"] == "relationship_target_missing"]
+    assert [(w["part"], w["relationshipId"]) for w in missing] == [
+        ("ppt/slides/slide2.xml", "dead")
+    ]
+    assert len(manifest["pages"]) == 2
+
+
+def test_a_missing_slide_is_still_refused(tmp_path):
+    # A dead picture link loses a picture; a dead slide link loses the order
+    # of the whole deck, so that one stays fatal.
+    parts = fixture_parts()
+    del parts["ppt/slides/slide1.xml"]
+    with pytest.raises(ToolkitError) as error:
+        analyse(write_pptx(tmp_path / "noslide.pptx", parts), tmp_path / "out")
+    assert error.value.code == "invalid_slide_order"
+
+
+def test_links_resolve_case_insensitively(tmp_path):
+    # OPC part names are case-insensitive; Office follows "Slide1.XML".
+    parts = fixture_parts()
+    rels = "ppt/_rels/presentation.xml.rels"
+    parts[rels] = parts[rels].replace("slides/slide1.xml", "Slides/Slide1.XML")
+    manifest = analyse(write_pptx(tmp_path / "case.pptx", parts), tmp_path / "out")
+    assert manifest["pages"][1]["sourcePart"] == "ppt/slides/slide1.xml"
+    assert not [w for w in manifest["warnings"] if w["code"] == "relationship_target_missing"]
+
+
 @pytest.mark.parametrize(
     "filename,mime",
     [

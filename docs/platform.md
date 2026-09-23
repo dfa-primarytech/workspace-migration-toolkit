@@ -116,8 +116,10 @@ not retain OAuth callback query strings or credentials.
 ## Input boundaries
 
 Validate extension, transport MIME, ZIP signature and PowerPoint main content type.
-Reject macros, encrypted/unsupported compression, unsafe/duplicate paths, dangling
-internal relationships and unsafe XML. Default limits: 5,000 ZIP entries, 200 MiB
+Reject macros, encrypted/unsupported compression, unsafe/duplicate paths, internal
+relationships that escape the package, and unsafe XML. A relationship to a part
+that is simply absent is reported (`relationship_target_missing`), not fatal,
+unless it is a slide; part names resolve case-insensitively. Default limits: 5,000 ZIP entries, 200 MiB
 expanded package, 50 MiB per entry, 8 MiB per XML part, compression ratio 200:1,
 and 500,000 elements per XML part, counted while it is parsed. For real
 documents the 8 MiB part limit binds first: Word writes about 38 bytes per
