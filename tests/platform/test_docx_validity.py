@@ -39,6 +39,7 @@ from .test_docx import (
     run,
     write_docx,
 )
+from .test_docx_fields import POLICY as POLICY_WITH_CONTENTS
 from .test_docx_rtl import ARABIC, rtl_anchor
 from .test_docx_sections import (
     A4_LANDSCAPE,
@@ -271,6 +272,23 @@ def test_a_right_to_left_box_produces_a_package_that_still_opens(tmp_path):
     converted = convert_fixture(tmp_path, body)
     pdf = soffice_convert(converted, "pdf", tmp_path / "out")
     assert "RTLMARKER" in rendered_text(pdf), "the right-to-left text box did not reach the page"
+
+
+@needs_pdftotext
+def test_a_document_with_a_contents_page_still_opens_and_renders(tmp_path):
+    """Fields are markers in a flat run, and a broken pair is easy to emit.
+
+    An unbalanced `fldChar` sequence is the kind of damage our own parser
+    would read back happily, so this asks a reader that owes us nothing. The
+    heading is checked rather than the contents entry: whether LibreOffice
+    regenerates the TOC on open is its business, not a claim we make.
+    """
+    body = POLICY_WITH_CONTENTS
+    converted = convert_fixture(tmp_path, body)
+    pdf = soffice_convert(converted, "pdf", tmp_path / "out")
+    assert "Safeguarding" in rendered_text(pdf), (
+        "the document behind the contents page did not reach the rendered page"
+    )
 
 
 @needs_soffice

@@ -24,8 +24,27 @@ import, the specification and these coordination files, after #8 merged.
 `main` now also carries the DOCX parser, Google Docs renderer and the
 web/job/Drive wiring. A `.docx` converts by the same route as a `.pptx`, chosen
 by a pipeline registry; headers and footers get the same structural passes as
-the body. 87 Python tests pass: 48 platform, 39 DOCX. Ruff, formatting, mypy,
-Bandit and the secret scan are clean, and CI is green on main.
+the body.
+
+Four further DOCX milestones merged (#18 `2d5e0f3`, #19 `e7ec4d3`, #21
+`68f9eab`):
+
+* **Multi-section documents.** A text box anchored to a section-break paragraph
+  had its converted table placed in the *next* section, so portrait content
+  could render landscape. Nothing errored and no count changed. Fixed, and the
+  fixtures now cover the body-level `sectPr` shape that every real worksheet
+  uses and no fixture previously had.
+* **Right-to-left.** Direction already survived, because the converter
+  relocates markup rather than rebuilding it; that is now pinned. What was
+  missing was direction on the parts the converter *creates* -- the table, an
+  empty cell's filler paragraph, table separators.
+* **Equations.** They survive intact. The finding was that `verify()` compared
+  `<w:t>` tokens only, so a lost equation was invisible to it. Counted and
+  reported as unverified instead.
+
+186 Python tests pass, 41 skip (LibreOffice and Publisher fixtures). Ruff,
+formatting, mypy, Bandit and the secret scan are clean, and CI is green on
+main.
 
 The Apps Script fixer under `src/` is legacy and frozen. No further work is
 planned on it; its 19 Node regression tests still pass and it remains deployed
