@@ -41,6 +41,49 @@ moves into the report beside the name, so a file in Drive can still be matched
 to the manifest. Asked for by the human.
 
 
+## The worksheet, measured end to end, 23 September 2026
+
+The Place Value worksheet was run through the converter locally and its output
+inspected element by element, rather than judged from the report. That is how
+every item below was found, and it is the method the next person should use.
+
+**The report could not measure its own repairs.** `picturesInlined`,
+`tablesNarrowed` and `picturesShrunk` were dropped twice on the way out -- by the
+per-part aggregation and again by the report's filter -- so a run made
+specifically to measure #34 and #35 reported none of them. Fixed in #41 along
+with `fontSubstitutions`, which meant a typeface was being swapped in silence.
+
+**Every table claimed a width its grid had lost.** Word wrote `w:tblW` as
+`11504.0`; the schema allows a decimal and `int()` does not, so the width
+measured as nothing and survived a narrowing that moved every column under it.
+All twelve tables declared themselves three quarters of an inch wider than the
+paper. #41.
+
+**Where the pictures actually were.** Of 136 anchored pictures, 83 were already
+inside a cell and #34 had inlined them. The other 45 were anchored to the
+*paragraph above* the table they belonged to. #57 and #63 place all 45: the
+column is exact from the grid, the row comes from the order the pictures are
+stacked in, and a page-relative offset is resolved against the margin. The
+worksheet now has nothing floating at all -- 128 inline pictures, all in cells.
+
+**Two fixes can collide.** #42's blank lines and #34's inlining both supply the
+same vertical space: 32 cells carried 9.7in of blank lines on top of 63.8in of
+picture. #60 lifts the protection only in a cell that has just gained a picture.
+This is the kind of defect that only appears when two correct changes meet, and
+only on a real document.
+
+**What the reference document does not prove.** The hand-repaired worksheet
+keeps 128 floating anchors and zero inline pictures. It was judged correct as a
+**PDF**, where absolute positioning renders exactly. That says nothing about the
+Google Docs importer, which is where the problem is. Do not copy its approach.
+
+Still true, and the thing most worth fixing next: **nobody has looked at the
+converted output**. Every quality judgement so far has come from the human's
+eyes. #53 is the structural answer and is blocked on a live scope spike --
+whether `drive.file` reaches `documents.get` and `files.export` on a file this
+app created. Nothing has been verified there yet.
+
+
 ## Coordination
 
 SilentMountain coordinated until 23 September 2026 and has run out of budget.
