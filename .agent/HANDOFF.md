@@ -1,5 +1,21 @@
 # Handoff
 
+- Agent: Claude Code / QuietHeron, working the issue queue at the human's request
+- Date: 2026-09-23
+- Branches: `fix/xml-element-limit` (#59, fixes #46), `fix/dangling-relationships` (#61, fixes #47, stacked on #59), `fix/pptx-font-rewrite-scope` (this branch, fixes #50). All based on main `6ae8dee`.
+- Objective: the platform issues from the audit that don't touch the DOCX renderer, where SilverDog has #57 open.
+- Completed: #46: XML elements counted during parsing, limit a setting (500,000), message names the limit. #47: a relationship to an absent part is reported, not fatal (a missing slide still is); resolution is case-insensitive. #50: the PPTX font rewrite touches only `<a:latin>` start tags, skips the symbol charset, and drops the stale PANOSE, pitch and charset. Closed the legacy Apps Script issues #1–#4 as not planned, at the human's request.
+- Checks: each branch passes the platform suite locally (259 / 262 / 261 passed, 8 skipped); ruff, format, mypy and bandit clean.
+- Known failures: none.
+- Unresolved: PPTX still applies MEDIUM-confidence candidates automatically where DOCX applies HIGH only. That's the shared font service owner's decision (#27, `docs/publisher-font-audit.md`) and is not changed here.
+- Decisions: none new.
+- Next task: merge #59 before #61. DOCX issues #44, #48 and #49 are left for SilverDog. #36, #51, #52, #53, #54 and #55 remain.
+- Warnings: agent-mail is still unavailable to this session (no registration token), so issues were claimed by GitHub comment instead.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron, standing in on DOCX at the human's request
 - Date: 2026-09-23
 - Branch: `fix/docx-blank-lines-and-text-check`, based on main `5510749`
