@@ -146,7 +146,10 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
     report = asyncio.run(run())
     assert report["status"] == "completed_with_warnings"
     assert report["verification"] == "page_size_count_and_text_checked"
-    assert len(report["assetOutputs"]) == 3
+    # Only the sound and the film: the deck's picture imports into Slides on
+    # its own, so a second copy of it beside the deck preserves nothing.
+    assert [output["kind"] for output in report["assetOutputs"]] == ["audio", "video"]
+    assert report["assetsNotCopied"] == 1
     assert uploads[0]["mimeType"] == "application/vnd.google-apps.presentation"
     assert uploads[0]["name"] == "School assembly – converted"
     # The saved copies reach Drive under the names, not the digests: this is the

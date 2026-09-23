@@ -454,6 +454,25 @@ def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     return names
 
 
+# Google's importer brings ordinary pictures into the document itself, so
+# copying them out beside it preserves nothing: a worksheet's 65 photographs
+# became 65 uploads, 65 files to scroll past, and 65 chances to be throttled,
+# all for pictures that had already arrived safely. What the importer really
+# does drop is embedded audio, video and OLE objects -- the sound on a slide,
+# the spreadsheet inside a report -- and picture formats no browser draws.
+# Those are the copies worth making.
+DRAWN_BY_BROWSERS = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp", "image/svg+xml"}
+)
+
+
+def at_risk(asset: dict) -> bool:
+    """Whether the importer is likely to drop this, making a copy worth keeping."""
+    if asset.get("kind") != "image":
+        return True  # audio, video and embedded objects do not survive the import
+    return asset.get("mimeType", "").split(";", 1)[0].strip().lower() not in DRAWN_BY_BROWSERS
+
+
 async def save_assets(
     result: Path,
     manifest: dict,
@@ -472,10 +491,16 @@ async def save_assets(
     it belongs, so each copy is named after the deck and the slide it came from.
     The report keeps the asset id beside that name, so a file in Drive can still
     be matched to the manifest.
+
+    Only what the importer is likely to drop is copied. Everything the document
+    kept is already in the document, and a folder holding a second copy of it is
+    not a safety net, only clutter to search through.
     """
     names = asset_names(manifest, original_name)
+    at_hazard = [asset for asset in manifest["assets"].values() if at_risk(asset)]
+    report["assetsNotCopied"] = len(manifest["assets"]) - len(at_hazard)
     failures: list[str] = []
-    for asset in manifest["assets"].values():
+    for asset in at_hazard:
         try:
             saved = await google.upload(
                 result / asset["path"],
@@ -500,12 +525,12 @@ async def save_assets(
         report["warnings"].append(
             warning(
                 "asset_copies_incomplete",
-                f"{len(failures)} of {len(manifest['assets'])} private asset copies "
+                f"{len(failures)} of {len(at_hazard)} private asset copies "
                 "could not be saved to Drive. The converted file itself is unaffected; "
                 "these copies are only a fallback for recovering anything the importer drops.",
                 classification=C.IGNORED,
-                attempted=len(manifest["assets"]),
-                saved=len(manifest["assets"]) - len(failures),
+                attempted=len(at_hazard),
+                saved=len(at_hazard) - len(failures),
                 reasons=sorted(set(failures)),
             )
         )
