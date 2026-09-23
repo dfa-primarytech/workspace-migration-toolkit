@@ -125,6 +125,72 @@ What the service already covers well is exactly this trust's estate: Century
 Gothic, Comic Sans and Sassoon Primary/Infant all have reviewed mappings, and
 the accessibility-sensitive ones are marked `manualReview`.
 
+## Matching metadata for a large catalogue
+
+Matching against a full Google Fonts catalogue rather than a short alias table
+needs more than a name. OOXML already carries most of it in
+`word/fontTable.xml`, one `w:font` entry per family — and **none of it is read
+today**. Verified against a fixture in `tests/platform/test_docx_fonts.py`
+rather than quoted from the spec.
+
+| Property | Element | What it gives a matcher |
+|---|---|---|
+| PANOSE | `w:panose1/@w:val` | Ten-byte classification: family kind, serif style, weight, proportion, contrast, stroke variation, arm style, letterform, midline, x-height |
+| Generic family | `w:family/@w:val` | `roman` / `swiss` / `modern` / `script` / `decorative` / `auto` |
+| Pitch | `w:pitch/@w:val` | `fixed` vs `variable` — a monospaced source must not become proportional |
+| Charset | `w:charset/@w:val` | Windows charset byte; `02` is the symbol charset |
+| Unicode coverage | `w:sig/@w:usb0..usb3` | Bitfield of Unicode ranges the font claims; the constraint that keeps a substitute script-capable |
+| Codepage coverage | `w:sig/@w:csb0..csb1` | Codepages claimed, including the symbol codepage |
+| Alternate name | `w:altName/@w:val` | The author's own fallback, which is a stronger signal than any similarity score |
+| Embedding | `w:embedRegular` / `Bold` / `Italic` / `BoldItalic` | Glyphs travel with the document; no substitution needed |
+
+Per *requirement* rather than per family, the resolved script slot, language,
+weight and style still have to come from the run and its styles, as in the
+table at the top of this document. `fontTable.xml` describes the family;
+`rPr` describes how it was used.
+
+### Symbol and bullet fonts are a separate class
+
+Not a family to match but a family to leave alone. The glyph at `F0FC` in
+Wingdings is a tick because the font says so, not because that code point
+means tick — so any similarity match, however good, turns a tick-box worksheet
+into letters.
+
+Two properties identify these without maintaining a list of names:
+`w:charset` `02`, and PANOSE family kind `5` (Latin Pictorial). Detecting the
+class beats enumerating it, because the estate will contain symbol fonts
+nobody has thought of.
+
+Bullet glyph fonts in `numbering.xml` belong to the same class and are the
+likelier route to a visible break, since a bullet is on every page of a policy.
+
+### What is absent or unreliable
+
+Stated plainly, because a matcher that trusts thin metadata is worse than one
+that declines to guess.
+
+* **Word writes only what it knew.** `fontTable.xml` is produced from the
+  authoring machine's installed fonts. A family that was missing when the
+  document was last saved can appear with a name and nothing else — the
+  fixture covers exactly this case, an entry with no PANOSE and no `w:sig`.
+  That entry cannot be scored, and the honest result is `UNKNOWN`.
+* **PANOSE is self-declared and often generic.** Many fonts ship all-zero or
+  partially filled PANOSE. A zero classification is absence, not a description
+  of a plain font, and treating it as a vector risks matching every under-
+  described family to the same substitute.
+* **`w:sig` is a claim, not a measurement.** The usb bits state what the font
+  says it covers. They are useful as a *constraint* — rejecting a substitute
+  that does not claim the needed range — and weak as evidence that rendering
+  will be correct.
+* **Coverage of the estate is unmeasured.** How often these properties are
+  present and accurate in this trust's real documents is unknown: the sample
+  worksheets are not on the machine, and none of this has been checked against
+  a real file. The shape below is verified; the statistics are not.
+
+None of this needs a scorer in DOCX. The obligation is to surface the evidence
+and to preserve `UNKNOWN` when the evidence is too thin, rather than
+manufacturing a family name for the service to match on.
+
 ## Sequencing
 
 DOCX cannot supply any of this yet. The theme and style gaps above mean the
@@ -132,10 +198,15 @@ font list itself is unreliable, so integration has to wait on resolution
 rather than the other way round:
 
 1. resolve theme, style, script and font-table inputs (items 1–3, 5 above)
-2. then call `catalogue()` over the resolved families
-3. report each non-`AVAILABLE` family in the conversion report, in the same
+2. surface `fontTable.xml` metadata alongside each family, and mark the
+   symbol/bullet class separately
+3. then call `catalogue()` over the resolved families
+4. report each non-`AVAILABLE` family in the conversion report, in the same
    shape as equations and computed fields: say what changed, name what was not
    verified, and let a person look
+
+No scorer and no font binaries in the DOCX stream. It supplies evidence; the
+shared service decides, and `UNKNOWN` stands wherever the evidence is thin.
 
 ## Not claimed here
 
