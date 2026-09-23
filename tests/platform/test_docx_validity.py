@@ -39,6 +39,7 @@ from .test_docx import (
     run,
     write_docx,
 )
+from .test_docx_rtl import ARABIC, rtl_anchor
 from .test_docx_sections import (
     A4_LANDSCAPE,
     A4_PORTRAIT,
@@ -245,6 +246,31 @@ def test_a_box_on_the_section_break_is_laid_out_on_its_own_sections_page(tmp_pat
         f"expected page {portrait + 1} with 'Portrait body', found it on page "
         f"{card + 1}. pages={pages}"
     )
+
+
+@needs_pdftotext
+def test_a_right_to_left_box_produces_a_package_that_still_opens(tmp_path):
+    """One independent reader opens a package carrying `w:bidiVisual`.
+
+    That is the whole claim, and it is worth being exact about how narrow it
+    is. This is an interoperability check for this one fixture, not schema
+    validation: LibreOffice is tolerant, so it passing does not establish that
+    the `CT_TblPrBase` child order is correct, only that this file did not
+    defeat it. The ordering itself is asserted directly against the emitted
+    XML in `test_docx_rtl.py`.
+
+    It says nothing at all about Arabic *visual* order -- the Latin marker
+    rides inside the right-to-left paragraph precisely so the assertion does
+    not depend on how a text extractor handles bidirectional runs, which means
+    it also cannot speak to whether those runs were laid out correctly.
+
+    Whether Google imports any of this faithfully is a separate question again,
+    and still needs human eyes on a real conversion.
+    """
+    body = rtl_anchor("RTLMARKER " + ARABIC) + SECTION
+    converted = convert_fixture(tmp_path, body)
+    pdf = soffice_convert(converted, "pdf", tmp_path / "out")
+    assert "RTLMARKER" in rendered_text(pdf), "the right-to-left text box did not reach the page"
 
 
 @needs_soffice
