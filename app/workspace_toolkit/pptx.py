@@ -9,7 +9,6 @@ from pathlib import Path
 
 # Type annotation only; XML parsing always uses defusedxml.
 from xml.etree.ElementTree import Element  # nosec B405
-from xml.sax.saxutils import escape
 
 from .config import Settings
 from .errors import ToolkitError
@@ -427,7 +426,14 @@ def _substitute_typefaces(data: bytes, applied: Counter[tuple[str, str]]) -> byt
         ):
             return match.group(0)
         applied[(original, replacement)] += 1
-        encoded = escape(replacement, {'"': "&quot;", "'": "&apos;"}).encode("utf-8")
+        encoded = (
+            replacement.replace("&", "&amp;")
+            .replace('"', "&quot;")
+            .replace("'", "&apos;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .encode("utf-8")
+        )
         return match.group(1) + match.group(2) + encoded + match.group(2)
 
     return TYPEFACE.sub(replace, data)
