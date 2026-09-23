@@ -486,21 +486,39 @@ def make_inline_drawing(rid: str, cx: int, cy: int, name: str, ids: Ids) -> Elem
     return drawing
 
 
-def remove_empty_paragraphs(root: Element) -> None:
-    """Removes paragraphs left hollow once their only content was relocated.
+def empty_paragraphs(root: Element) -> set[Element]:
+    """Paragraphs with nothing in them but properties, as the part stands now."""
+    return {p for p in root.iter(q("w", "p")) if _is_empty(p)}
 
-    Deliberately conservative. Listing "text bearing" tags instead loses
-    fields, footnote and comment references, symbols, embedded objects and
-    bookmarks -- all real content that simply is not <w:t>.
+
+def remove_empty_paragraphs(root: Element, already_empty: set[Element]) -> None:
+    """Removes paragraphs this converter emptied, and only those.
+
+    A paragraph whose only content was an ink annotation, or a fallback branch
+    with no choice, has nothing left once that content is gone; leaving it
+    would add a blank line the author never typed.
+
+    A paragraph that was *already* empty is the author's own blank line --
+    answer space on a worksheet, spacing in a letter, or a page break carried
+    by `w:pageBreakBefore`. Those are layout, not residue, so `already_empty`
+    (taken before any pass ran) is never touched. Removing them was issue #42:
+    pages merged and worksheets lost their writing space.
+
+    Deliberately conservative about emptiness too. Listing "text bearing" tags
+    instead loses fields, footnote and comment references, symbols, embedded
+    objects and bookmarks -- all real content that simply is not <w:t>.
     """
     for container, paragraph in _pairs(root, q("w", "p")):
+        if paragraph in already_empty or not _is_empty(paragraph):
+            continue
         properties = paragraph.find(q("w", "pPr"))
         # The final paragraph of a section carries sectPr: page size, margins
         # and orientation all live there.
         if properties is not None and properties.find(q("w", "sectPr")) is not None:
             continue
-        # OOXML requires every <w:tc> to end with a paragraph.
-        if local(container.tag) == "tc" and len(container.findall(q("w", "p"))) <= 1:
+        # A cell, header, footer or text box must keep at least one paragraph;
+        # <w:hdr/> or a <w:tc> with none is invalid.
+        if len(container.findall(q("w", "p"))) <= 1:
             continue
         # A paragraph wedged between two tables is what stops them merging.
         siblings = list(container)
@@ -508,8 +526,11 @@ def remove_empty_paragraphs(root: Element) -> None:
         if 0 < at < len(siblings) - 1:
             if local(siblings[at - 1].tag) == "tbl" and local(siblings[at + 1].tag) == "tbl":
                 continue
-        if not any(not _hollow(child) for child in paragraph):
-            container.remove(paragraph)
+        container.remove(paragraph)
+
+
+def _is_empty(paragraph: Element) -> bool:
+    return all(_hollow(child) for child in paragraph)
 
 
 def _hollow(element: Element) -> bool:
@@ -898,6 +919,8 @@ def _cell_width(cell: Element, parent_of: dict) -> int:
 def transform(root: Element, ids: Ids | None = None) -> dict:
     """Applies every pass, in the order they depend on each other."""
     ids = ids or Ids()
+    # Before anything moves: which blank lines are the author's own.
+    already_empty = empty_paragraphs(root)
     strip_fallbacks_keep_choice(root)
     # Ink runs go first, so replace_anchors never sees them -- which is why the
     # count is carried across rather than taken from that pass.
@@ -911,7 +934,7 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     # Last: the tables must hold every picture that is going to end up in them
     # before they can be measured against the page.
     report.update(fit_tables_to_page(root))
-    remove_empty_paragraphs(root)
+    remove_empty_paragraphs(root, already_empty)
     return report
 
 
@@ -1244,9 +1267,53 @@ def source_text(root: Element) -> str:
 
     The field instruction is preserved either way; what is dropped here is only
     the stale answer, not the question.
+
+    Words are rebuilt the way a reader sees them, because the export they are
+    compared with is read the same way (issue #43):
+
+    * Runs within a paragraph are joined with nothing between them. Word splits
+      one word across runs all the time -- a revision, a spell-check, bold on
+      one letter -- and joining with a space turned "Photosynthesis" into two
+      tokens the export never contains.
+    * Paragraphs, tabs and breaks separate words, as they do on the page.
+    * `mc:Fallback` is skipped. Word writes every text box twice, and counting
+      the legacy copy doubled every word in it.
+    * Hidden runs (`w:vanish`) are skipped: the export does not contain them.
+      Hiding applied through a character style is not resolved.
     """
     skip = _cached_result_text(root)
-    return " ".join((node.text or "") for node in root.iter(q("w", "t")) if id(node) not in skip)
+    pieces: list[str] = []
+    stack: list[Element | None] = [root]
+    while stack:
+        node = stack.pop()
+        if node is None:  # the end of a paragraph
+            pieces.append(" ")
+            continue
+        if not isinstance(node.tag, str) or node.tag == FALLBACK:
+            continue
+        if node.tag == q("w", "t"):
+            # A computed field's cached value still marks a word boundary.
+            pieces.append(" " if id(node) in skip else node.text or "")
+            continue
+        if node.tag in WORD_BREAKS:
+            pieces.append(" ")
+            continue
+        if node.tag == q("w", "r") and _is_hidden(node):
+            continue
+        if node.tag == q("w", "p"):
+            pieces.append(" ")
+            stack.append(None)
+        stack.extend(reversed(list(node)))
+    return "".join(pieces)
+
+
+FALLBACK = q("mc", "Fallback")
+WORD_BREAKS = {q("w", "tab"), q("w", "ptab"), q("w", "br"), q("w", "cr")}
+
+
+def _is_hidden(run: Element) -> bool:
+    vanish = run.find(q("w", "rPr") + "/" + q("w", "vanish"))
+    return vanish is not None and vanish.get(q("w", "val")) not in OFF_VALUES
 
 
 def count_regenerated_fields(root: Element) -> int:

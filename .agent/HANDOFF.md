@@ -1,5 +1,22 @@
 # Handoff
 
+- Agent: Claude Code / QuietHeron, standing in on DOCX at the human's request
+- Date: 2026-09-23
+- Branch: `fix/docx-blank-lines-and-text-check`, based on main `5510749`
+- Objective: fix #42 (the empty-paragraph pass deleted every blank line, page-break paragraph and empty header) and #43 (the post-import text check reported missing text on most real documents).
+- Files changed: `app/workspace_toolkit/docs.py` (`transform`, `remove_empty_paragraphs`, `source_text`), `tests/platform/test_docx_blank_lines.py` (new, 11 tests), coordination files.
+- Completed: `transform` records which paragraphs were already empty before any pass, and `remove_empty_paragraphs` removes only paragraphs a pass emptied (for example by removing ink), never the last paragraph of a cell, header, footer or text box. `source_text` joins runs within a paragraph with nothing, separates paragraphs, tabs and breaks, skips `mc:Fallback` and `w:vanish` runs, and still treats a skipped field result as a word boundary.
+- Checks: 241 platform tests pass, 8 skip (LibreOffice validity tests, as before); ruff, format, mypy and bandit clean.
+- Known failures: none.
+- Unresolved: hidden text applied through a character style is not resolved. Nothing here was run against live Google. The blank-page behaviour of kept separator paragraphs after import is #54's subject, not fixed here.
+- Decisions: none new. The emptiness rule itself is unchanged; only which paragraphs it may act on.
+- Next task: DOCX review by someone other than the author (CURRENT.md notes DOCX has no independent reviewer), then #44/#45.
+- Warnings: agent-mail file reservation was not taken, because this session lost its agent-mail registration token.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-23
 - Branch: `test/publisher-breadth`, based on main `135f744`
