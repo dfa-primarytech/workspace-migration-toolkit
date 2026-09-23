@@ -702,6 +702,21 @@ def _enclosing(parent_of: dict, element: Element | None, name: str) -> Element |
 
 
 def _detach(drawing: Element, anchor: Element) -> None:
+    """Removes the anchor, deliberately leaving `<w:r><w:drawing/></w:r>` behind.
+
+    The empty wrapper is kept because removing it buys nothing: rendering the
+    same converted document with and without the leftovers puts the text in
+    exactly the same place, measured against LibreOffice in
+    test_docx_validity.py. Issue #20 was closed on that evidence.
+
+    It does have one consequence worth knowing before reasoning about
+    remove_empty_paragraphs. A run holding an empty drawing is not `_hollow`,
+    so the paragraph around it is never a candidate for removal at all --
+    whatever else is or is not protecting it. A test written on the assumption
+    that some guard was keeping that paragraph alive would pass with the guard
+    deleted, because the paragraph was never at risk. One in #18 did exactly
+    that.
+    """
     if anchor in list(drawing):
         drawing.remove(anchor)
 
