@@ -291,6 +291,75 @@ def test_a_document_with_a_contents_page_still_opens_and_renders(tmp_path):
     )
 
 
+def _strip_empty_drawings(source: Path, destination: Path) -> int:
+    """Copies a package with childless `<w:drawing>` elements removed.
+
+    Only the drawing element, nothing else -- the run that held it stays. That
+    keeps the experiment to one variable: does the leftover wrapper change the
+    rendered page, or not.
+    """
+    import zipfile as zf
+    from xml.etree.ElementTree import tostring  # nosec B405 -- our own output
+
+    from defusedxml import ElementTree as SafeET
+    from workspace_toolkit.docs import XML_DECLARATION
+    from workspace_toolkit.docx import parents, q
+
+    removed = 0
+    with zf.ZipFile(source) as original, zf.ZipFile(destination, "w", zf.ZIP_DEFLATED) as out:
+        for name in original.namelist():
+            data = original.read(name)
+            if name == "word/document.xml":
+                root = SafeET.fromstring(data)
+                parent_of = parents(root)
+                for drawing in list(root.iter(q("w", "drawing"))):
+                    if len(drawing) == 0:
+                        parent_of[drawing].remove(drawing)
+                        removed += 1
+                data = XML_DECLARATION + tostring(root, encoding="utf-8", xml_declaration=False)
+            out.writestr(name, data)
+    return removed
+
+
+@needs_pdftotext
+def test_whether_the_empty_drawing_residue_changes_the_rendered_page(tmp_path):
+    """The measurement issue #20 is gated on, rather than a speculative fix.
+
+    Every converted anchor leaves `<w:r><w:drawing/></w:r>` behind: `_detach`
+    removes the anchor from the drawing and not the drawing from the run. It is
+    schema-valid, and LibreOffice has been opening it happily throughout, so
+    "it looks fine" is already the evidence in hand. Only a comparison beats
+    that.
+
+    This renders the same converted document twice, once as emitted and once
+    with the leftover wrappers removed, and compares the laid-out text.
+    `-layout` preserves horizontal position and line breaks, so a shifted line
+    or an extra one shows up as a difference.
+
+    If this passes, the residue is inert and issue #20 closes as a note on
+    `_detach`. If it fails, the residue moves content and should be removed --
+    and the failure output says how. Either result is worth having; the
+    present state is that nobody knows.
+    """
+    body = CARD + SECOND_BOX + LEGACY_PICT + anchor(INK) + SECTION
+    converted = convert_fixture(tmp_path, body)
+
+    stripped = tmp_path / "stripped.docx"
+    removed = _strip_empty_drawings(converted, stripped)
+    # Control: with no residue to remove the comparison proves nothing.
+    assert removed >= 2, f"the fixture left no empty drawings to measure: {removed}"
+
+    with_residue = rendered_text(soffice_convert(converted, "pdf", tmp_path / "with"))
+    without_residue = rendered_text(soffice_convert(stripped, "pdf", tmp_path / "without"))
+
+    assert with_residue == without_residue, (
+        f"removing {removed} empty <w:drawing> wrappers changed the rendered "
+        f"page, so the residue is not inert after all.\n"
+        f"--- as emitted ---\n{with_residue!r}\n"
+        f"--- stripped ---\n{without_residue!r}"
+    )
+
+
 @needs_soffice
 def test_a_deliberately_broken_package_is_rejected(tmp_path):
     """Negative control: proves the check can actually detect a bad file.
