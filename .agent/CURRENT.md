@@ -1,5 +1,22 @@
 # Current state
 
+## Coordination
+
+SilentMountain coordinated until 23 September 2026 and has run out of budget.
+The human moved coordination to SilverDog, which also owns the DOCX stream.
+
+**This means DOCX no longer has an independent reviewer, and that is a real
+loss rather than a formality.** SilentMountain caught three defects in DOCX
+work that had passed its author's own checks: equations counted in only one
+part, an explicitly left-to-right text box overridden by its anchor, and a
+user-facing string asserting behaviour Google has never been observed to have.
+Publisher and the platform still get an independent reviewer. DOCX does not.
+Anyone picking this up with budget to spare should review DOCX pull requests.
+
+Unchanged: no merging without the human's approval; nothing claims live Google
+behaviour; no GCP, keys or billable resources; real documents are never
+committed.
+
 ## Who owns what
 
 Three agents work in parallel. Each owns its own branch and file areas, and
