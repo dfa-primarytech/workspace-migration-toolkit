@@ -695,10 +695,17 @@ DEFAULT_CELL_MARGIN_DXA = 108
 
 
 def _measure(element: Element | None, name: str) -> int | None:
+    """A stated width in twips.
+
+    Read as a decimal, not an integer. Word writes `w:w="11504.0"` and the
+    schema allows it, but `int()` refuses it -- so a real worksheet's `w:tblW`
+    measured as nothing, the table's own width was left behind when its columns
+    were narrowed, and the two then disagreed by three quarters of an inch.
+    """
     if element is None:
         return None
     try:
-        return int(element.get(q("w", name), ""))
+        return round(float(element.get(q("w", name), "")))
     except ValueError:
         return None
 
@@ -1014,6 +1021,12 @@ def render(package: Package, destination: Path) -> dict:
     report: dict[str, Any] = {
         "textboxes": 0,
         "pictures": 0,
+        # What the layout passes actually did. These exist to be measured on a
+        # real document: without them "pictures: 128" reads as work done when
+        # the pictures may simply have been counted and left where they were.
+        "picturesInlined": 0,
+        "tablesNarrowed": 0,
+        "picturesShrunk": 0,
         "ink": 0,
         "legacyPictures": 0,
         "equations": 0,
@@ -1050,7 +1063,15 @@ def render(package: Package, destination: Path) -> dict:
         applied.update(apply_substitutions(root, mapping))
         rewritten[name] = serialise(root)
         report["parts"].append(name)
-        for key in ("textboxes", "pictures", "ink", "legacyPictures"):
+        for key in (
+            "textboxes",
+            "pictures",
+            "picturesInlined",
+            "tablesNarrowed",
+            "picturesShrunk",
+            "ink",
+            "legacyPictures",
+        ):
             report[key] += part_report[key]
         for label, count in part_report["unsupported"].items():
             report["unsupported"][label] = report["unsupported"].get(label, 0) + count
@@ -1388,7 +1409,22 @@ async def convert(
         report["conversion"] = {
             k: v
             for k, v in render_report.items()
-            if k in {"textboxes", "pictures", "ink", "equations", "regeneratedFields"}
+            if k
+            in {
+                "textboxes",
+                "pictures",
+                "picturesInlined",
+                "tablesNarrowed",
+                "picturesShrunk",
+                "ink",
+                # A family we swapped is a change to the document, and PROJECT.md
+                # says every change is reported. The Slides path has always shown
+                # this; the Docs path replaced a typeface and said nothing.
+                "fontSubstitutions",
+                "legacyPictures",
+                "equations",
+                "regeneratedFields",
+            }
         }
         report["conversion"]["unsupportedKept"] = render_report.get("unsupported", {})
         report["verification"] = "text_checked"

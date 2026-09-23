@@ -1012,3 +1012,54 @@ def test_a_cell_that_cannot_be_placed_on_the_grid_keeps_its_picture():
 
     assert int(root.find(".//" + q("wp", "extent")).get("cx")) == 5000000
     assert report["picturesShrunk"] == 0
+
+
+def test_a_width_word_wrote_as_a_decimal_is_still_a_width():
+    """Word writes `w:w="11504.0"`, and the schema allows it.
+
+    Read as an integer it measured as nothing at all, so the table's own width
+    survived a narrowing that moved every column under it. A real worksheet
+    came out declaring itself three quarters of an inch wider than the paper
+    while its grid said otherwise, and the two then disagreed for the importer
+    to settle however it liked.
+    """
+    table = wide_table().replace(
+        "<w:tblPr/>", "<w:tblPr><w:tblW w:w='12000.0' w:type='dxa'/></w:tblPr>"
+    )
+    root = parse_xml(document(table + A4_SECTION))
+    report = transform(root)
+
+    assert report["tablesNarrowed"] == 1
+    stated = root.find(".//" + q("w", "tblW")).get(q("w", "w"))
+    assert stated == str(sum(widths(root))), "the table must not claim a width its grid lost"
+    assert "." not in stated, "a width is written back as a whole number of twips"
+
+
+def test_the_layout_passes_say_what_they_did_in_the_report(tmp_path):
+    """Counters that never reach the report cannot measure anything.
+
+    `picturesInlined`, `tablesNarrowed` and `picturesShrunk` were added to
+    diagnose a real document and were dropped twice on the way out -- once by
+    the per-part aggregation and once by the report's own whitelist. A
+    conversion run made to measure them reported none of them.
+    """
+    body = in_cell(anchor(PICTURE)) + SECTION
+    report, _ = converted_job(tmp_path, body)
+    for key in ("picturesInlined", "tablesNarrowed", "picturesShrunk"):
+        assert key in report["conversion"], f"{key} never reaches the report"
+    assert report["conversion"]["picturesInlined"] == 1
+
+
+def test_a_replaced_typeface_is_named_in_the_report(tmp_path):
+    """PROJECT.md: every change is reported.
+
+    A family swapped under #27 was applied silently on the Docs path, though
+    the Slides path had always shown it. "Baskerville became Libre
+    Baskerville" is exactly the kind of thing a person can check; a document
+    that quietly changed typeface is not.
+    """
+    body = para("<w:r><w:rPr><w:rFonts w:ascii='Baskerville'/></w:rPr><w:t>Hello</w:t></w:r>")
+    report, _ = converted_job(tmp_path, body + SECTION)
+
+    substitutions = report["conversion"]["fontSubstitutions"]
+    assert substitutions == {"Baskerville -> Libre Baskerville": 1}, substitutions
