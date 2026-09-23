@@ -27,9 +27,27 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
     assert text["paragraphs"][0]["runs"][0]["text"] == "Hello school"
     assert {a["kind"] for a in manifest["assets"].values()} == {"image", "audio", "video"}
     assert len(manifest["assets"]) == 3  # duplicate image payload is deduplicated
-    assert {f["name"] for f in manifest["fonts"]} == {"Calibri"}
+    assert manifest["fonts"] == [
+        {
+            "name": "Calibri",
+            "status": "SUBSTITUTED",
+            "replacement": "Carlito",
+            "confidence": "high",
+            "reason": "metric-compatible Calibri alternative",
+            "metricCompatible": True,
+            "basis": "curated-substitution",
+            "workspaceAvailability": "unverified",
+            "manualReview": False,
+        }
+    ]
+    assert manifest["declaredFontCompatibility"][0]["replacement"] == "Carlito"
     assert manifest["declaredFonts"] == ["Aptos"]
+    assert {font["name"] for font in manifest["fontRequirements"]} == {"Aptos", "Calibri"}
     assert text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontFamily"] == "Calibri"
+    assert (
+        text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontCompatibility"]["replacement"]
+        == "Carlito"
+    )
     assert "" not in manifest["relationships"]
     assert "_package" in manifest["relationships"]
     assert {w["code"] for w in manifest["warnings"]} >= {
@@ -37,7 +55,13 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
         "transition",
         "external_link",
         "embedded_asset",
+        "font_substitution",
     }
+    assert {
+        warning["font"]
+        for warning in manifest["warnings"]
+        if warning["code"] == "font_substitution"
+    } == {"Aptos", "Calibri"}
     unknown = manifest["pages"][0]["elements"][-1]
     assert unknown["type"] == "unknown" and unknown["classification"] == "UNSUPPORTED"
     assert pptx.read_bytes() == before

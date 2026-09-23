@@ -1,12 +1,15 @@
 import asyncio
+import io
 import json
+import zipfile
 
 import httpx
 import pytest
+from workspace_toolkit.config import Settings
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.google import Google, convert, google_text, verify
 from workspace_toolkit.package import PPTX_MIME
-from workspace_toolkit.pptx import analyse
+from workspace_toolkit.pptx import analyse, render_path
 
 
 def fake_presentation():
@@ -105,7 +108,10 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
     root.mkdir()
     (root / "source.pptx").write_bytes(pptx.read_bytes())
     manifest = analyse(pptx, root / "result")
+    rendered = render_path(pptx, root / "result" / "converted.pptx", Settings())
+    (root / "result" / "render.json").write_text(json.dumps(rendered), encoding="utf-8")
     uploads = []
+    bodies = []
 
     def handler(request):
         assert request.headers["authorization"] == "Bearer test-token"
@@ -122,6 +128,7 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
                 200, headers={"Location": "https://www.googleapis.com/upload/session"}
             )
         if request.method == "PUT":
+            bodies.append(request.content)
             return httpx.Response(200, json={"id": "uploaded" + str(len(uploads))})
         if request.url.host == "slides.googleapis.com":
             return httpx.Response(200, json=fake_presentation())
@@ -145,6 +152,9 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
     assert {u["mimeType"] for u in uploads} >= {"video/mp4", "audio/wav", "application/json"}
     assert all(u["parents"] == ["folder1"] for u in uploads)
     assert report["reportUrl"].startswith("https://drive.google.com/")
+    assert report["conversion"]["fontSubstitutions"] == rendered["fontSubstitutions"]
+    with zipfile.ZipFile(io.BytesIO(bodies[0])) as converted:
+        assert b'typeface="Carlito"' in converted.read("ppt/slides/slide2.xml")
 
 
 def test_partial_failure_keeps_recovery_links(pptx, tmp_path):

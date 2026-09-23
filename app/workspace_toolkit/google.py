@@ -268,8 +268,13 @@ async def convert(
             )
         folder = await google.folder()
         report["folderUrl"] = "https://drive.google.com/drive/folders/" + folder
+        rendered = root / "result" / "converted.pptx"
         result = await google.upload(
-            root / "source.pptx", output_name, PPTX_MIME, folder, convert=True
+            rendered if rendered.exists() else root / "source.pptx",
+            output_name,
+            PPTX_MIME,
+            folder,
+            convert=True,
         )
         report["outputs"].append({"kind": "presentation", "id": result["id"]})
         report["presentationId"] = result["id"]
@@ -290,6 +295,12 @@ async def convert(
             )
         presentation = await google.inspect(result["id"])
         report["warnings"].extend(verify(manifest, presentation))
+        render_report = root / "result" / "render.json"
+        if render_report.exists():
+            rendered_details = json.loads(render_report.read_text(encoding="utf-8"))
+            report["conversion"] = {
+                "fontSubstitutions": rendered_details.get("fontSubstitutions", [])
+            }
         report["verification"] = "page_size_count_and_text_checked"
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:

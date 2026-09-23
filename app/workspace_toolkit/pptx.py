@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
+import zipfile
 from collections import Counter
+from html import unescape
 from pathlib import Path
 
 # Type annotation only; XML parsing always uses defusedxml.
@@ -9,9 +12,10 @@ from xml.etree.ElementTree import Element  # nosec B405
 
 from .config import Settings
 from .errors import ToolkitError
+from .fonts import FontStatus, catalogue, compatibility
 from .model import Compatibility as C
 from .model import emu_to_points, warning
-from .package import Package, digest
+from .package import PPTX, Package, digest
 
 NS = {
     "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -19,6 +23,8 @@ NS = {
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
 }
+
+TYPEFACE = re.compile(rb"(\btypeface\s*=\s*)([\"'])(.*?)\2")
 
 
 def local(tag: str) -> str:
@@ -33,11 +39,12 @@ def paragraphs(root: Element) -> list[dict]:
             if local(child.tag) in {"r", "fld"}:
                 prop = child.find("a:rPr", NS)
                 text = child.find("a:t", NS)
-                style = dict(prop.attrib) if prop is not None else {}
+                style: dict[str, object] = dict(prop.attrib) if prop is not None else {}
                 latin = prop.find("a:latin", NS) if prop is not None else None
                 font_family = latin.get("typeface") if latin is not None else None
                 if font_family:
                     style["fontFamily"] = font_family
+                    style["fontCompatibility"] = compatibility(font_family)
                 runs.append(
                     {
                         "text": text.text or "" if text is not None else "",
@@ -136,7 +143,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                 }
             assets[sha]["sourceParts"].append(name)
             part_assets[name] = sha
-        if name.endswith(".xml"):
+        if name.startswith("ppt/") and name.endswith(".xml"):
             root = package.xml(name)
             for node in root.iter():
                 typeface = node.get("typeface")
@@ -328,6 +335,31 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                     classification=C.UNSUPPORTED,
                 )
             )
+    font_catalogue = catalogue(fonts)
+    declared_font_catalogue = catalogue(declared_fonts)
+    font_requirements = catalogue(fonts | declared_fonts)
+    for font in font_requirements:
+        if font["status"] == FontStatus.SUBSTITUTED:
+            warnings.append(
+                warning(
+                    "font_substitution",
+                    "A font has a reviewed Google Fonts replacement candidate.",
+                    font=font["name"],
+                    replacement=font["replacement"],
+                    confidence=font["confidence"],
+                    manualReview=font["manualReview"],
+                    classification=C.SUBSTITUTED,
+                )
+            )
+        elif font["status"] == FontStatus.UNKNOWN:
+            warnings.append(
+                warning(
+                    "font_unknown",
+                    "A font has no reviewed replacement and needs manual review.",
+                    font=font["name"],
+                    classification=C.UNSUPPORTED,
+                )
+            )
     manifest = {
         "schemaVersion": "1.0",
         "source": {
@@ -340,8 +372,10 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
         "assets": assets,
         "resources": resources,
         "relationships": relationships,
-        "fonts": [{"name": font, "status": "UNKNOWN"} for font in sorted(fonts)],
+        "fonts": font_catalogue,
         "declaredFonts": sorted(declared_fonts),
+        "declaredFontCompatibility": declared_font_catalogue,
+        "fontRequirements": font_requirements,
         "warnings": warnings,
     }
     report = analysis_report(manifest)
@@ -370,8 +404,76 @@ def analysis_report(manifest: dict) -> dict:
         },
         "elementCounts": dict(counts),
         "assetCounts": dict(Counter(a["kind"] for a in manifest["assets"].values())),
-        "fonts": manifest["fonts"],
+        "fonts": manifest.get("fontRequirements", manifest["fonts"]),
         "warnings": warnings,
         "verification": "not_converted",
         "classificationBasis": "Preflight candidates, not verified Google compatibility.",
     }
+
+
+def _substitute_typefaces(data: bytes, applied: Counter[tuple[str, str]]) -> bytes:
+    """Replace reviewed typeface attributes without reserialising whole XML parts."""
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        try:
+            original = unescape(match.group(3).decode("utf-8"))
+        except UnicodeDecodeError:
+            return match.group(0)
+        result = compatibility(original)
+        replacement = result.get("replacement")
+        if (
+            result["status"] != FontStatus.SUBSTITUTED
+            or result["manualReview"]
+            or not isinstance(replacement, str)
+        ):
+            return match.group(0)
+        applied[(original, replacement)] += 1
+        encoded = (
+            replacement.replace("&", "&amp;")
+            .replace('"', "&quot;")
+            .replace("'", "&apos;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .encode("utf-8")
+        )
+        return match.group(1) + match.group(2) + encoded + match.group(2)
+
+    return TYPEFACE.sub(replace, data)
+
+
+def render(package: Package, destination: Path) -> dict:
+    """Write a Google-ready PPTX with reviewed font candidates applied."""
+    rewritten: dict[str, bytes] = {}
+    applied: Counter[tuple[str, str]] = Counter()
+    for name in sorted(package.names):
+        if name.endswith(".xml"):
+            source = package.read(name, package.settings.max_xml_bytes)
+            target = _substitute_typefaces(source, applied)
+            if target != source:
+                rewritten[name] = target
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as out:
+        for name in sorted(package.names):
+            out.writestr(name, rewritten.get(name) or package.read(name))
+
+    return {
+        "fontSubstitutions": [
+            {
+                "original": original,
+                "replacement": replacement,
+                "occurrences": count,
+                "classification": C.SUBSTITUTED,
+            }
+            for (original, replacement), count in sorted(applied.items())
+        ],
+        "rewrittenParts": sorted(rewritten),
+    }
+
+
+def render_path(source: Path, destination: Path, settings: Settings) -> dict:
+    package = Package(source, settings, PPTX)
+    try:
+        return render(package, destination)
+    finally:
+        package.close()

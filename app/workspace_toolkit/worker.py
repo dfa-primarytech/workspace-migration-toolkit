@@ -9,6 +9,7 @@ from .docs import render_path
 from .docx import analyse as analyse_docx
 from .errors import ToolkitError
 from .pptx import analyse as analyse_pptx
+from .pptx import render_path as render_pptx
 
 # Deliberately not importing the pipelines registry: that pulls in the Google
 # client, and this subprocess must never hold credentials or reach the network.
@@ -32,6 +33,9 @@ def main() -> None:
             # Rewriting happens here too: it is the same bounded, credential-free
             # sandbox that already parses the untrusted package.
             report = render_path(source, output / "converted.docx", settings)
+            (output / "render.json").write_text(json.dumps(report), encoding="utf-8")
+        elif fmt == "pptx":
+            report = render_pptx(source, output / "converted.pptx", settings)
             (output / "render.json").write_text(json.dumps(report), encoding="utf-8")
     except ToolkitError as exc:
         (output / "error.json").write_text(

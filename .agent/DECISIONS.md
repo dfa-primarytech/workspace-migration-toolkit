@@ -135,3 +135,14 @@ bundle asserting otherwise. Geometry is normalised to PostScript points, with
 the raw librevenge properties retained alongside so a renderer can revisit a
 parser decision without re-reading the source. Do not vendor libmspub or
 librevenge; tested against libmspub 0.1.4 and librevenge 0.0.5.
+
+## 2026-09-23: Font substitution is shared, curated and reported
+All source formats call one compatibility service. Parsers retain the original
+family; they do not own replacement tables. A reviewed Google Fonts candidate
+may be applied by a renderer only when it is not marked for manual review, and
+every change records the original family, replacement, confidence and reason.
+Unknown fonts stay unchanged instead of falling back silently. Google Fonts
+catalogue membership is not treated as proof of availability in every Workspace
+tenant. Accessibility-oriented choices require human review even when a reading
+font candidate exists. PPTX applies safe mappings to a copy before native import;
+DOCX and Publisher consume the same API when their owners complete integration.

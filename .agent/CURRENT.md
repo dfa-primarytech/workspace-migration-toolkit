@@ -18,6 +18,15 @@ PPTX branch predates the DOCX port.
 
 ## Where things stand
 
+Personal Codex is developing `feat/shared-font-substitution` from main at
+`68f9eab`. It adds the shared font catalogue and makes PPTX render a converted
+package with reviewed mappings before native import. DOCX and Publisher owners
+have been assigned input audits and later integration against the same API.
+Unknown and accessibility-sensitive fonts are retained for review.
+
+DOCX section boundaries, RTL preservation and equation diagnostics are merged
+as #18, #19 and #21. SilverDog has been assigned TOC preservation next.
+
 `main` carries the shared FastAPI platform, the PPTX preflight and native
 import, the specification and these coordination files, after #8 merged.
 
