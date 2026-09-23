@@ -590,6 +590,8 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
         "textboxes": 1,
         "pictures": 0,
         "picturesInlined": 0,
+        "picturesPlaced": 0,
+        "picturesUnplaced": 0,
         "tablesNarrowed": 0,
         "picturesShrunk": 0,
         "ink": 0,
@@ -1095,3 +1097,123 @@ def test_a_replaced_typeface_is_named_in_the_report(tmp_path):
 
     substitutions = report["conversion"]["fontSubstitutions"]
     assert substitutions == {"Baskerville -> Libre Baskerville": 1}, substitutions
+
+
+# ------------------------------------------- pictures anchored above a table
+
+
+def question_table(rows=2, columns=(5752, 5752), heading="Can I count to ten?"):
+    """A worksheet table: a heading row, then numbered rows with empty cells."""
+    grid = "".join(f"<w:gridCol w:w='{w}'/>" for w in columns)
+    head = "".join(f"<w:tc><w:p><w:r><w:t>{heading}</w:t></w:r></w:p></w:tc>" for _ in columns)
+    body = "".join(
+        "<w:tr>"
+        + "".join(f"<w:tc><w:p><w:r><w:t>{n + 1}.</w:t></w:r></w:p></w:tc>" for _ in columns)
+        + "</w:tr>"
+        for n in range(rows)
+    )
+    return f"<w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid><w:tr>{head}</w:tr>{body}</w:tbl>"
+
+
+def floating(across, down, cx=2000000, frame_h="column", frame_v="paragraph"):
+    return run(PICTURE, h=(frame_h, offset(across)), v=(frame_v, offset(down)), cx=cx, cy=1000000)
+
+
+def placed_pictures(body):
+    root = parse_xml(document(body + A4_SECTION))
+    report = transform(root)
+    cells = [
+        [
+            "".join(t.text or "" for t in cell.iter(q("w", "t"))).strip(),
+            len(list(cell.iter(q("wp", "inline")))),
+        ]
+        for cell in root.iter(q("w", "tc"))
+    ]
+    return report, cells
+
+
+def test_a_picture_floating_above_a_table_lands_in_the_cell_it_was_drawn_over():
+    """Measured on a real worksheet: 45 question pictures were anchored to the
+    paragraph above their table, positioned so they appeared over its cells.
+    Google places those against the page, so they land across the borders."""
+    body = para(
+        floating(200000, 100000),  # left column, first row
+        floating(4000000, 100000),  # right column, first row
+        floating(200000, 2000000),  # left column, second row
+        floating(4000000, 2000000),  # right column, second row
+    ) + question_table(rows=2)
+    report, cells = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 4
+    assert report["picturesUnplaced"] == 0
+    # The heading row is untouched; each numbered cell gains exactly one picture.
+    assert cells == [
+        ["Can I count to ten?", 0],
+        ["Can I count to ten?", 0],
+        ["1.", 1],
+        ["1.", 1],
+        ["2.", 1],
+        ["2.", 1],
+    ], cells
+
+
+def test_a_placed_picture_is_centred_rather_than_given_a_recovered_offset():
+    # The offset described a position on the page. Inside a cell it would mean
+    # something else entirely, so it is deliberately not carried across.
+    body = para(floating(200000, 100000), floating(4000000, 100000)) + question_table(rows=1)
+    root = parse_xml(document(body + A4_SECTION))
+    transform(root)
+
+    holder = next(p for p in root.iter(q("w", "p")) if list(p.iter(q("wp", "inline"))))
+    assert holder.find(q("w", "pPr") + "/" + q("w", "jc")).get(q("w", "val")) == "center"
+    assert not list(root.iter(q("wp", "anchor"))), "nothing should still be floating"
+
+
+def test_more_pictures_than_rows_is_reported_rather_than_guessed():
+    """The stack says how the pictures are ordered, not which row is which."""
+    body = para(
+        floating(200000, 100000), floating(200000, 2000000), floating(200000, 4000000)
+    ) + question_table(rows=2)
+    report, cells = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 0
+    assert report["picturesUnplaced"] == 3
+    assert all(count == 0 for _, count in cells), "every cell is left as it was"
+
+
+def test_two_vertical_origins_are_not_ranked_against_each_other():
+    """A page offset and a paragraph offset differ by an unknown constant, so
+    sorting them together orders the pictures arbitrarily."""
+    body = para(
+        floating(200000, 100000),
+        floating(200000, 2000000, frame_v="page"),
+    ) + question_table(rows=2, columns=(5752,))
+    report, _ = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 0
+    assert report["picturesUnplaced"] == 2
+
+
+def test_a_page_relative_offset_is_measured_from_the_margin_not_the_paper():
+    # Exact arithmetic rather than a guess, so it is worth recovering: the A4
+    # section's left margin comes off before the offset means anything.
+    margin = 457200
+    body = para(
+        floating(200000 + margin, 100000, frame_h="page"),
+        floating(4000000 + margin, 100000, frame_h="page"),
+    ) + question_table(rows=1)
+    report, cells = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 2, report
+    assert cells == [["Can I count to ten?", 0], ["Can I count to ten?", 0], ["1.", 1], ["1.", 1]]
+
+
+def test_a_cell_that_already_holds_content_is_not_treated_as_free():
+    body = para(floating(200000, 100000)) + question_table(rows=1, columns=(5752,)).replace(
+        "<w:tc><w:p><w:r><w:t>1.</w:t></w:r></w:p></w:tc>",
+        "<w:tc><w:p><w:r><w:t>Write your answer here</w:t></w:r></w:p></w:tc>",
+    )
+    report, _ = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 0
+    assert report["picturesUnplaced"] == 1

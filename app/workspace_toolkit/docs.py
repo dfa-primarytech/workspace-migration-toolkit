@@ -213,31 +213,37 @@ def _inline_picture(parent_of: dict, item: Anchored, ids: Ids) -> bool:
     # the text it sits under down the page.
     if item.anchor.get("behindDoc") not in (None, *OFF_VALUES):
         return False
-    graphic = item.anchor.find(q("a", "graphic"))
-    extent = item.anchor.find(q("wp", "extent"))
+    return _anchor_to_inline(item.anchor, item.drawing, ids)
+
+
+def _anchor_to_inline(anchor: Element, drawing: Element, ids: Ids) -> bool:
+    """Rewrites one floating picture as inline content, in place."""
+    graphic = anchor.find(q("a", "graphic"))
+    extent = anchor.find(q("wp", "extent"))
     if graphic is None or extent is None:
         return False
 
+    item_anchor, item_drawing = anchor, drawing
     inline = Element(q("wp", "inline"))
     inline.attrib.update({"distT": "0", "distB": "0", "distL": "0", "distR": "0"})
     # CT_Inline fixes this order: extent, effectExtent?, docPr, frame?, graphic.
     inline.append(extent)
-    effect = item.anchor.find(q("wp", "effectExtent"))
+    effect = item_anchor.find(q("wp", "effectExtent"))
     if effect is not None:
         inline.append(effect)
-    described = item.anchor.find(q("wp", "docPr"))
+    described = item_anchor.find(q("wp", "docPr"))
     if described is None:
         described = Element(q("wp", "docPr"))
         described.attrib.update({"id": str(ids.next()), "name": "Picture"})
     inline.append(described)
-    frame = item.anchor.find(q("wp", "cNvGraphicFramePr"))
+    frame = item_anchor.find(q("wp", "cNvGraphicFramePr"))
     if frame is not None:
         inline.append(frame)
     inline.append(graphic)
 
-    at = list(item.drawing).index(item.anchor)
-    item.drawing.remove(item.anchor)
-    item.drawing.insert(at, inline)
+    at = list(item_drawing).index(item_anchor)
+    item_drawing.remove(item_anchor)
+    item_drawing.insert(at, inline)
     return True
 
 
@@ -895,6 +901,206 @@ def _cell_width(cell: Element, parent_of: dict) -> int:
     return 0
 
 
+# Issue #55. Measured on a real worksheet: 45 question pictures were anchored to
+# the paragraph *above* the table they belonged to and positioned by offset so
+# they appeared over its cells. Google places them against the page instead, so
+# they land across borders and over one another.
+#
+# The column is recoverable exactly, because a grid states its column widths.
+# The row is not: `w:trHeight` is a minimum, not a height, and where a table
+# falls in the flow depends on everything above it. So the row is taken from the
+# order the pictures themselves are stacked in, and only when that order matches
+# the free rows one for one. Anything else is reported, never guessed.
+BAND_EMU = 274320  # 0.3in; two pictures closer than this are on the same row
+LABEL_CHARS = 4  # "1." or "12." numbers a question; longer text is content
+# Across: only frames that start where the text column starts, because the
+# offset is compared against the grid directly. Down: any frame, because the
+# vertical offsets are only ever ranked against each other -- but every picture
+# above one table must share a frame, or the ranking compares two origins.
+ACROSS_FRAMES = {"column", "margin", "insideMargin", "leftMargin", "text"}
+# A page-relative offset counts from the paper's edge, so the margin has to come
+# off it before it means anything against a grid. That is exact arithmetic, not
+# a guess, so those pictures are worth recovering rather than reporting.
+PAGE_FRAMES = {"page"}
+
+
+def _left_margin(root: Element) -> int | None:
+    """The left margin in EMU, from the section that ends the body."""
+    body = root.find(q("w", "body"))
+    sections = list(body.iter(q("w", "sectPr"))) if body is not None else []
+    margin = _measure(sections[-1].find(q("w", "pgMar")), "left") if sections else None
+    return None if margin is None else margin * EMU_PER_DXA
+
+
+def _offset(anchor: Element, axis: str) -> tuple[str, int] | None:
+    """A picture's frame and offset on one axis, or nothing if it is unstated."""
+    position = anchor.find(q("wp", "position" + axis))
+    if position is None:
+        return None
+    frame = position.get("relativeFrom")
+    offset = position.find(q("wp", "posOffset"))
+    if frame is None or offset is None:
+        return None
+    try:
+        return frame, int(offset.text or "")
+    except ValueError:
+        return None
+
+
+def _bands(offsets: list[int]) -> list[list[int]]:
+    """Vertical offsets grouped into rows, nearest first."""
+    grouped: list[list[int]] = []
+    for offset in sorted(offsets):
+        if grouped and offset - grouped[-1][-1] <= BAND_EMU:
+            grouped[-1].append(offset)
+        else:
+            grouped.append([offset])
+    return grouped
+
+
+def _free_rows(table: Element, column: int, parent_of: dict) -> list[Element]:
+    """Cells in one column that hold a question number and nothing else."""
+    free = []
+    for row in table.findall(q("w", "tr")):
+        cells = [
+            cell
+            for cell in row.findall(q("w", "tc"))
+            if _enclosing(parent_of, parent_of.get(cell), "tbl") is table
+        ]
+        if column >= len(cells):
+            return []
+        cell = cells[column]
+        if list(cell.iter(q("wp", "inline"))) or list(cell.iter(q("wp", "anchor"))):
+            continue
+        text = "".join(node.text or "" for node in cell.iter(q("w", "t"))).strip()
+        if len(text) <= LABEL_CHARS:
+            free.append(cell)
+    return free
+
+
+def place_orphan_pictures(root: Element, ids: Ids) -> dict:
+    """Moves a picture floating above a table into the cell it was drawn over."""
+    parent_of = parents(root)
+    report = {"picturesPlaced": 0, "picturesUnplaced": 0}
+    for container in list(root.iter()):
+        blocks = list(container)
+        for index, block in enumerate(blocks[:-1]):
+            if local(block.tag) != "p" or local(blocks[index + 1].tag) != "tbl":
+                continue
+            _place_above(root, block, blocks[index + 1], parent_of, ids, report)
+    return report
+
+
+def _place_above(
+    root: Element,
+    paragraph: Element,
+    table: Element,
+    parent_of: dict,
+    ids: Ids,
+    report: dict,
+) -> None:
+    anchors = list(paragraph.iter(q("wp", "anchor")))
+    if not anchors:
+        return
+    pictures = [
+        anchor
+        for anchor in anchors
+        if classify(anchor)[0] == "picture" and anchor.get("behindDoc") in (None, *OFF_VALUES)
+    ]
+    grid = table.find(q("w", "tblGrid"))
+    # `if grid` would ask whether the element has children, which is not the
+    # question and is false for a grid written as a single self-closing tag.
+    stated = (
+        [_measure(col, "w") for col in grid.findall(q("w", "gridCol"))] if grid is not None else []
+    )
+    columns = [width for width in stated if width is not None]
+    # Anything we cannot measure, and any paragraph carrying something other
+    # than plain pictures, is left exactly as it is.
+    if len(pictures) != len(anchors) or not columns or len(columns) != len(stated):
+        report["picturesUnplaced"] += len(anchors)
+        return
+
+    edges, running = [], 0
+    for width in columns:
+        edges.append((running, running + width * EMU_PER_DXA))
+        running += width * EMU_PER_DXA
+
+    margin = _left_margin(root)
+    placed: dict[int, list[tuple[int, Element]]] = {}
+    frames: set[str] = set()
+    for anchor in pictures:
+        across, down = _offset(anchor, "H"), _offset(anchor, "V")
+        # _measure_emu takes the element that *holds* wp:extent, not the extent.
+        drawn = _measure_emu(anchor)
+        if across is None or down is None or drawn is None:
+            report["picturesUnplaced"] += len(anchors)
+            return
+        if across[0] in PAGE_FRAMES:
+            if margin is None:
+                report["picturesUnplaced"] += len(anchors)
+                return
+            start = across[1] - margin
+        elif across[0] in ACROSS_FRAMES:
+            start = across[1]
+        else:
+            report["picturesUnplaced"] += len(anchors)
+            return
+        frames.add(down[0])
+        centre = start + drawn // 2
+        column = next((n for n, (left, right) in enumerate(edges) if left <= centre < right), None)
+        if column is None:
+            report["picturesUnplaced"] += len(anchors)
+            return
+        placed.setdefault(column, []).append((down[1], anchor))
+
+    if len(frames) > 1:
+        # Two origins ranked against each other would order them arbitrarily.
+        report["picturesUnplaced"] += len(anchors)
+        return
+
+    targets: list[tuple[Element, Element]] = []
+    for column, found in placed.items():
+        rows = _free_rows(table, column, parent_of)
+        # Sorted by offset only: two pictures at the same height must not be
+        # compared as elements, which has no meaning and no stable answer.
+        ordered = sorted(found, key=lambda pair: pair[0])
+        bands = _bands([down for down, _ in ordered])
+        # One band per free row, or the stack says nothing about which row is
+        # which, and the honest answer is to leave every picture where it is.
+        if len(bands) != len(rows):
+            report["picturesUnplaced"] += len(anchors)
+            return
+        taken = iter(ordered)
+        for band, cell in zip(bands, rows, strict=True):
+            targets.extend((cell, next(taken)[1]) for _ in band)
+
+    for cell, anchor in targets:
+        _move_into_cell(cell, anchor, parent_of, ids, report)
+
+
+def _move_into_cell(
+    cell: Element, anchor: Element, parent_of: dict, ids: Ids, report: dict
+) -> None:
+    drawing = parent_of.get(anchor)
+    run = parent_of.get(drawing) if drawing is not None else None
+    source = parent_of.get(run) if run is not None else None
+    if drawing is None or run is None or source is None:
+        report["picturesUnplaced"] += 1
+        return
+    if not _anchor_to_inline(anchor, drawing, ids):
+        report["picturesUnplaced"] += 1
+        return
+    source.remove(run)
+    holder = Element(q("w", "p"))
+    properties = SubElement(holder, q("w", "pPr"))
+    # Centred rather than placed at a recovered offset: the offset described a
+    # position on the page, and inside a cell it would mean something else.
+    SubElement(properties, q("w", "jc")).set(q("w", "val"), "center")
+    holder.append(run)
+    cell.append(holder)
+    report["picturesPlaced"] += 1
+
+
 def transform(root: Element, ids: Ids | None = None) -> dict:
     """Applies every pass, in the order they depend on each other."""
     ids = ids or Ids()
@@ -910,6 +1116,9 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     report["legacyPictures"] = fix_legacy_pictures(root, ids)
     # Last: the tables must hold every picture that is going to end up in them
     # before they can be measured against the page.
+    # Before the tables are measured: a picture that lands in a cell changes
+    # how wide that table needs to be.
+    report.update(place_orphan_pictures(root, ids))
     report.update(fit_tables_to_page(root))
     remove_empty_paragraphs(root)
     return report
@@ -1025,6 +1234,8 @@ def render(package: Package, destination: Path) -> dict:
         # real document: without them "pictures: 128" reads as work done when
         # the pictures may simply have been counted and left where they were.
         "picturesInlined": 0,
+        "picturesPlaced": 0,
+        "picturesUnplaced": 0,
         "tablesNarrowed": 0,
         "picturesShrunk": 0,
         "ink": 0,
@@ -1067,6 +1278,8 @@ def render(package: Package, destination: Path) -> dict:
             "textboxes",
             "pictures",
             "picturesInlined",
+            "picturesPlaced",
+            "picturesUnplaced",
             "tablesNarrowed",
             "picturesShrunk",
             "ink",
@@ -1417,6 +1630,8 @@ async def convert(
                 "textboxes",
                 "pictures",
                 "picturesInlined",
+                "picturesPlaced",
+                "picturesUnplaced",
                 "tablesNarrowed",
                 "picturesShrunk",
                 "ink",
