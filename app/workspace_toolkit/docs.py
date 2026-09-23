@@ -38,10 +38,13 @@ from .docx import (
     COINCIDENT_SIZE_TOL,
     COINCIDENT_TOL_EMU,
     OFF_VALUES,
+    STYLES_PART,
+    THEME_PART,
     analysis_report,
     anchor_extent,
     anchor_position,
     classify,
+    font_requirements,
     local,
     parents,
     q,
@@ -636,6 +639,87 @@ def story_parts(package: Package) -> list[str]:
     return [DOCX.main_part, *headers]
 
 
+# Only the strongest recommendations are applied without asking. PPTX applies
+# any non-manual-review candidate; DOCX deliberately does not, because the
+# medium-confidence entries include handwriting families, and a phonics
+# worksheet set in a different hand is the wrong teaching material rather than
+# a formatting difference. See docs/font-substitution.md.
+APPLIED_CONFIDENCE = "high"
+
+FONT_SLOTS = ("ascii", "hAnsi", "cs", "eastAsia")
+
+
+def substitutions_to_apply(package: Package) -> dict[str, str]:
+    """Families safe to replace without a person looking first.
+
+    Four things disqualify a recommendation, and each for its own reason:
+
+    * not `SUBSTITUTED` -- there is nothing to apply
+    * `manualReview` -- the service has said a person should decide
+    * anything below high confidence -- see APPLIED_CONFIDENCE
+    * symbol or embedded families -- a symbol font's glyphs are code-point
+      mapped, so substituting one turns a tick into a letter; an embedded
+      font's glyphs travel with the document and need no replacing at all
+    """
+    chosen: dict[str, str] = {}
+    for requirement in font_requirements(package):
+        if requirement.get("symbol") or requirement.get("embedded"):
+            continue
+        result = requirement.get("compatibility") or {}
+        replacement = result.get("replacement")
+        if (
+            result.get("status") != "SUBSTITUTED"
+            or result.get("manualReview")
+            or result.get("confidence") != APPLIED_CONFIDENCE
+            or not isinstance(replacement, str)
+        ):
+            continue
+        chosen[requirement["family"]] = replacement
+    return chosen
+
+
+def apply_substitutions(root: Element, mapping: dict[str, str]) -> Counter:
+    """Rewrites literal `w:rFonts` names, counting each family it replaced.
+
+    Runs, styles and numbering all name fonts the same way, so one pass over a
+    part covers every literal mention in it. Theme references carry no family
+    name and are handled by rewriting the theme itself.
+
+    Counting per family rather than in total is what lets the report name what
+    changed. "Nine fonts were replaced" is not something a person can check;
+    "Century Gothic became Montserrat" is.
+    """
+    applied: Counter = Counter()
+    if not mapping:
+        return applied
+    for element in root.iter(q("w", "rFonts")):
+        for slot in FONT_SLOTS:
+            name = element.get(q("w", slot))
+            if name in mapping:
+                element.set(q("w", slot), mapping[name])
+                applied[(name, mapping[name])] += 1
+    return applied
+
+
+def apply_theme_substitutions(root: Element, mapping: dict[str, str]) -> Counter:
+    """Rewrites the families a theme declares.
+
+    A run using `w:asciiTheme` names no font, so there is nothing in the body
+    to rewrite -- the family lives in the theme, and that is the only place
+    changing it has any effect. Without this a document formatted the way Word
+    formats one by default would report substitutions and receive none.
+    """
+    applied: Counter = Counter()
+    if not mapping:
+        return applied
+    for element in root.iter():
+        typeface = element.get("typeface")
+        if typeface in mapping:
+            element.set("typeface", mapping[typeface])
+            applied[(typeface, mapping[typeface])] += 1
+    return applied
+
+
 def render(package: Package, destination: Path) -> dict:
     """Writes a Google-ready .docx beside the original and reports what changed."""
     ids = Ids()
@@ -646,11 +730,18 @@ def render(package: Package, destination: Path) -> dict:
         "legacyPictures": 0,
         "equations": 0,
         "regeneratedFields": 0,
+        "fontSubstitutions": {},
         "unsupported": {},
         "parts": [],
     }
     rewritten: dict[str, bytes] = {}
     tokens: Counter = Counter()
+
+    # Decided once, from the resolved requirements, then applied wherever a
+    # family is named. Deciding per part would ask the same question repeatedly
+    # and could answer it differently in each.
+    mapping = substitutions_to_apply(package)
+    applied: Counter = Counter()
 
     for name in story_parts(package):
         root = package.xml(name)
@@ -668,6 +759,7 @@ def render(package: Package, destination: Path) -> dict:
         # mc:Fallback is counted once rather than twice.
         report["equations"] += count_equations(root)
         report["regeneratedFields"] += count_regenerated_fields(root)
+        applied.update(apply_substitutions(root, mapping))
         rewritten[name] = serialise(root)
         report["parts"].append(name)
         for key in ("textboxes", "pictures", "ink", "legacyPictures"):
@@ -675,6 +767,27 @@ def render(package: Package, destination: Path) -> dict:
         for label, count in part_report["unsupported"].items():
             report["unsupported"][label] = report["unsupported"].get(label, 0) + count
 
+    # styles.xml and theme1.xml are not story parts, but between them they hold
+    # most of the font names in a real document: a well-built template keeps
+    # its fonts in styles, and Word's default is a theme reference. Rewriting
+    # only the body would substitute almost nothing.
+    if STYLES_PART in package.names:
+        styles = package.xml(STYLES_PART)
+        found = apply_substitutions(styles, mapping)
+        if found:
+            applied.update(found)
+            rewritten[STYLES_PART] = serialise(styles)
+    if THEME_PART in package.names:
+        theme = package.xml(THEME_PART)
+        found = apply_theme_substitutions(theme, mapping)
+        if found:
+            applied.update(found)
+            rewritten[THEME_PART] = serialise(theme)
+
+    report["fontSubstitutions"] = {
+        f"{original} -> {replacement}": count
+        for (original, replacement), count in sorted(applied.items())
+    }
     report["tokens"] = dict(tokens)
 
     destination.parent.mkdir(parents=True, exist_ok=True)

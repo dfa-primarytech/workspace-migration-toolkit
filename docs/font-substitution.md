@@ -199,6 +199,35 @@ None of this needs a scorer in DOCX. The obligation is to surface the evidence
 and to preserve `UNKNOWN` when the evidence is too thin, rather than
 manufacturing a family name for the service to match on.
 
+## What is applied automatically, and what is not
+
+The renderer rewrites only the shared service's **high confidence**
+recommendations, and never a symbol or embedded family. That is twelve
+families: the metric-compatible Microsoft-to-Google pairs — Arial to Arimo,
+Calibri to Carlito, Times New Roman to Tinos, Cambria to Caladea, Courier New
+to Cousine, Comic Sans to Comic Neue, Garamond to EB Garamond, Baskerville to
+Libre Baskerville.
+
+Everything else is reported and left alone, including twenty-three
+medium-confidence candidates.
+
+**This is stricter than PPTX**, which applies any non-manual-review candidate
+regardless of confidence. The divergence is deliberate and worth stating,
+because it means the same font is treated differently in a `.pptx` and a
+`.docx`: Sassoon Primary becomes Andika in a presentation and stays Sassoon in
+a document.
+
+The reason is that the confidence axis is a proxy for *metric compatibility*,
+not for whether a swap is safe in a school. Medium confidence contains both
+ordinary display faces, where a swap would be welcome, and handwriting faces,
+where it would change what a phonics worksheet teaches. Until something
+separates those two, the conservative line is the defensible one: a document
+that keeps a font Google may not have is a document a person can fix, whereas
+a worksheet silently set in a different hand looks correct and is not.
+
+Substitutions follow *use*. A family named in an unused theme slot is left
+alone, because nothing in the document asks for it.
+
 ## Sequencing
 
 DOCX cannot supply any of this yet. The theme and style gaps above mean the

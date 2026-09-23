@@ -360,3 +360,139 @@ def test_the_manifest_carries_the_resolved_requirements(tmp_path):
     assert "Century Gothic" in families, (
         f"the resolved requirements did not reach the manifest: {families}"
     )
+
+
+# ------------------------------------------------- applying the substitutions
+#
+# Resolution says what a document needs. These cover what the renderer actually
+# rewrites, which is a much smaller set on purpose: only the shared service's
+# high-confidence recommendations, and never a symbol or embedded family.
+
+
+# The shared THEME names Arial for complex script, and docDefaults references
+# it, so Arial is a genuine requirement in every fixture built on it. That is
+# correct but it masks which family a substitution test is actually about, so
+# these use a theme naming nothing the catalogue knows.
+PLAIN_THEME = (
+    f'<a:theme {A}><a:themeElements><a:fontScheme name="Plain">'
+    '<a:majorFont><a:latin typeface="Nothing Known"/></a:majorFont>'
+    '<a:minorFont><a:latin typeface="Nothing Known"/></a:minorFont>'
+    "</a:fontScheme></a:themeElements></a:theme>"
+)
+
+
+def converted(tmp_path, body: str, **parts: str):
+    """Renders a package and returns (report, {part name: text})."""
+    import zipfile as zf
+
+    from workspace_toolkit.docs import render_path
+
+    source = build(tmp_path, body, **parts)
+    out = tmp_path / "converted.docx"
+    report = render_path(source, out, Settings())
+    with zf.ZipFile(out) as archive:
+        contents = {
+            n: archive.read(n).decode("utf-8") for n in archive.namelist() if n.endswith(".xml")
+        }
+    return report, contents
+
+
+def test_a_high_confidence_substitution_is_applied(tmp_path):
+    """Arial to Arimo is metric-compatible; applying it needs nobody's opinion."""
+    body = run_with('<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>')
+    report, contents = converted(tmp_path, body, theme=PLAIN_THEME)
+    document = contents["word/document.xml"]
+    assert "Arimo" in document, "the high-confidence substitution was not applied"
+    assert "Arial" not in document, "the original family was left behind"
+    assert report["fontSubstitutions"] == {"Arial -> Arimo": 2}, report["fontSubstitutions"]
+
+
+def test_a_medium_confidence_substitution_is_left_alone(tmp_path):
+    """The line this stream draws, and it is stricter than PPTX draws it.
+
+    Century Gothic to Montserrat is a reasonable visual match but not a metric
+    one. PPTX applies any non-manual-review candidate; DOCX does not, because
+    the medium-confidence set also contains handwriting families, and a phonics
+    worksheet set in a different hand is the wrong teaching material.
+    """
+    body = run_with('<w:rFonts w:ascii="Century Gothic"/>')
+    report, contents = converted(tmp_path, body, theme=PLAIN_THEME)
+    assert "Century Gothic" in contents["word/document.xml"]
+    assert "Montserrat" not in contents["word/document.xml"]
+    assert report["fontSubstitutions"] == {}
+
+
+def test_a_handwriting_family_is_never_swapped_automatically(tmp_path):
+    """The case that decided the policy."""
+    body = run_with('<w:rFonts w:ascii="Sassoon Primary" w:hAnsi="Sassoon Primary"/>')
+    _, contents = converted(tmp_path, body, font_table=f"<w:fonts {W}></w:fonts>")
+    assert "Sassoon Primary" in contents["word/document.xml"]
+    assert "Andika" not in contents["word/document.xml"]
+
+
+def test_a_symbol_family_is_never_swapped(tmp_path):
+    """Its glyphs are code-point mapped: a substitution turns a tick into a letter."""
+    body = run_with('<w:rFonts w:ascii="Wingdings" w:hAnsi="Wingdings"/>')
+    _, contents = converted(tmp_path, body)
+    assert "Wingdings" in contents["word/document.xml"]
+
+
+def test_an_embedded_family_is_never_swapped(tmp_path):
+    """Its glyphs travel with the document, so there is nothing to fix."""
+    body = run_with('<w:rFonts w:ascii="Sassoon Primary"/>')
+    _, contents = converted(tmp_path, body)
+    assert "Sassoon Primary" in contents["word/document.xml"]
+
+
+def test_a_theme_font_is_substituted_in_the_theme(tmp_path):
+    """A run using a theme reference names no font, so the body cannot be rewritten.
+
+    The family lives in theme1.xml and that is the only place changing it has
+    any effect. Without this, a document formatted the way Word formats one by
+    default would report a substitution and receive none.
+    """
+    theme = (
+        f'<a:theme {A}><a:themeElements><a:fontScheme name="Office">'
+        '<a:majorFont><a:latin typeface="Calibri Light"/></a:majorFont>'
+        '<a:minorFont><a:latin typeface="Calibri"/></a:minorFont>'
+        "</a:fontScheme></a:themeElements></a:theme>"
+    )
+    report, contents = converted(tmp_path, "<w:p><w:r><w:t>Body</w:t></w:r></w:p>", theme=theme)
+    emitted = contents["word/theme/theme1.xml"]
+    assert "Carlito" in emitted, "the theme still names the original family"
+    assert report["fontSubstitutions"] == {"Calibri -> Carlito": 1}, report["fontSubstitutions"]
+    # majorFont is Calibri Light, which is also a high-confidence candidate --
+    # and is left alone, because no run in this document resolves to it. Only
+    # families the document actually asks for are substituted.
+    assert "Calibri Light" in emitted, (
+        "an unused theme slot was rewritten; substitution should follow use"
+    )
+
+
+def test_a_font_named_only_in_a_style_is_substituted_there(tmp_path):
+    """A well-built template keeps its fonts in styles, so this is the usual case."""
+    styles = (
+        f"<w:styles {W}>"
+        '<w:style w:styleId="Body"><w:rPr>'
+        '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/></w:rPr></w:style>'
+        "</w:styles>"
+    )
+    body = '<w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr><w:r><w:t>Text</w:t></w:r></w:p>'
+    _, contents = converted(tmp_path, body, styles=styles)
+    assert "Tinos" in contents["word/styles.xml"]
+    assert "Times New Roman" not in contents["word/styles.xml"]
+
+
+def test_the_report_names_what_changed_rather_than_counting(tmp_path):
+    """ "Nine fonts replaced" is not checkable; naming the pair is."""
+    body = run_with('<w:rFonts w:ascii="Arial"/>') + run_with('<w:rFonts w:ascii="Courier New"/>')
+    report, _ = converted(tmp_path, body, theme=PLAIN_THEME)
+    assert set(report["fontSubstitutions"]) == {"Arial -> Arimo", "Courier New -> Cousine"}
+
+
+def test_a_document_with_nothing_to_substitute_is_left_alone(tmp_path):
+    """No mapping means no rewrite, not a rewrite that happens to match."""
+    body = run_with('<w:rFonts w:ascii="Nothing Known" w:hAnsi="Nothing Known"/>')
+    report, contents = converted(tmp_path, body, theme=f"<a:theme {A}></a:theme>")
+    assert report["fontSubstitutions"] == {}
+    assert "Nothing Known" in contents["word/document.xml"]
