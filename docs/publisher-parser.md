@@ -18,7 +18,7 @@ input.pub → libmspub → native adapter → document.json
 
 | Part | State |
 |---|---|
-| Callback adapter and IR model | Implemented, 92 unit tests passing |
+| Callback adapter and IR model | Implemented, 105 unit tests passing |
 | `publisher-parser` CLI | Implemented; failure and limit paths tested end to end |
 | Schema and validator | Implemented |
 | PUB-001 regression | **Passing** against the real document — see [PUB-001](#pub-001) |
@@ -64,12 +64,44 @@ rectangular `drawPolygon`. A parser watching only `drawGraphicObject`
 would report that school booklet as having no pictures in it. Both routes
 are supported, and every asset use records which one it came through.
 
-**`startLayer` is not a group.** librevenge emits layers as a rendering
-construct. Treating one as a user-created Publisher group would invent
-structure the author never made, so wrappers (`type: "wrapper"`,
-`isAuthoredGroup: false`) and authored groups (`type: "group"`) are
-different things in the model. PUB-001 contains exactly one layer and no
-authored group, which is the case that would have been misreported.
+**A layer is sometimes a group, and the parser decides which.** libmspub
+0.1.4 never calls `openGroup`. It emits an authored group as a layer with no
+properties, and it also wraps a single shape painted in several passes
+(border art, or any two of stroke, fill and text) in a layer, with
+`svg:clip-path` when the shape is cropped. The parser classifies each layer
+when it closes:
+
+- a clip path means one cropped shape, so it stays a **wrapper**;
+- a nested layer, or children placed apart rather than around one shape,
+  means a **probable authored group**: `type: "group"`,
+  `container.kind: "layer"`, and a `probable-authored-group` warning
+  stating the evidence;
+- anything else stays a **wrapper** (`isAuthoredGroup: false`).
+
+The rule is conservative: a group whose largest child contains the others
+stays a wrapper, losing the grouping but no content. This supersedes the
+original "a layer is never a group" rule. See `.agent/DECISIONS.md`.
+
+## What libmspub 0.1.4 actually emits
+
+Checked against the library's own source (`MSPUBCollector.cpp`, `Fill.cpp`
+at tag `libmspub-0.1.4`), and pinned by `tests/test_libmspub_shapes.cpp`:
+
+| Construct | How it arrives | What the parser does |
+|---|---|---|
+| Picture | `setStyle` with a bitmap fill, then a shape | image, `bitmapFillShape` route |
+| Rotated picture or shape | rotation folded into the outline; `librevenge:rotate` is emitted for **text frames only** | rotation recovered from a rotated rectangular outline (`rotation-from-outline`), instead of the picture being read as a mask |
+| Flipped picture or shape | folded into the outline, which winds the other way | `outline-mirrored` warning. The bitmap itself is not mirrored |
+| Fill rotated inside its shape | `librevenge:rotate` on the fill style, as a string | `fill-rotated` warning, value kept in the style properties |
+| Cropped picture | a layer carrying `svg:clip-path` | wrapper with `layer-clip-path`. The clip is kept, not applied |
+| Group | a layer with no properties | see above |
+| BorderArt | the **only** use of `drawGraphicObject`: one call per tile | each tile flagged `probable-border-art` |
+| Master page | never `startMasterPage`: the master's background and shapes are painted into **every page** before its own content | indistinguishable from page content; repeated on each page |
+| Lists, links, fields | never emitted | not recoverable from a `.pub` through libmspub 0.1.4 |
+
+The model still supports `openGroup`, master pages, lists, links and fields,
+because it is meant to be source-independent. The tests driving those
+callbacks are marked as not reachable from a `.pub`.
 
 **libmspub declares column widths but not row heights.** PUB-001's table
 carries a 386.897244 pt column and no `style:row-height` or
@@ -181,7 +213,7 @@ Neither needs a Google API, credentials or a network. The Python tests
 skip the CLI suite if the binary is not built, and skip the PUB-001 suite
 if the private fixture is not supplied.
 
-With the fixture supplied: **92 C++ tests and 55 Python tests pass, none
+With the fixture supplied: **105 C++ tests and 55 Python tests pass, none
 skipped.**
 
 ## PUB-001
@@ -260,24 +292,23 @@ validator rejects a parser bundle that claims `basis: "verified"`.
 
 Stated plainly, because the tests passing does not close them:
 
-1. **The container image has not been built.** No Docker daemon was
-   available. Package names and versions were verified on Ubuntu 24.04,
-   which is why the image uses that base rather than Debian, but the
-   build itself is unrun.
-2. **CI has not executed.** The workflow is written but has never run.
+1. ~~The container image has not been built.~~ Closed: it builds in CI and
+   runs the C++ suite as part of the build.
+2. ~~CI has not executed.~~ Closed: all checks run on every Publisher change.
 3. **Only one real document has been parsed.** PUB-001 is a clean,
-   modern, image-heavy A5 booklet. It exercises text, tables, both path
-   callbacks, a layer and the bitmap-fill image route — but it contains
-   no authored group, no `drawGraphicObject`, no master page, no
-   metafile image, no embedded font, no list, no link and no rotated
-   object. Those paths are covered by unit tests against synthetic
-   callbacks only. **PUB-002 onwards matter.**
+   modern, image-heavy A5 booklet. The constructs it lacks are now tested
+   the way libmspub really emits them (see *What libmspub 0.1.4 actually
+   emits*), but that is library source, not a real file. Grouped,
+   rotated, flipped, cropped and border-art documents are the next real
+   evidence needed. **PUB-002 onwards matter.**
 4. **PUB-001 cannot run in CI**, because the document must not be
    committed. Acceptance is a local step until a private runner or a
    secured fixture store exists.
 
-Closed since the first draft: the adapter has now parsed a real `.pub`,
-and PUB-001 acceptance passes.
+Closed since the first draft: the adapter has parsed a real `.pub`, PUB-001
+acceptance passes, and the container build and CI run green. **PUB-001 must
+be re-run locally** after the layer classification change. Its test asserts
+its one layer is a wrapper.
 
 ## Scope
 
