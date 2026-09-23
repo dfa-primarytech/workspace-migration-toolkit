@@ -43,6 +43,10 @@ NS = {
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "v": "urn:schemas-microsoft-com:vml",
     "wps": "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+    # OMML. Without this, equations re-serialise under a generated prefix --
+    # still valid, but it churns every equation in the output for no reason
+    # and makes a diff of two conversions unreadable.
+    "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
 }
 
 # Keep the conventional prefixes on output. Word tolerates any prefix, but
