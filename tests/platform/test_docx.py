@@ -1182,11 +1182,16 @@ def test_more_pictures_than_rows_is_reported_rather_than_guessed():
 
 
 def test_two_vertical_origins_are_not_ranked_against_each_other():
-    """A page offset and a paragraph offset differ by an unknown constant, so
-    sorting them together orders the pictures arbitrarily."""
+    """Offsets from different origins differ by a constant, and sorting them
+    together orders the pictures arbitrarily.
+
+    A page origin can be resolved against a paragraph one when the paragraph
+    starts the text area, because the constant is then the top margin exactly.
+    Nothing else can: a margin origin moves with the section's own geometry.
+    """
     body = para(
         floating(200000, 100000),
-        floating(200000, 2000000, frame_v="page"),
+        floating(200000, 2000000, frame_v="margin"),
     ) + question_table(rows=2, columns=(5752,))
     report, _ = placed_pictures(body)
 
@@ -1217,3 +1222,80 @@ def test_a_cell_that_already_holds_content_is_not_treated_as_free():
 
     assert report["picturesPlaced"] == 0
     assert report["picturesUnplaced"] == 1
+
+
+def inline_in_cell(cx=1500000):
+    return (
+        f'<w:p><w:r><w:drawing><wp:inline><wp:extent cx="{cx}" cy="500000"/>'
+        f"<wp:docPr/>{PICTURE}</wp:inline></w:drawing></w:r></w:p>"
+    )
+
+
+def paired_table(rows=2, columns=(5752, 5752)):
+    """A table whose every question cell already holds one picture."""
+    grid = "".join(f"<w:gridCol w:w='{w}'/>" for w in columns)
+    head = "".join("<w:tc><w:p><w:r><w:t>Can I count?</w:t></w:r></w:p></w:tc>" for _ in columns)
+    body = "".join(
+        "<w:tr>"
+        + "".join(
+            f"<w:tc><w:p><w:r><w:t>{n + 1}.</w:t></w:r></w:p>{inline_in_cell()}</w:tc>"
+            for _ in columns
+        )
+        + "</w:tr>"
+        for n in range(rows)
+    )
+    return f"<w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid><w:tr>{head}</w:tr>{body}</w:tbl>"
+
+
+def test_a_second_picture_is_appended_when_every_cell_already_holds_one():
+    """A worksheet often gives each question two pictures -- one in the cell
+    and one floating over it. Once #34 has inlined the first, every cell is
+    full, and appending is the only reading that places anything at all."""
+    body = para(
+        floating(200000, 100000),
+        floating(4000000, 100000),
+        floating(200000, 2000000),
+        floating(4000000, 2000000),
+    ) + paired_table(rows=2)
+    root = parse_xml(document(body + A4_SECTION))
+    report = transform(root)
+
+    assert report["picturesPlaced"] == 4
+    assert report["picturesUnplaced"] == 0
+    per_cell = [len(list(tc.iter(q("wp", "inline")))) for tc in root.iter(q("w", "tc"))]
+    assert per_cell == [0, 0, 2, 2, 2, 2], per_cell
+
+
+def test_a_page_offset_is_ranked_with_a_paragraph_offset_when_the_top_is_known():
+    """The constant between the two is the top margin, exactly -- but only
+    when the paragraph starts the text area."""
+    top = 914400  # the A4 fixture's 1440 dxa top margin
+    body = para(
+        floating(200000, top + 100000, frame_v="page"),
+        floating(200000, 2000000),
+    ) + question_table(rows=2, columns=(5752,))
+    root = parse_xml(document(body + A4_SECTION))
+    report = transform(root)
+
+    assert report["picturesPlaced"] == 2, report
+    assert report["picturesUnplaced"] == 0
+    per_cell = [len(list(tc.iter(q("wp", "inline")))) for tc in root.iter(q("w", "tc"))]
+    assert per_cell == [0, 1, 1]
+
+
+def test_a_page_offset_is_still_refused_when_the_paragraph_is_not_at_the_top():
+    # Anything above it moves the paragraph down by an unknown amount, so the
+    # two origins cannot be ranked against each other.
+    body = (
+        para("<w:r><w:t>A heading</w:t></w:r>")
+        + para(
+            floating(200000, 1014400, frame_v="page"),
+            floating(200000, 2000000),
+        )
+        + question_table(rows=2, columns=(5752,))
+    )
+    root = parse_xml(document(body + A4_SECTION))
+    report = transform(root)
+
+    assert report["picturesPlaced"] == 0
+    assert report["picturesUnplaced"] == 2
