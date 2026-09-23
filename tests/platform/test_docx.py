@@ -1363,3 +1363,66 @@ def test_reclaiming_never_empties_a_cell():
     cell = root.find(".//" + q("w", "tc"))
     assert cell.findall(q("w", "p")), "a cell must still hold a paragraph"
     assert local(list(cell)[-1].tag) == "p", "and must end with one"
+
+
+# --------------------------------------------------- legacy VML (issue #48)
+
+
+def wrapped_pict(inner):
+    """A <w:pict> holding whatever VML the test wants, unlike `pict` above
+    which always builds a single bare shape."""
+    return f"<w:p><w:r><w:pict>{inner}</w:pict></w:r></w:p>"
+
+
+def vml_shape(style="width:100pt;height:50pt", inner=""):
+    return f"<v:shape style='{style}'><v:imagedata r:id='rId1'/>{inner}</v:shape>"
+
+
+def test_a_captioned_legacy_photo_keeps_its_caption():
+    """A v:group holding a picture and a text box is what a document that
+    began life as a .doc is full of. The old rule took the picture and threw
+    the caption away, then counted it as a successful conversion."""
+    caption = "<v:textbox><w:txbxContent><w:p><w:r><w:t>Fig 1</w:t></w:r></w:p></w:txbxContent></v:textbox>"
+    body = (
+        wrapped_pict(f"<v:group>{vml_shape()}<v:shape>{caption}</v:shape></v:group>") + A4_SECTION
+    )
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    text = "".join(t.text or "" for t in root.iter(q("w", "t")))
+    assert "Fig 1" in text, "the caption must survive"
+    assert report["legacyPictures"] == 0, "nothing was safely converted"
+    assert report["unsupported"] == {"grouped legacy shape": 1}, report["unsupported"]
+
+
+def test_a_picture_watermark_is_not_turned_into_inline_content():
+    """Word's watermark is an absolutely positioned shape with a negative
+    z-index. Inline it stops being a backdrop and pushes the page down."""
+    style = "position:absolute;width:451pt;height:600pt;z-index:-251658752"
+    root = parse_xml(document(wrapped_pict(vml_shape(style)) + A4_SECTION))
+    report = transform(root)
+
+    assert not list(root.iter(q("wp", "inline"))), "a watermark must stay where it is"
+    assert root.find(".//" + q("v", "shape")) is not None, "and must not be deleted"
+    assert report["unsupported"] == {"legacy watermark or background": 1}
+
+
+def test_a_plain_legacy_picture_is_still_converted():
+    root = parse_xml(document(wrapped_pict(vml_shape()) + A4_SECTION))
+    report = transform(root)
+
+    assert report["legacyPictures"] == 1
+    assert report["unsupported"] == {}
+    extent = root.find(".//" + q("wp", "extent"))
+    assert int(extent.get("cx")) == 1270000, "100pt"
+
+
+def test_a_size_is_read_from_the_right_property():
+    # Unanchored, "width" also matches inside mso-width-percent, and the
+    # picture is rebuilt at whatever number happened to come first.
+    style = "mso-wrap-width:900pt;width:100pt;mso-wrap-height:9pt;height:50pt"
+    root = parse_xml(document(wrapped_pict(vml_shape(style)) + A4_SECTION))
+    transform(root)
+
+    extent = root.find(".//" + q("wp", "extent"))
+    assert (int(extent.get("cx")), int(extent.get("cy"))) == (1270000, 635000)
