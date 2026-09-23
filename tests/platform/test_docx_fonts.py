@@ -398,13 +398,28 @@ def converted(tmp_path, body: str, **parts: str):
 
 
 def test_a_high_confidence_substitution_is_applied(tmp_path):
-    """Arial to Arimo is metric-compatible; applying it needs nobody's opinion."""
-    body = run_with('<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>')
+    """Baskerville is genuinely absent from Google Docs, so replacing it helps.
+
+    This used Arial until Arial was measured as present in Docs. Baskerville
+    is now the only high-confidence mapping left, because the rest turned out
+    to be families Google ships.
+    """
+    body = run_with('<w:rFonts w:ascii="Baskerville" w:hAnsi="Baskerville"/>')
     report, contents = converted(tmp_path, body, theme=PLAIN_THEME)
     document = contents["word/document.xml"]
-    assert "Arimo" in document, "the high-confidence substitution was not applied"
-    assert "Arial" not in document, "the original family was left behind"
-    assert report["fontSubstitutions"] == {"Arial -> Arimo": 2}, report["fontSubstitutions"]
+    assert "Libre Baskerville" in document, "the high-confidence substitution was not applied"
+    assert report["fontSubstitutions"] == {"Baskerville -> Libre Baskerville": 2}, report[
+        "fontSubstitutions"
+    ]
+
+
+def test_a_family_google_docs_ships_is_never_touched(tmp_path):
+    """The defect this change fixes: we were replacing fonts Google has."""
+    body = run_with('<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>')
+    report, contents = converted(tmp_path, body, theme=PLAIN_THEME)
+    assert "Arial" in contents["word/document.xml"], "Arial was replaced; Docs has Arial"
+    assert "Arimo" not in contents["word/document.xml"]
+    assert report["fontSubstitutions"] == {}
 
 
 def test_a_medium_confidence_substitution_is_left_alone(tmp_path):
@@ -415,10 +430,10 @@ def test_a_medium_confidence_substitution_is_left_alone(tmp_path):
     the medium-confidence set also contains handwriting families, and a phonics
     worksheet set in a different hand is the wrong teaching material.
     """
-    body = run_with('<w:rFonts w:ascii="Century Gothic"/>')
+    body = run_with('<w:rFonts w:ascii="Segoe UI"/>')
     report, contents = converted(tmp_path, body, theme=PLAIN_THEME)
-    assert "Century Gothic" in contents["word/document.xml"]
-    assert "Montserrat" not in contents["word/document.xml"]
+    assert "Segoe UI" in contents["word/document.xml"]
+    assert "Inter" not in contents["word/document.xml"]
     assert report["fontSubstitutions"] == {}
 
 
@@ -453,18 +468,20 @@ def test_a_theme_font_is_substituted_in_the_theme(tmp_path):
     """
     theme = (
         f'<a:theme {A}><a:themeElements><a:fontScheme name="Office">'
-        '<a:majorFont><a:latin typeface="Calibri Light"/></a:majorFont>'
-        '<a:minorFont><a:latin typeface="Calibri"/></a:minorFont>'
+        '<a:majorFont><a:latin typeface="Rockwell"/></a:majorFont>'
+        '<a:minorFont><a:latin typeface="Baskerville"/></a:minorFont>'
         "</a:fontScheme></a:themeElements></a:theme>"
     )
     report, contents = converted(tmp_path, "<w:p><w:r><w:t>Body</w:t></w:r></w:p>", theme=theme)
     emitted = contents["word/theme/theme1.xml"]
-    assert "Carlito" in emitted, "the theme still names the original family"
-    assert report["fontSubstitutions"] == {"Calibri -> Carlito": 1}, report["fontSubstitutions"]
-    # majorFont is Calibri Light, which is also a high-confidence candidate --
+    assert "Libre Baskerville" in emitted, "the theme still names the original family"
+    assert report["fontSubstitutions"] == {"Baskerville -> Libre Baskerville": 1}, report[
+        "fontSubstitutions"
+    ]
+    # majorFont is Rockwell, which is also absent from Docs --
     # and is left alone, because no run in this document resolves to it. Only
     # families the document actually asks for are substituted.
-    assert "Calibri Light" in emitted, (
+    assert "Rockwell" in emitted, (
         "an unused theme slot was rewritten; substitution should follow use"
     )
 
@@ -474,20 +491,19 @@ def test_a_font_named_only_in_a_style_is_substituted_there(tmp_path):
     styles = (
         f"<w:styles {W}>"
         '<w:style w:styleId="Body"><w:rPr>'
-        '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/></w:rPr></w:style>'
+        '<w:rFonts w:ascii="Baskerville" w:hAnsi="Baskerville"/></w:rPr></w:style>'
         "</w:styles>"
     )
     body = '<w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr><w:r><w:t>Text</w:t></w:r></w:p>'
-    _, contents = converted(tmp_path, body, styles=styles)
-    assert "Tinos" in contents["word/styles.xml"]
-    assert "Times New Roman" not in contents["word/styles.xml"]
+    _, contents = converted(tmp_path, body, styles=styles, theme=PLAIN_THEME)
+    assert "Libre Baskerville" in contents["word/styles.xml"]
 
 
 def test_the_report_names_what_changed_rather_than_counting(tmp_path):
     """ "Nine fonts replaced" is not checkable; naming the pair is."""
-    body = run_with('<w:rFonts w:ascii="Arial"/>') + run_with('<w:rFonts w:ascii="Courier New"/>')
+    body = run_with('<w:rFonts w:ascii="Baskerville"/>')
     report, _ = converted(tmp_path, body, theme=PLAIN_THEME)
-    assert set(report["fontSubstitutions"]) == {"Arial -> Arimo", "Courier New -> Cousine"}
+    assert set(report["fontSubstitutions"]) == {"Baskerville -> Libre Baskerville"}
 
 
 def test_a_document_with_nothing_to_substitute_is_left_alone(tmp_path):

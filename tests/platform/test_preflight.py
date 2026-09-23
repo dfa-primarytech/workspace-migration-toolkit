@@ -30,13 +30,14 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
     assert manifest["fonts"] == [
         {
             "name": "Calibri",
-            "status": "SUBSTITUTED",
-            "replacement": "Carlito",
+            # Measured as present in Google Docs on 2026-09-23, so it is left
+            # alone. This entry previously claimed Calibri had to become
+            # Carlito, which cost the author's choice for no gain.
+            "status": "AVAILABLE",
+            "replacement": None,
             "confidence": "high",
-            "reason": "metric-compatible Calibri alternative",
-            "metricCompatible": True,
-            "basis": "curated-substitution",
-            "workspaceAvailability": "unverified",
+            "basis": "measured-present-in-google-docs",
+            "workspaceAvailability": "measured-2026-09-23",
             "manualReview": False,
         }
     ]
@@ -44,9 +45,14 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
     assert manifest["declaredFonts"] == ["Aptos"]
     assert {font["name"] for font in manifest["fontRequirements"]} == {"Aptos", "Calibri"}
     assert text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontFamily"] == "Calibri"
+    # Calibri needs no replacement: Google Docs has it. The run keeps the font
+    # the author chose, and the report says so rather than proposing a swap.
     assert (
-        text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontCompatibility"]["replacement"]
-        == "Carlito"
+        text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontCompatibility"]["replacement"] is None
+    )
+    assert (
+        text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontCompatibility"]["status"]
+        == "AVAILABLE"
     )
     assert "" not in manifest["relationships"]
     assert "_package" in manifest["relationships"]
@@ -61,7 +67,7 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
         warning["font"]
         for warning in manifest["warnings"]
         if warning["code"] == "font_substitution"
-    } == {"Aptos", "Calibri"}
+    } == {"Aptos"}  # Calibri is present in Docs, so there is nothing to warn about
     unknown = manifest["pages"][0]["elements"][-1]
     assert unknown["type"] == "unknown" and unknown["classification"] == "UNSUPPORTED"
     assert pptx.read_bytes() == before
