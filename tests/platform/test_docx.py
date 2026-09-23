@@ -590,6 +590,7 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
         "textboxes": 1,
         "pictures": 0,
         "picturesInlined": 0,
+        "blankLinesReclaimed": 0,
         "picturesPlaced": 0,
         "picturesUnplaced": 0,
         "tablesNarrowed": 0,
@@ -1299,3 +1300,66 @@ def test_a_page_offset_is_still_refused_when_the_paragraph_is_not_at_the_top():
 
     assert report["picturesPlaced"] == 0
     assert report["picturesUnplaced"] == 2
+
+
+# ------------------------------- blank lines that were holding a place (#42 x #34)
+
+BLANK = "<w:p/>"
+
+
+def cell_paragraphs(root):
+    cell = root.find(".//" + q("w", "tc"))
+    return [
+        "picture"
+        if list(p.iter(q("wp", "inline")))
+        else ("".join(t.text or "" for t in p.iter(q("w", "t"))) or "blank")
+        for p in cell.findall(q("w", "p"))
+    ]
+
+
+def test_blank_lines_that_were_holding_a_pictures_place_are_reclaimed():
+    """A worksheet reserves room for a picture floating over a cell by typing
+    blank lines inside it. Since #34 the picture is inside the cell and brings
+    its own height, so keeping both counts the same space twice -- measured at
+    9.7in of blank on top of 63.8in of picture across 32 cells."""
+    body = in_cell(para("<w:r><w:t>1.</w:t></w:r>") + BLANK * 3 + anchor(PICTURE)) + A4_SECTION
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    assert report["picturesInlined"] == 1
+    assert report["blankLinesReclaimed"] == 3
+    assert cell_paragraphs(root) == ["1.", "picture"], cell_paragraphs(root)
+
+
+def test_a_cell_that_gains_no_picture_keeps_every_blank_line():
+    """#42's rule is untouched wherever there is no picture to account for."""
+    body = in_cell(para("<w:r><w:t>Name</w:t></w:r>") + BLANK * 3) + A4_SECTION
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    assert report["blankLinesReclaimed"] == 0
+    assert cell_paragraphs(root) == ["Name", "blank", "blank", "blank"]
+
+
+def test_a_cell_that_already_held_a_picture_keeps_its_blank_lines():
+    # Nothing moved into this cell, so nothing in it was reserving space.
+    inline = '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="900000" cy="900000"/>'
+    inline += f"<wp:docPr/>{PICTURE}</wp:inline></w:drawing></w:r></w:p>"
+    body = in_cell(inline + BLANK * 2) + A4_SECTION
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    assert report["blankLinesReclaimed"] == 0
+    assert cell_paragraphs(root) == ["picture", "blank", "blank"]
+
+
+def test_reclaiming_never_empties_a_cell():
+    # OOXML requires a cell to end with a paragraph; the picture's own
+    # paragraph is what satisfies that here.
+    body = in_cell(BLANK * 2 + anchor(PICTURE)) + A4_SECTION
+    root = parse_xml(document(body))
+    transform(root)
+
+    cell = root.find(".//" + q("w", "tc"))
+    assert cell.findall(q("w", "p")), "a cell must still hold a paragraph"
+    assert local(list(cell)[-1].tag) == "p", "and must end with one"

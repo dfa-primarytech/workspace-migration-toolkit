@@ -1168,11 +1168,43 @@ def _move_into_cell(
     report["picturesPlaced"] += 1
 
 
+def _cell_pictures(cell: Element) -> bool:
+    """Whether this cell's own paragraphs hold an inline picture."""
+    return any(list(p.iter(q("wp", "inline"))) for p in cell.findall(q("w", "p")))
+
+
+def _release_reserved_space(root: Element, before: set[Element], blank: set[Element]) -> int:
+    """Stops protecting blank lines that were holding a picture's place.
+
+    #42 is right that an author's blank line is layout and must survive. But a
+    worksheet reserves room for a picture floating *over* a cell by typing
+    blank lines inside it, and since #34 that picture is inline content of the
+    cell and brings its own height. Keeping both counts the same space twice:
+    measured on a real worksheet, 32 cells carried 9.7in of blank lines on top
+    of 63.8in of picture -- an extra page of nothing.
+
+    So only in a cell that has just gained a picture, and only for lines that
+    were already blank, the protection is lifted. Everything else about
+    `remove_empty_paragraphs` still applies, including never emptying a cell.
+    """
+    released = 0
+    for cell in root.iter(q("w", "tc")):
+        if cell in before or not _cell_pictures(cell):
+            continue
+        for paragraph in cell.findall(q("w", "p")):
+            if paragraph in blank:
+                blank.discard(paragraph)
+                released += 1
+    return released
+
+
 def transform(root: Element, ids: Ids | None = None) -> dict:
     """Applies every pass, in the order they depend on each other."""
     ids = ids or Ids()
     # Before anything moves: which blank lines are the author's own.
     already_empty = empty_paragraphs(root)
+    # Which cells already held a picture, so we can tell which ones gain one.
+    had_pictures = {cell for cell in root.iter(q("w", "tc")) if _cell_pictures(cell)}
     strip_fallbacks_keep_choice(root)
     # Ink runs go first, so replace_anchors never sees them -- which is why the
     # count is carried across rather than taken from that pass.
@@ -1189,6 +1221,7 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     # how wide that table needs to be.
     report.update(place_orphan_pictures(root, ids))
     report.update(fit_tables_to_page(root))
+    report["blankLinesReclaimed"] = _release_reserved_space(root, had_pictures, already_empty)
     remove_empty_paragraphs(root, already_empty)
     return report
 
@@ -1303,6 +1336,7 @@ def render(package: Package, destination: Path) -> dict:
         # real document: without them "pictures: 128" reads as work done when
         # the pictures may simply have been counted and left where they were.
         "picturesInlined": 0,
+        "blankLinesReclaimed": 0,
         "picturesPlaced": 0,
         "picturesUnplaced": 0,
         "tablesNarrowed": 0,
@@ -1347,6 +1381,7 @@ def render(package: Package, destination: Path) -> dict:
             "textboxes",
             "pictures",
             "picturesInlined",
+            "blankLinesReclaimed",
             "picturesPlaced",
             "picturesUnplaced",
             "tablesNarrowed",
@@ -1743,6 +1778,7 @@ async def convert(
                 "textboxes",
                 "pictures",
                 "picturesInlined",
+                "blankLinesReclaimed",
                 "picturesPlaced",
                 "picturesUnplaced",
                 "tablesNarrowed",
