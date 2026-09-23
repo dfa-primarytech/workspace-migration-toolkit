@@ -161,6 +161,7 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
     report: dict[str, Any] = {
         "textboxes": 0,
         "pictures": 0,
+        "picturesInlined": 0,
         "ink": 0,
         "unsupported": unsupported,
     }
@@ -174,6 +175,8 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
         elif item.kind == "picture":
             if item.behind:
                 send_behind_text(item.anchor)
+            elif _inline_picture(parent_of, item, ids):
+                report["picturesInlined"] += 1
             report["pictures"] += 1
         elif item.kind == "textbox":
             # Counted only when a table was actually produced. A report saying
@@ -182,6 +185,60 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
             if _replace_textbox(parent_of, item, ids):
                 report["textboxes"] += 1
     return report
+
+
+def _inline_picture(parent_of: dict, item: Anchored, ids: Ids) -> bool:
+    """Turns a picture floating inside a table cell into inline cell content.
+
+    A floating picture is positioned against the page, the margin or a
+    paragraph -- never against the cell it sits in. So the cell allocates no
+    height for it, the row stays as short as its text, and the picture is drawn
+    across the borders and over its neighbours. Measured on a real worksheet:
+    every question image landed outside the cell it belonged to.
+
+    Inline content contributes to the cell's height, so the table makes room
+    for it. That is the whole repair.
+
+    Only pictures already inside a cell are moved. One anchored elsewhere may
+    genuinely belong where it was put -- a logo in a letterhead, a watermark --
+    and guessing its owner from coordinates is a separate problem. A picture
+    sent behind the text is deliberate backdrop and is left alone.
+    """
+    if item.run is None:
+        return False
+    if _enclosing(parent_of, item.run, "tc") is None:
+        return False
+    # `item.behind` means a text box is stacked on this picture. An author's
+    # own watermark says so on the anchor instead, and inlining one would push
+    # the text it sits under down the page.
+    if item.anchor.get("behindDoc") not in (None, *OFF_VALUES):
+        return False
+    graphic = item.anchor.find(q("a", "graphic"))
+    extent = item.anchor.find(q("wp", "extent"))
+    if graphic is None or extent is None:
+        return False
+
+    inline = Element(q("wp", "inline"))
+    inline.attrib.update({"distT": "0", "distB": "0", "distL": "0", "distR": "0"})
+    # CT_Inline fixes this order: extent, effectExtent?, docPr, frame?, graphic.
+    inline.append(extent)
+    effect = item.anchor.find(q("wp", "effectExtent"))
+    if effect is not None:
+        inline.append(effect)
+    described = item.anchor.find(q("wp", "docPr"))
+    if described is None:
+        described = Element(q("wp", "docPr"))
+        described.attrib.update({"id": str(ids.next()), "name": "Picture"})
+    inline.append(described)
+    frame = item.anchor.find(q("wp", "cNvGraphicFramePr"))
+    if frame is not None:
+        inline.append(frame)
+    inline.append(graphic)
+
+    at = list(item.drawing).index(item.anchor)
+    item.drawing.remove(item.anchor)
+    item.drawing.insert(at, inline)
+    return True
 
 
 def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> bool:

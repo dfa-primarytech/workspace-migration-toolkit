@@ -6,7 +6,7 @@ from collections import Counter
 import pytest
 from workspace_toolkit.config import Settings
 from workspace_toolkit.docs import Ids, render, send_behind_text, transform
-from workspace_toolkit.docx import NS, parse, q
+from workspace_toolkit.docx import NS, local, parse, q
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.package import CONTENT_NS, DOCX, DOCX_MAIN_MIME, REL_NS, Package
 
@@ -28,8 +28,8 @@ def run(body, *, h=None, v=None, cx=3000000, cy=1000000, dist="", behind="0"):
         f'<w:r><w:drawing><wp:anchor behindDoc="{behind}" {dist}>'
         f"{position}"
         f'<wp:extent cx="{cx}" cy="{cy}"/>'
-        f"{body}"
         f"<wp:docPr/>"
+        f"{body}"
         f"</wp:anchor></w:drawing></w:r>"
     )
 
@@ -57,7 +57,17 @@ TEXTBOX = (
     "<wps:txbx><w:txbxContent><w:p><w:r><w:t>Card text</w:t></w:r></w:p></w:txbxContent>"
     "</wps:txbx></wps:wsp></a:graphicData></a:graphic>"
 )
-PICTURE = '<a:graphic><a:graphicData uri="pic"><a:blip r:embed="rId1"/></a:graphicData></a:graphic>'
+# A picture as Word actually writes one. The short form this used to carry --
+# uri="pic" wrapping a bare <a:blip> -- is not renderable DrawingML, so every
+# picture test passed against a shape no reader would draw.
+PICTURE = (
+    '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+    '<pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Picture"/><pic:cNvPicPr/></pic:nvPicPr>'
+    '<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+    '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="3000000" cy="1000000"/></a:xfrm>'
+    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>'
+    "</a:graphicData></a:graphic>"
+)
 INK = "<w14:contentPart/>"
 
 
@@ -549,6 +559,7 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
     assert report == {
         "textboxes": 1,
         "pictures": 0,
+        "picturesInlined": 0,
         "ink": 0,
         "legacyPictures": 0,
         "unsupported": {},
@@ -765,3 +776,68 @@ def test_a_refused_asset_copy_still_leaves_the_document_verified(tmp_path):
     assert incomplete[0]["attempted"] >= 1
     assert incomplete[0]["reasons"] == ["http_429"], "the report should say which way it failed"
     assert google.uploads[-1]["name"] == "Conversion report.json", "the report is still saved"
+
+
+def in_cell(inner):
+    """One table with a single cell holding `inner`."""
+    return (
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='5000'/></w:tblGrid>"
+        f"<w:tr><w:tc><w:tcPr/>{inner}</w:tc></w:tr></w:tbl>"
+    )
+
+
+def transformed(tmp_path, body):
+    root = parse_xml(document(body))
+    report = transform(root)
+    return root, report
+
+
+def parse_xml(text):
+    from defusedxml.ElementTree import fromstring
+
+    return fromstring(text)
+
+
+def test_a_picture_floating_inside_a_cell_becomes_cell_content(tmp_path):
+    """A floating picture is positioned against the page, never its cell.
+
+    So the row stays as short as its text and the picture is drawn across the
+    borders. Inline content contributes to the cell's height instead.
+    """
+    body = in_cell(anchor(PICTURE, h=("column", offset(0)), v=("paragraph", offset(0)))) + SECTION
+    root, report = transformed(tmp_path, body)
+
+    assert root.find(".//" + q("wp", "anchor")) is None, "it must stop floating"
+    inline = root.find(".//" + q("wp", "inline"))
+    assert inline is not None, "it should become inline cell content"
+    assert report["picturesInlined"] == 1
+
+    # The picture itself must survive intact, not be rebuilt from guesses.
+    assert inline.find(".//" + q("a", "blip")).get(q("r", "embed")) == "rId1"
+    assert inline.find(q("wp", "extent")).get("cx") == "3000000"
+
+    names = [local(child.tag) for child in inline]
+    assert names == sorted(names, key=["extent", "effectExtent", "docPr", "graphic"].index), names
+
+
+def test_a_picture_floating_outside_any_cell_is_left_alone(tmp_path):
+    """A logo in a letterhead belongs where its author put it.
+
+    Recovering which cell an image *visually* sits in, when the anchor says
+    otherwise, needs geometry. Guessing is worse than leaving it.
+    """
+    body = anchor(PICTURE, h=("page", offset(0)), v=("page", offset(0))) + SECTION
+    root, report = transformed(tmp_path, body)
+
+    assert root.find(".//" + q("wp", "anchor")) is not None, "it should still float"
+    assert root.find(".//" + q("wp", "inline")) is None
+    assert report["picturesInlined"] == 0
+
+
+def test_a_picture_sent_behind_the_text_stays_floating(tmp_path):
+    """A backdrop is deliberate. Inlining it would push the text down a page."""
+    body = in_cell(anchor(PICTURE, behind="1", h=("page", offset(0)))) + SECTION
+    root, report = transformed(tmp_path, body)
+
+    assert root.find(".//" + q("wp", "anchor")) is not None
+    assert report["picturesInlined"] == 0
