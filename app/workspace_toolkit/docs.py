@@ -1081,7 +1081,7 @@ async def convert(
     output_name: str = "Converted document",
 ) -> dict:
     """Uploads the rendered .docx for native import, then checks what came back."""
-    from .google import DOCS_MIME, DRIVE  # imported here to avoid a cycle
+    from .google import DOCS_MIME, DRIVE, save_assets  # imported here to avoid a cycle
 
     report = progress if progress is not None else {}
     report.update(analysis_report(manifest))
@@ -1095,7 +1095,7 @@ async def convert(
                 "Google does not currently offer Word conversion for this account.",
                 422,
             )
-        folder = await google.folder()
+        folder = await google.folder(output_name)
         report["folderUrl"] = "https://drive.google.com/drive/folders/" + folder
 
         # The repaired package, not the original: the repairs are the point.
@@ -1113,18 +1113,7 @@ async def convert(
 
         # Keep every extracted asset privately alongside the document, so
         # anything the importer drops is still recoverable by hand.
-        for asset in manifest["assets"].values():
-            saved = await google.upload(
-                result / asset["path"], asset["id"], asset["mimeType"], folder
-            )
-            report["assetOutputs"].append(
-                {
-                    "assetId": asset["id"],
-                    "kind": asset["kind"],
-                    "driveFileId": saved["id"],
-                    "url": "https://drive.google.com/file/d/" + saved["id"] + "/view",
-                }
-            )
+        await save_assets(result, manifest, google, folder, report)
 
         render_report = json.loads((result / "render.json").read_text(encoding="utf-8"))
         exported = await google.export_text(uploaded["id"])
@@ -1146,7 +1135,11 @@ async def convert(
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:
         report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
-        report["warnings"].append(warning(exc.code, exc.message, classification=C.UNSUPPORTED))
+        report["warnings"].append(
+            warning(exc.code, exc.message, classification=C.UNSUPPORTED, detail=exc.detail)
+            if exc.detail
+            else warning(exc.code, exc.message, classification=C.UNSUPPORTED)
+        )
         report["verification"] = "incomplete"
 
     if report.get("folderUrl"):

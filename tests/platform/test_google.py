@@ -166,7 +166,7 @@ def test_partial_failure_keeps_recovery_links(pptx, tmp_path):
         async def request(self, *a, **kw):
             return {"importFormats": {PPTX_MIME: ["application/vnd.google-apps.presentation"]}}
 
-        async def folder(self):
+        async def folder(self, job_name="Conversion"):
             return "partial-folder"
 
         async def upload(self, *a, **kw):
@@ -238,3 +238,141 @@ def test_google_rejects_malformed_success_responses(tmp_path):
     asyncio.run(run_request())
     asyncio.run(run_folder())
     asyncio.run(run_upload())
+
+
+def transport_calls(responses):
+    """A Drive stand-in that replays `responses` and records what it was asked."""
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return responses[min(len(calls) - 1, len(responses) - 1)](request)
+
+    return calls, httpx.MockTransport(handler)
+
+
+def json_body(request):
+    return json.loads(request.content.decode())
+
+
+def test_every_job_lands_in_one_shared_library_folder():
+    """A new top-level folder per conversion buries the person's Drive.
+
+    Measured against real use: each run created another "Workspace conversion"
+    at the root. There should be one library, and a dated subfolder per job.
+    """
+    existing = [
+        lambda r: httpx.Response(200, json={"files": [{"id": "library-1"}]}),
+        lambda r: httpx.Response(200, json={"id": "job-1"}),
+    ]
+
+    async def run():
+        calls, transport = transport_calls(existing)
+        async with httpx.AsyncClient(transport=transport) as client:
+            job = await Google("test-token", client).folder("Worksheet – converted")
+        assert job == "job-1"
+        assert calls[0].method == "GET", "the library must be looked for before creating one"
+        created = [c for c in calls if c.method == "POST"]
+        assert len(created) == 1, "an existing library must be reused, never duplicated"
+        body = json_body(created[0])
+        assert body["parents"] == ["library-1"], "the job folder belongs inside the library"
+        assert body["name"].startswith("Worksheet – converted ("), body["name"]
+
+    asyncio.run(run())
+
+
+def test_the_library_folder_is_created_once_when_it_is_missing():
+    first_run = [
+        lambda r: httpx.Response(200, json={"files": []}),
+        lambda r: httpx.Response(200, json={"id": "library-new"}),
+        lambda r: httpx.Response(200, json={"id": "job-1"}),
+    ]
+
+    async def run():
+        calls, transport = transport_calls(first_run)
+        async with httpx.AsyncClient(transport=transport) as client:
+            await Google("test-token", client).folder("Worksheet")
+        created = [json_body(c) for c in calls if c.method == "POST"]
+        assert "parents" not in created[0], "the library itself sits at the top level"
+        assert created[0]["name"] == "Workspace conversions"
+        assert created[1]["parents"] == ["library-new"]
+
+    asyncio.run(run())
+
+
+def test_a_throttled_asset_copy_is_retried_until_it_lands(tmp_path, monkeypatch):
+    """Drive throttles a burst of uploads. 65 images in one worksheet is a burst."""
+    path = tmp_path / "asset"
+    path.write_bytes(b"data")
+    waits = []
+
+    async def no_waiting(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", no_waiting)
+    attempts = []
+
+    def handler(request):
+        if request.method == "POST":
+            attempts.append(request)
+            if len(attempts) < 3:
+                return httpx.Response(429, json={"error": "rateLimitExceeded"})
+            return httpx.Response(
+                200, headers={"Location": "https://www.googleapis.com/upload/session"}
+            )
+        return httpx.Response(200, json={"id": "asset-1"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await Google("test-token", client).upload(
+                path, "asset", "image/png", "folder", retry=True
+            )
+
+    assert asyncio.run(run())["id"] == "asset-1"
+    assert len(attempts) == 3, "a throttled copy should be waited out, not abandoned"
+    assert waits == [1.0, 2.0], "the wait should back off rather than hammer Drive"
+
+
+def test_a_refused_asset_copy_is_not_retried(tmp_path, monkeypatch):
+    """A 400 is a real refusal. Asking again only delays reporting it."""
+    path = tmp_path / "asset"
+    path.write_bytes(b"data")
+    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", lambda s: asyncio.sleep(0))
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(400, json={"error": "badRequest"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(ToolkitError) as error:
+                await Google("test-token", client).upload(
+                    path, "asset", "image/png", "folder", retry=True
+                )
+            assert error.value.detail == "http_400", "the report should say which way it failed"
+
+    asyncio.run(run())
+    assert len(attempts) == 1
+
+
+def test_the_document_upload_is_never_retried(tmp_path, monkeypatch):
+    """A lost reply can still mean success: asking twice leaves two documents."""
+    path = tmp_path / "doc.docx"
+    path.write_bytes(b"data")
+    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", lambda s: asyncio.sleep(0))
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(429, json={"error": "rateLimitExceeded"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(ToolkitError):
+                await Google("test-token", client).upload(
+                    path, "doc", "application/octet-stream", "folder", convert=True
+                )
+
+    asyncio.run(run())
+    assert len(attempts) == 1, "the document must never be uploaded twice"

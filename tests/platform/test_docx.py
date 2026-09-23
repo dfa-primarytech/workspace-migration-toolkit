@@ -427,9 +427,10 @@ def test_media_is_extracted_for_recovery(tmp_path):
 class FakeGoogle:
     """Stands in for Drive. Records what would have been sent."""
 
-    def __init__(self, exported="Card text", importable=True):
+    def __init__(self, exported="Card text", importable=True, refuse_assets=False):
         self.exported = exported
         self.importable = importable
+        self.refuse_assets = refuse_assets
         self.uploads = []
 
     async def request(self, method, url, **kwargs):
@@ -438,10 +439,15 @@ class FakeGoogle:
 
         return {"importFormats": {DOCX_MIME: [DOCS_MIME]} if self.importable else {}}
 
-    async def folder(self):
+    async def folder(self, job_name="Conversion"):
         return "folder-id"
 
-    async def upload(self, path, name, mime, parent, convert=False, target=None):
+    async def upload(self, path, name, mime, parent, convert=False, target=None, retry=False):
+        if retry and self.refuse_assets:
+            # `retry=True` marks the private asset copies, never the document.
+            from workspace_toolkit.errors import ToolkitError
+
+            raise ToolkitError("upload_uncertain", "refused", 502, detail="http_429")
         self.uploads.append(
             {"path": path, "name": name, "mime": mime, "convert": convert, "target": target}
         )
@@ -737,3 +743,25 @@ def test_a_box_holding_only_a_picture_is_still_converted(tmp_path):
     )
     assert report["textboxes"] == 1, "a box holding a picture was treated as empty"
     assert root.find(".//" + q("w", "tbl")) is not None
+
+
+def test_a_refused_asset_copy_still_leaves_the_document_verified(tmp_path):
+    """The private asset copies are a fallback, not the deliverable.
+
+    Measured on a real worksheet: 27 of 65 copies uploaded, the 28th was
+    refused, and that one refusal abandoned the other 37 *and* skipped the
+    document's own verification -- reporting a good conversion as failed.
+    """
+    body = anchor(PICTURE) + SECTION
+    report, google = converted_job(tmp_path, body, refuse_assets=True)
+
+    assert report["status"] == "completed_with_warnings", "the document itself uploaded fine"
+    assert report["verification"] == "text_checked", "verification must not be skipped"
+    assert report["documentId"], "the document is still the deliverable"
+
+    incomplete = [w for w in report["warnings"] if w["code"] == "asset_copies_incomplete"]
+    assert incomplete, "a person should still be told the copies are missing"
+    assert incomplete[0]["saved"] == 0
+    assert incomplete[0]["attempted"] >= 1
+    assert incomplete[0]["reasons"] == ["http_429"], "the report should say which way it failed"
+    assert google.uploads[-1]["name"] == "Conversion report.json", "the report is still saved"

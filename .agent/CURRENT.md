@@ -1,5 +1,29 @@
 # Current state
 
+## First run against live Google, 23 September 2026
+
+The toolkit ran end to end against a real Google account for the first time:
+a real Word worksheet was converted to a Google Doc through the app's own
+`/api/convert`, not by hand. Three things came out of it.
+
+**The font fix holds.** Every family resolved `AVAILABLE` with no replacement,
+against 1,476 substitutions the same worksheet drew before #30.
+
+**Three upload defects, now fixed.** 27 of 65 private asset copies uploaded and
+the 28th was refused; that one refusal abandoned the other 37, skipped the
+document's own verification, and reported a good conversion as failed. The
+failing status was also discarded before it reached the report, so the cause
+could not be read off it afterwards. Retries, per-asset tolerance and a
+preserved failure detail are in `fix/asset-upload-resilience`.
+
+**Every run made a new top-level folder.** There is now one `Workspace
+conversions` library with a dated subfolder per job. Found by the human.
+
+Still unmeasured: whether the offsets of in-cell floating images survive, and
+whether Google de-duplicates images stacked at identical offsets. The latter
+is the standing explanation for 12 lost image placements and is not yet tested.
+
+
 ## Coordination
 
 SilentMountain coordinated until 23 September 2026 and has run out of budget.
