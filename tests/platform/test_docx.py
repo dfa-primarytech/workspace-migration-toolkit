@@ -1,5 +1,6 @@
 import asyncio
 import json
+import secrets
 import zipfile
 from collections import Counter
 
@@ -1095,3 +1096,47 @@ def test_a_replaced_typeface_is_named_in_the_report(tmp_path):
 
     substitutions = report["conversion"]["fontSubstitutions"]
     assert substitutions == {"Baskerville -> Libre Baskerville": 1}, substitutions
+
+
+def test_an_ordinary_long_document_is_not_refused_as_too_complex(tmp_path):
+    """A 130-page policy weighs 17 KiB and was refused outright.
+
+    The cap counted markup, not size, so the 25 MB upload limit made the file
+    look like it should have been fine, and the message said "too complex" --
+    which sends a person looking at their pictures and tables when the cause
+    is simply length.
+    """
+
+    def paragraph(number):
+        # Varied text, or the fixture compresses past the zip-bomb ratio and
+        # is refused for a reason that has nothing to do with this.
+        runs = "".join(
+            f"<w:r><w:rPr><w:rFonts w:ascii='Arial'/><w:b/></w:rPr>"
+            f"<w:t>{secrets.token_hex(6)}</w:t></w:r>"
+            for _ in range(3)
+        )
+        return f"<w:p><w:pPr><w:pStyle w:val='Body'/></w:pPr>{runs}</w:p>"
+
+    body = "".join(paragraph(n) for n in range(6000)) + SECTION
+    package = open_package(tmp_path, body, name="long.docx")
+    try:
+        root = package.xml(DOCX.main_part)
+    finally:
+        package.close()
+    assert len(root.findall(".//" + q("w", "p"))) == 6001
+
+
+def test_the_markup_limit_says_what_it_counts(tmp_path):
+    from dataclasses import replace
+
+    body = "<w:p><w:r><w:t>x</w:t></w:r></w:p>" * 50 + SECTION
+    path = write_docx(tmp_path / "small.docx", body)
+    package = Package(path, replace(Settings(), max_xml_elements=10), DOCX)
+    try:
+        with pytest.raises(ToolkitError) as excinfo:
+            package.xml(DOCX.main_part)
+    finally:
+        package.close()
+    assert excinfo.value.code == "xml_limit"
+    assert "10 pieces of markup" in excinfo.value.message, excinfo.value.message
+    assert "split" in excinfo.value.message

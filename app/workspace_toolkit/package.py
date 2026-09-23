@@ -192,8 +192,18 @@ class Package:
     def xml(self, name: str) -> Element:
         try:
             root = SafeET.fromstring(self.read(name, self.settings.max_xml_bytes), forbid_dtd=True)
-            if sum(1 for _ in root.iter()) > 100000:
-                raise ToolkitError("xml_limit", "A file component is too complex.")
+            limit = self.settings.max_xml_elements
+            if sum(1 for _ in root.iter()) > limit:
+                # Say what the limit is and what it counts. "Too complex" sent
+                # people looking at their pictures and their tables when the
+                # cause was simply length, and the 25 MB upload limit made the
+                # file look like it should have been fine.
+                raise ToolkitError(
+                    "xml_limit",
+                    f"One part of this document has more than {limit:,} pieces of markup, "
+                    "which is usually a very long document. Please split it and convert "
+                    "each part.",
+                )
             return root
         except (SafeET.ParseError, DefusedXmlException) as exc:
             raise ToolkitError(

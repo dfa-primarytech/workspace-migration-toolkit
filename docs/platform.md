@@ -119,7 +119,11 @@ Validate extension, transport MIME, ZIP signature and PowerPoint main content ty
 Reject macros, encrypted/unsupported compression, unsafe/duplicate paths, dangling
 internal relationships and unsafe XML. Default limits: 5,000 ZIP entries, 200 MiB
 expanded package, 50 MiB per entry, 8 MiB per XML part, compression ratio 200:1,
-and 100,000 nodes per parsed XML part. Linux workers also have CPU and 768 MiB
+and 500,000 nodes per parsed XML part -- about 500 pages, since a paragraph of
+formatted text costs roughly 22 nodes. That ceiling used to be 100,000, which
+refused an ordinary 130-page document weighing 17 KiB; what actually bounds
+memory is the 8 MiB per-part limit, because the tree is built before anything is
+counted. Linux workers also have CPU and 768 MiB
 address-space limits. Windows workers enforce time and archive limits but have no
 OS address-space cap. The subprocess inherits only a small runtime environment,
 not configured OAuth credentials. These controls are not a general-purpose native

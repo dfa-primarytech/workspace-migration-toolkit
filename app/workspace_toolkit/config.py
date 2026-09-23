@@ -11,6 +11,11 @@ class Settings:
     max_expanded_bytes: int = 200 * 1024 * 1024
     max_entry_bytes: int = 50 * 1024 * 1024
     max_xml_bytes: int = 8 * 1024 * 1024
+    # Elements in one part. A paragraph of formatted text costs about 22, so
+    # this clears roughly 500 pages; the old 100,000 refused an ordinary
+    # 130-page document that weighed 17 KiB. What actually bounds memory is
+    # max_xml_bytes, because the tree is built before anything is counted.
+    max_xml_elements: int = 500_000
     max_entries: int = 5000
     max_compression_ratio: int = 200
     parser_timeout: int = 30
