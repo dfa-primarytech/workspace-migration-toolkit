@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
-import os
 import unittest
 
 from harness import validation
@@ -26,32 +24,61 @@ def minimal_document() -> dict:
         "document": {"title": None, "pageCount": 1, "masterPageCount": 0, "metadata": {}},
         "units": {"length": "pt"},
         "fonts": [],
-        "assets": {"count": 0, "placementCount": 0, "manifest": "assets.json",
-                   "directory": "assets", "ids": []},
+        "assets": {
+            "count": 0,
+            "placementCount": 0,
+            "manifest": "assets.json",
+            "directory": "assets",
+            "ids": [],
+        },
         "callbacks": {"total": 4, "counts": {"startPage": 1}},
-        "pages": [{
-            "id": "page_0001", "index": 0, "kind": "page",
-            "width": 420.945, "height": 595.276, "unit": "pt",
-            "sourceSize": {"width": None, "height": None},
-            "eventRange": {"start": 1, "end": 3},
-            "implicit": False, "sourceProperties": {},
-            "elements": [], "warnings": [],
-        }],
-        "warnings": [], "limitations": [],
+        "pages": [
+            {
+                "id": "page_0001",
+                "index": 0,
+                "kind": "page",
+                "width": 420.945,
+                "height": 595.276,
+                "unit": "pt",
+                "sourceSize": {"width": None, "height": None},
+                "eventRange": {"start": 1, "end": 3},
+                "implicit": False,
+                "sourceProperties": {},
+                "elements": [],
+                "warnings": [],
+            }
+        ],
+        "warnings": [],
+        "limitations": [],
         "truncation": {"truncated": False, "reason": None},
     }
 
 
 def text_element(identifier: str = "el_000001", z: int = 0) -> dict:
     return {
-        "id": identifier, "type": "text", "pageIndex": 0,
+        "id": identifier,
+        "type": "text",
+        "pageIndex": 0,
         "bounds": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0, "unit": "pt"},
-        "rotationDegrees": None, "zIndex": z, "parentId": None, "visible": True,
-        "source": {"callback": "startTextObject", "eventIndex": 2, "endEventIndex": 8,
-                   "styleEventIndex": -1, "properties": {}, "styleProperties": {}},
-        "compatibility": {"status": "NATIVE", "basis": "parser-candidate",
-                          "evidence": "a text frame maps to an editable Slides text box"},
-        "paragraphs": [], "warnings": [],
+        "rotationDegrees": None,
+        "zIndex": z,
+        "parentId": None,
+        "visible": True,
+        "source": {
+            "callback": "startTextObject",
+            "eventIndex": 2,
+            "endEventIndex": 8,
+            "styleEventIndex": -1,
+            "properties": {},
+            "styleProperties": {},
+        },
+        "compatibility": {
+            "status": "NATIVE",
+            "basis": "parser-candidate",
+            "evidence": "a text frame maps to an editable Slides text box",
+        },
+        "paragraphs": [],
+        "warnings": [],
     }
 
 
@@ -66,8 +93,7 @@ class SchemaFileTest(unittest.TestCase):
     def test_schema_fixes_the_shared_compatibility_vocabulary(self):
         schema = validation.load_schema()
         statuses = schema["$defs"]["compatibility"]["properties"]["status"]["enum"]
-        self.assertEqual(statuses,
-                         ["NATIVE", "SUBSTITUTED", "FLATTENED", "UNSUPPORTED", "IGNORED"])
+        self.assertEqual(statuses, ["NATIVE", "SUBSTITUTED", "FLATTENED", "UNSUPPORTED", "IGNORED"])
 
     def test_schema_declares_both_image_routes(self):
         schema = validation.load_schema()
@@ -77,7 +103,9 @@ class SchemaFileTest(unittest.TestCase):
 
 class DocumentValidationTest(unittest.TestCase):
     def test_a_minimal_document_validates(self):
-        self.assertEqual(validation.validate_document_kind(minimal_document(), "documentBundle"), [])
+        self.assertEqual(
+            validation.validate_document_kind(minimal_document(), "documentBundle"), []
+        )
 
     def test_a_missing_required_field_is_reported(self):
         document = minimal_document()
@@ -130,17 +158,23 @@ class ReferenceValidationTest(unittest.TestCase):
         document = minimal_document()
         element = text_element()
         element["type"] = "image"
-        element["image"] = {"assetId": "asset_0009", "route": "drawGraphicObject",
-                            "shapeKind": None, "polygonIsRectangular": True,
-                            "polygon": [], "path": []}
+        element["image"] = {
+            "assetId": "asset_0009",
+            "route": "drawGraphicObject",
+            "shapeKind": None,
+            "polygonIsRectangular": True,
+            "polygon": [],
+            "path": [],
+        }
         document["pages"][0]["elements"].append(element)
         problems = validation.validate_references(document, {"assets": []})
         self.assertTrue(any("not in the manifest" in p.message for p in problems))
 
     def test_an_asset_use_pointing_at_no_element_is_reported(self):
         document = minimal_document()
-        assets = {"assets": [{"id": "asset_0001", "useCount": 1,
-                              "uses": [{"elementId": "el_999999"}]}]}
+        assets = {
+            "assets": [{"id": "asset_0001", "useCount": 1, "uses": [{"elementId": "el_999999"}]}]
+        }
         document["assets"]["count"] = 1
         document["assets"]["ids"] = ["asset_0001"]
         problems = validation.validate_references(document, assets)
@@ -148,15 +182,19 @@ class ReferenceValidationTest(unittest.TestCase):
 
     def test_out_of_order_z_index_is_reported(self):
         document = minimal_document()
-        document["pages"][0]["elements"] = [text_element("el_000001", 1),
-                                            text_element("el_000002", 0)]
+        document["pages"][0]["elements"] = [
+            text_element("el_000001", 1),
+            text_element("el_000002", 0),
+        ]
         problems = validation.validate_references(document, {"assets": []})
         self.assertTrue(any("z-order" in p.message for p in problems))
 
     def test_duplicate_element_ids_are_reported(self):
         document = minimal_document()
-        document["pages"][0]["elements"] = [text_element("el_000001", 0),
-                                            text_element("el_000001", 1)]
+        document["pages"][0]["elements"] = [
+            text_element("el_000001", 0),
+            text_element("el_000001", 1),
+        ]
         problems = validation.validate_references(document, {"assets": []})
         self.assertTrue(any("duplicate" in p.message for p in problems))
 

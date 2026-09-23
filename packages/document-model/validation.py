@@ -20,13 +20,22 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.json")
 
 COMPATIBILITY_STATUSES = ("NATIVE", "SUBSTITUTED", "FLATTENED", "UNSUPPORTED", "IGNORED")
 ELEMENT_TYPES = (
-    "text", "image", "table", "shape", "line", "path", "group", "wrapper", "unknown",
+    "text",
+    "image",
+    "table",
+    "shape",
+    "line",
+    "path",
+    "group",
+    "wrapper",
+    "unknown",
 )
 IMAGE_ROUTES = ("drawGraphicObject", "bitmapFillShape")
 
@@ -45,8 +54,8 @@ class Problem:
         return f"Problem({self.path!r}, {self.message!r})"
 
 
-def load_schema(path: str = SCHEMA_PATH) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as handle:
+def load_schema(path: str = SCHEMA_PATH) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as handle:
         return json.load(handle)
 
 
@@ -74,32 +83,34 @@ def _matches_type(value: Any, expected: str) -> bool:
 
 
 class _Validator:
-    def __init__(self, schema: Dict[str, Any]) -> None:
+    def __init__(self, schema: dict[str, Any]) -> None:
         self.schema = schema
         self.defs = schema.get("$defs", {})
 
-    def resolve(self, node: Dict[str, Any]) -> Dict[str, Any]:
+    def resolve(self, node: dict[str, Any]) -> dict[str, Any]:
         seen = 0
         while "$ref" in node:
             ref = node["$ref"]
             if not ref.startswith("#/$defs/"):
                 raise ValueError(f"unsupported $ref: {ref}")
-            node = self.defs[ref[len("#/$defs/"):]]
+            node = self.defs[ref[len("#/$defs/") :]]
             seen += 1
             if seen > 32:
                 raise ValueError("$ref chain too deep")
         return node
 
-    def check(self, value: Any, node: Dict[str, Any], path: str,
-              problems: List[Problem]) -> None:
+    def check(self, value: Any, node: dict[str, Any], path: str, problems: list[Problem]) -> None:
         node = self.resolve(node)
 
         if "oneOf" in node:
             branches = node["oneOf"]
             matched = [b for b in branches if not self._branch_problems(value, b, path)]
             if len(matched) != 1:
-                problems.append(Problem(
-                    path, f"matched {len(matched)} of {len(branches)} alternatives, expected 1"))
+                problems.append(
+                    Problem(
+                        path, f"matched {len(matched)} of {len(branches)} alternatives, expected 1"
+                    )
+                )
             else:
                 self.check(value, matched[0], path, problems)
             return
@@ -108,8 +119,9 @@ class _Validator:
         if expected is not None:
             options = expected if isinstance(expected, list) else [expected]
             if not any(_matches_type(value, option) for option in options):
-                problems.append(Problem(
-                    path, f"expected type {'|'.join(options)}, got {type(value).__name__}"))
+                problems.append(
+                    Problem(path, f"expected type {'|'.join(options)}, got {type(value).__name__}")
+                )
                 return
 
         if "const" in node and value != node["const"]:
@@ -127,8 +139,9 @@ class _Validator:
             for index, item in enumerate(value):
                 self.check(item, node["items"], f"{path}[{index}]", problems)
 
-    def _check_object(self, value: Dict[str, Any], node: Dict[str, Any], path: str,
-                      problems: List[Problem]) -> None:
+    def _check_object(
+        self, value: dict[str, Any], node: dict[str, Any], path: str, problems: list[Problem]
+    ) -> None:
         properties = node.get("properties", {})
         for key in node.get("required", []):
             if key not in value:
@@ -143,23 +156,25 @@ class _Validator:
             elif additional is False:
                 problems.append(Problem(child, "property is not allowed by the schema"))
 
-    def _branch_problems(self, value: Any, node: Dict[str, Any], path: str) -> List[Problem]:
-        problems: List[Problem] = []
+    def _branch_problems(self, value: Any, node: dict[str, Any], path: str) -> list[Problem]:
+        problems: list[Problem] = []
         self.check(value, node, path, problems)
         return problems
 
 
-def validate_against_schema(instance: Any, schema: Optional[Dict[str, Any]] = None,
-                            path: str = "") -> List[Problem]:
+def validate_against_schema(
+    instance: Any, schema: dict[str, Any] | None = None, path: str = ""
+) -> list[Problem]:
     """Validates one bundle file against schema.json."""
     schema = schema if schema is not None else load_schema()
-    problems: List[Problem] = []
+    problems: list[Problem] = []
     _Validator(schema).check(instance, schema, path, problems)
     return problems
 
 
-def validate_document_kind(instance: Any, kind: str,
-                           schema: Optional[Dict[str, Any]] = None) -> List[Problem]:
+def validate_document_kind(
+    instance: Any, kind: str, schema: dict[str, Any] | None = None
+) -> list[Problem]:
     """Validates against one named bundle shape rather than the oneOf.
 
     Naming the expected shape gives a usable error: the ``oneOf`` can only
@@ -167,21 +182,22 @@ def validate_document_kind(instance: Any, kind: str,
     """
     schema = schema if schema is not None else load_schema()
     definition = schema["$defs"][kind]
-    problems: List[Problem] = []
+    problems: list[Problem] = []
     _Validator(schema).check(instance, definition, "", problems)
     return problems
 
 
-def _iter_elements(document: Dict[str, Any]) -> Iterable[tuple]:
+def _iter_elements(document: dict[str, Any]) -> Iterable[tuple]:
     for page_index, page in enumerate(document.get("pages", [])):
         for element_index, element in enumerate(page.get("elements", [])):
             yield f"pages[{page_index}].elements[{element_index}]", page, element
 
 
-def validate_references(document: Dict[str, Any],
-                        assets: Optional[Dict[str, Any]] = None) -> List[Problem]:
+def validate_references(
+    document: dict[str, Any], assets: dict[str, Any] | None = None
+) -> list[Problem]:
     """Checks the invariants a JSON Schema cannot see."""
-    problems: List[Problem] = []
+    problems: list[Problem] = []
     asset_ids = {asset["id"] for asset in (assets or {}).get("assets", [])}
     element_ids = set()
     seen_ids = set()
@@ -194,8 +210,9 @@ def validate_references(document: Dict[str, Any],
         element_ids.add(identifier)
 
         if element.get("pageIndex") != page.get("index"):
-            problems.append(Problem(
-                path, "element pageIndex does not match the page it is listed under"))
+            problems.append(
+                Problem(path, "element pageIndex does not match the page it is listed under")
+            )
 
         parent = element.get("parentId")
         if parent is not None and parent not in seen_ids:
@@ -217,17 +234,20 @@ def validate_references(document: Dict[str, Any],
         if compatibility.get("basis") != "parser-candidate":
             # A parser has not checked anything against Google. Anything
             # claiming otherwise did not come from this parser.
-            problems.append(Problem(
-                path, "a parser bundle must mark every compatibility status 'parser-candidate'"))
+            problems.append(
+                Problem(
+                    path, "a parser bundle must mark every compatibility status 'parser-candidate'"
+                )
+            )
 
     for page_index, page in enumerate(document.get("pages", [])):
         z_values = [element.get("zIndex") for element in page.get("elements", [])]
         if z_values != sorted(z_values):
-            problems.append(Problem(
-                f"pages[{page_index}]", "elements are not listed in z-order"))
+            problems.append(Problem(f"pages[{page_index}]", "elements are not listed in z-order"))
         if z_values and z_values != list(range(len(z_values))):
-            problems.append(Problem(
-                f"pages[{page_index}]", "zIndex is not a dense paint order from zero"))
+            problems.append(
+                Problem(f"pages[{page_index}]", "zIndex is not a dense paint order from zero")
+            )
 
     declared = document.get("assets", {})
     if assets is not None:
@@ -241,9 +261,12 @@ def validate_references(document: Dict[str, Any],
                 problems.append(Problem(f"assets[{asset_index}].useCount", "does not match uses"))
             for use_index, use in enumerate(uses):
                 if use.get("elementId") not in element_ids:
-                    problems.append(Problem(
-                        f"assets[{asset_index}].uses[{use_index}]",
-                        "references an element that is not in the document"))
+                    problems.append(
+                        Problem(
+                            f"assets[{asset_index}].uses[{use_index}]",
+                            "references an element that is not in the document",
+                        )
+                    )
 
     page_count = document.get("document", {}).get("pageCount")
     real_pages = sum(1 for page in document.get("pages", []) if page.get("kind") == "page")
@@ -253,23 +276,26 @@ def validate_references(document: Dict[str, Any],
     return problems
 
 
-def load_bundle(directory: str) -> Dict[str, Any]:
+def load_bundle(directory: str) -> dict[str, Any]:
     """Reads document.json, assets.json and report.json from a bundle."""
     bundle = {}
     for name in ("document", "assets", "report"):
-        with open(os.path.join(directory, f"{name}.json"), "r", encoding="utf-8") as handle:
+        with open(os.path.join(directory, f"{name}.json"), encoding="utf-8") as handle:
             bundle[name] = json.load(handle)
     return bundle
 
 
-def validate_bundle(directory: str, schema: Optional[Dict[str, Any]] = None) -> List[Problem]:
+def validate_bundle(directory: str, schema: dict[str, Any] | None = None) -> list[Problem]:
     """Validates a whole output bundle, including the asset files on disk."""
     schema = schema if schema is not None else load_schema()
     bundle = load_bundle(directory)
-    problems: List[Problem] = []
+    problems: list[Problem] = []
 
-    for name, kind in (("document", "documentBundle"), ("assets", "assetsBundle"),
-                       ("report", "reportBundle")):
+    for name, kind in (
+        ("document", "documentBundle"),
+        ("assets", "assetsBundle"),
+        ("report", "reportBundle"),
+    ):
         for problem in validate_document_kind(bundle[name], kind, schema):
             problems.append(Problem(f"{name}.json:{problem.path}", problem.message))
 

@@ -61,8 +61,11 @@ class Pub001RegressionTest(unittest.TestCase):
             bundle = harness.validation.load_bundle(out)
             bundle["_problems"] = harness.validation.validate_bundle(out)
             # Assets are read before the scratch directory is removed.
-            bundle["_assetFiles"] = sorted(os.listdir(os.path.join(out, "assets"))) \
-                if os.path.isdir(os.path.join(out, "assets")) else []
+            bundle["_assetFiles"] = (
+                sorted(os.listdir(os.path.join(out, "assets")))
+                if os.path.isdir(os.path.join(out, "assets"))
+                else []
+            )
             return bundle
 
     def test_the_supplied_fixture_is_the_document_the_expectations_describe(self):
@@ -105,18 +108,23 @@ class Pub001RegressionTest(unittest.TestCase):
             for element in page["elements"]:
                 if element["type"] != "text":
                     continue
-                if any(run["text"].strip()
-                       for paragraph in element["paragraphs"]
-                       for run in paragraph["runs"]):
+                if any(
+                    run["text"].strip()
+                    for paragraph in element["paragraphs"]
+                    for run in paragraph["runs"]
+                ):
                     substantive += 1
         self.assertEqual(substantive, expected["substantiveTextFrames"])
 
     def test_the_table_is_recovered(self):
         bundle = self._parse()
         expected = self.expected["expected"]
-        tables = [element
-                  for page in bundle["document"]["pages"]
-                  for element in page["elements"] if element["type"] == "table"]
+        tables = [
+            element
+            for page in bundle["document"]["pages"]
+            for element in page["elements"]
+            if element["type"] == "table"
+        ]
         self.assertEqual(len(tables), expected["tables"])
         self.assertEqual(len(tables[0]["table"]["columns"]), expected["tableColumns"])
         self.assertEqual(len(tables[0]["table"]["rows"]), expected["tableRows"])
@@ -126,16 +134,14 @@ class Pub001RegressionTest(unittest.TestCase):
         expected = self.expected["expected"]
         assets = bundle["assets"]["assets"]
         self.assertEqual(len(assets), expected["distinctAssets"])
-        self.assertEqual(bundle["report"]["counts"]["assetPlacements"],
-                         expected["imagePlacements"])
+        self.assertEqual(bundle["report"]["counts"]["assetPlacements"], expected["imagePlacements"])
         by_type = {}
         for asset in assets:
             by_type[asset["mimeType"]] = by_type.get(asset["mimeType"], 0) + 1
         self.assertEqual(by_type.get("image/png", 0), expected["pngAssets"])
         self.assertEqual(by_type.get("image/jpeg", 0), expected["jpegAssets"])
 
-        reused = [asset for asset in assets
-                  if len({use["pageIndex"] for use in asset["uses"]}) > 1]
+        reused = [asset for asset in assets if len({use["pageIndex"] for use in asset["uses"]}) > 1]
         self.assertEqual(len(reused), expected["assetsUsedOnTwoPages"])
         # Deduplication is the point: one file on disk per distinct payload.
         self.assertEqual(len(bundle["_assetFiles"]), len(assets))
@@ -145,8 +151,7 @@ class Pub001RegressionTest(unittest.TestCase):
         # every image came through drawGraphicObject instead, that is new
         # evidence about the format, not a broken test.
         bundle = self._parse()
-        routes = {use["route"]
-                  for asset in bundle["assets"]["assets"] for use in asset["uses"]}
+        routes = {use["route"] for asset in bundle["assets"]["assets"] for use in asset["uses"]}
         self.assertIn("bitmapFillShape", routes)
 
     def test_paths_and_rendering_wrappers(self):
@@ -154,9 +159,12 @@ class Pub001RegressionTest(unittest.TestCase):
         expected = self.expected["expected"]
         callbacks = bundle["report"]["callbackCounts"]
         self.assertEqual(callbacks.get("drawPath", 0), expected["pathCallbacks"])
-        wrappers = [element
-                    for page in bundle["document"]["pages"]
-                    for element in page["elements"] if element["type"] == "wrapper"]
+        wrappers = [
+            element
+            for page in bundle["document"]["pages"]
+            for element in page["elements"]
+            if element["type"] == "wrapper"
+        ]
         self.assertEqual(len(wrappers), expected["renderingLayerWrappers"])
         for wrapper in wrappers:
             self.assertFalse(wrapper["container"]["isAuthoredGroup"])
@@ -176,10 +184,10 @@ class Pub001RegressionTest(unittest.TestCase):
         # nothing the adapter had to guess at. If this ever starts
         # reporting diagnostics, the adapter and libmspub have diverged.
         bundle = self._parse()
+        self.assertEqual([(d["code"], d["severity"]) for d in bundle["report"]["diagnostics"]], [])
         self.assertEqual(
-            [(d["code"], d["severity"]) for d in bundle["report"]["diagnostics"]], [])
-        self.assertEqual(bundle["report"]["counts"]["callbacks"],
-                         self.expected["expected"]["callbacks"])
+            bundle["report"]["counts"]["callbacks"], self.expected["expected"]["callbacks"]
+        )
 
     def test_no_image_arrives_by_draw_graphic_object(self):
         # The evidence the whole bitmap-fill route exists for: this
@@ -188,19 +196,21 @@ class Pub001RegressionTest(unittest.TestCase):
         bundle = self._parse()
         callbacks = bundle["report"]["callbackCounts"]
         expected = self.expected["expected"]
-        self.assertEqual(callbacks.get("drawGraphicObject", 0),
-                         expected["drawGraphicObjectCallbacks"])
+        self.assertEqual(
+            callbacks.get("drawGraphicObject", 0), expected["drawGraphicObjectCallbacks"]
+        )
         self.assertEqual(callbacks.get("drawPolygon", 0), expected["drawPolygonCallbacks"])
-        routes = {use["route"]
-                  for asset in bundle["assets"]["assets"] for use in asset["uses"]}
+        routes = {use["route"] for asset in bundle["assets"]["assets"] for use in asset["uses"]}
         self.assertEqual(routes, {"bitmapFillShape"})
 
     def test_every_image_placement_is_rectangular(self):
         bundle = self._parse()
-        rectangular = all(use["polygonIsRectangular"]
-                          for asset in bundle["assets"]["assets"] for use in asset["uses"])
-        self.assertEqual(rectangular,
-                         self.expected["expected"]["allImagePlacementsRectangular"])
+        rectangular = all(
+            use["polygonIsRectangular"]
+            for asset in bundle["assets"]["assets"]
+            for use in asset["uses"]
+        )
+        self.assertEqual(rectangular, self.expected["expected"]["allImagePlacementsRectangular"])
 
     def test_element_type_tally(self):
         bundle = self._parse()
@@ -216,8 +226,9 @@ class Pub001RegressionTest(unittest.TestCase):
 
     def test_compatibility_candidate_tally(self):
         bundle = self._parse()
-        actual = {key: value
-                  for key, value in bundle["report"]["compatibility"].items() if key != "basis"}
+        actual = {
+            key: value for key, value in bundle["report"]["compatibility"].items() if key != "basis"
+        }
         self.assertEqual(actual, self.expected["expected"]["compatibilityCandidates"])
         self.assertEqual(bundle["report"]["compatibility"]["basis"], "parser-candidate")
 
@@ -238,14 +249,19 @@ class Pub001RegressionTest(unittest.TestCase):
         self.assertEqual(len(runs), expected["styledSpans"])
         self.assertEqual(sum(1 for r in runs if r["style"]["bold"]), expected["boldRuns"])
         self.assertEqual(sum(1 for r in runs if r["style"]["italic"]), expected["italicRuns"])
-        self.assertEqual(sum(1 for r in runs if r["style"]["underline"]),
-                         expected["underlinedRuns"])
+        self.assertEqual(
+            sum(1 for r in runs if r["style"]["underline"]), expected["underlinedRuns"]
+        )
         # Every run carries a resolved font, size, colour and language.
         for key in ("fontFamily", "fontSizePoints", "color", "language"):
-            self.assertEqual(sum(1 for r in runs if r["style"][key] is not None), len(runs),
-                             msg=f"not every run carried {key}")
-        self.assertEqual(sorted({r["style"]["fontSizePoints"] for r in runs}),
-                         expected["fontSizesPoints"])
+            self.assertEqual(
+                sum(1 for r in runs if r["style"][key] is not None),
+                len(runs),
+                msg=f"not every run carried {key}",
+            )
+        self.assertEqual(
+            sorted({r["style"]["fontSizePoints"] for r in runs}), expected["fontSizesPoints"]
+        )
         self.assertEqual(sorted({r["style"]["color"] for r in runs}), expected["textColours"])
 
     def test_paragraph_alignment_is_recovered(self):
@@ -274,19 +290,25 @@ class Pub001RegressionTest(unittest.TestCase):
     def test_the_table_reports_that_no_row_height_was_declared(self):
         bundle = self._parse()
         expected = self.expected["expected"]
-        table = next(element
-                     for page in bundle["document"]["pages"]
-                     for element in page["elements"] if element["type"] == "table")
-        self.assertAlmostEqual(table["table"]["columns"][0]["width"]["points"],
-                               expected["tableColumnWidthPoints"], places=3)
-        self.assertEqual([len(cell["paragraphs"])
-                          for row in table["table"]["rows"] for cell in row["cells"]],
-                         expected["tableCellParagraphs"])
+        table = next(
+            element
+            for page in bundle["document"]["pages"]
+            for element in page["elements"]
+            if element["type"] == "table"
+        )
+        self.assertAlmostEqual(
+            table["table"]["columns"][0]["width"]["points"],
+            expected["tableColumnWidthPoints"],
+            places=3,
+        )
+        self.assertEqual(
+            [len(cell["paragraphs"]) for row in table["table"]["rows"] for cell in row["cells"]],
+            expected["tableCellParagraphs"],
+        )
         declared = any(row["height"] is not None for row in table["table"]["rows"])
         self.assertEqual(declared, expected["tableRowHeightsDeclared"])
         if not declared:
-            self.assertIn("table-row-heights-unknown",
-                          [note["code"] for note in table["warnings"]])
+            self.assertIn("table-row-heights-unknown", [note["code"] for note in table["warnings"]])
 
     def test_font_usage_counts(self):
         bundle = self._parse()
@@ -298,12 +320,19 @@ class Pub001RegressionTest(unittest.TestCase):
         # placeholders; dropping them would shift the page.
         bundle = self._parse()
         expected = self.expected["expected"]
-        frames = [element
-                  for page in bundle["document"]["pages"]
-                  for element in page["elements"] if element["type"] == "text"]
-        empty = [f for f in frames
-                 if not any(run["text"].strip()
-                            for paragraph in f["paragraphs"] for run in paragraph["runs"])]
+        frames = [
+            element
+            for page in bundle["document"]["pages"]
+            for element in page["elements"]
+            if element["type"] == "text"
+        ]
+        empty = [
+            f
+            for f in frames
+            if not any(
+                run["text"].strip() for paragraph in f["paragraphs"] for run in paragraph["runs"]
+            )
+        ]
         self.assertEqual(len(empty), expected["nonSubstantiveTextFrames"])
         self.assertEqual(len(frames), expected["textFrameCallbacks"])
 
@@ -311,8 +340,9 @@ class Pub001RegressionTest(unittest.TestCase):
         first = self._parse()
         second = self._parse()
         for name in ("document", "assets"):
-            self.assertEqual(json.dumps(first[name], sort_keys=False),
-                             json.dumps(second[name], sort_keys=False))
+            self.assertEqual(
+                json.dumps(first[name], sort_keys=False), json.dumps(second[name], sort_keys=False)
+            )
 
 
 if __name__ == "__main__":
