@@ -176,22 +176,27 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
                 send_behind_text(item.anchor)
             report["pictures"] += 1
         elif item.kind == "textbox":
-            _replace_textbox(parent_of, item, ids)
-            report["textboxes"] += 1
+            # Counted only when a table was actually produced. A report saying
+            # four text boxes were converted, when four empty boxes were
+            # skipped, describes work that did not happen.
+            if _replace_textbox(parent_of, item, ids):
+                report["textboxes"] += 1
     return report
 
 
-def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> None:
+def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> bool:
     paragraph = item.paragraph
     _detach(item.drawing, item.anchor)
     if paragraph is None:
-        return
+        return False
     container = parent_of.get(paragraph)
     if container is None:
-        return
+        return False
     table = build_table(item, ids)
     if table is None:
-        return
+        # An empty box, or one with no content to move. Nothing was converted,
+        # and the report must not claim otherwise.
+        return False
     index = list(container).index(paragraph)
     # A paragraph carrying <w:sectPr> *ends* its section. Inserting after it
     # would push the table into the next section, where a different page size,
@@ -200,6 +205,7 @@ def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> None:
     at = index if _ends_section(paragraph) else index + 1
     container.insert(at, table)
     _keep_tables_apart(container, at, rtl=is_rtl(paragraph))
+    return True
 
 
 def _ends_section(paragraph: Element) -> bool:
@@ -510,9 +516,31 @@ def _axis(pr: Element, position: dict | None, offset_attr: str, spec_attr: str) 
         pr.set(q("w", offset_attr), "0")
 
 
+def is_empty_box(content: Element) -> bool:
+    """Whether a text box holds nothing worth moving into a table.
+
+    Word leaves these behind: a real worksheet was found carrying four boxes
+    of 0.24 by 0.25 inches with no content at all, artefacts of editing rather
+    than anything an author put there.
+
+    Converting one produces a floating table with an empty cell, plus the
+    empty paragraphs that keep tables apart -- clutter that occupies space on
+    the page and can displace what is around it. There is nothing to make
+    editable, which is the only reason the conversion exists.
+
+    Emptiness is judged the same conservative way as remove_empty_paragraphs:
+    anything that is not a property element counts as content, so a box
+    holding only a picture, a field or a footnote reference is kept.
+    """
+    paragraphs = content.findall(q("w", "p"))
+    if not paragraphs:
+        return True
+    return all(_hollow(child) for paragraph in paragraphs for child in paragraph)
+
+
 def build_table(item: Anchored, ids: Ids) -> Element | None:
     content = item.anchor.find(".//" + q("w", "txbxContent"))
-    if content is None:
+    if content is None or is_empty_box(content):
         return None
     width = to_dxa(item.extent["cx"]) if item.extent else 9000
     rtl = box_direction(content, item.paragraph)
