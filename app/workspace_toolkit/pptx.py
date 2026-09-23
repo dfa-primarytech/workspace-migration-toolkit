@@ -172,6 +172,17 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                 assets[part_assets[rel["resolved"]]]["uses"].append(
                     {"part": part, "relationshipId": rel["id"], "relationshipType": rel["type"]}
                 )
+            if rel["missing"]:
+                warnings.append(
+                    warning(
+                        "relationship_target_missing",
+                        "A link inside the file points at a component that is not there. "
+                        "The rest of the file was read; the link was ignored.",
+                        part=part,
+                        relationshipId=rel["id"],
+                        classification=C.IGNORED,
+                    )
+                )
             if rel["external"]:
                 warnings.append(
                     warning(
@@ -205,6 +216,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
         if (
             not slide_ref
             or slide_ref["external"]
+            or slide_ref["resolved"] is None
             or not slide_ref["type"].endswith("/slide")
             or slide_ref["resolved"] in seen_slides
         ):
