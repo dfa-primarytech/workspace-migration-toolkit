@@ -709,16 +709,24 @@ def printable_width(root: Element) -> int | None:
     A document with several sections of differing width is measured by its
     last one. That is the common case by a wide margin, and guessing per table
     would need the layout we are trying to avoid depending on.
+
+    The final section's properties are the body's own ``w:sectPr``. Searching
+    the whole body instead would also find the *previous* properties that a
+    tracked change keeps inside ``w:sectPrChange`` -- which come last in
+    document order, so a tracked page-setup change would be measured by the
+    page it used to have.
     """
     body = root.find(q("w", "body"))
     if body is None:
         return None
-    sections = [
-        properties for paragraph in body.iter(q("w", "sectPr")) for properties in [paragraph]
-    ]
-    if not sections:
-        return None
-    section = sections[-1]
+    section = body.find(q("w", "sectPr"))
+    if section is None:
+        # No body-level properties: fall back to the last section break,
+        # still only from paragraphs directly in the body.
+        breaks = body.findall(q("w", "p") + "/" + q("w", "pPr") + "/" + q("w", "sectPr"))
+        if not breaks:
+            return None
+        section = breaks[-1]
     width = _measure(section.find(q("w", "pgSz")), "w")
     margins = section.find(q("w", "pgMar"))
     left = _measure(margins, "left") or 0
@@ -780,22 +788,34 @@ def fit_tables_to_page(root: Element) -> dict:
             continue
         grid = table.find(q("w", "tblGrid"))
         columns = grid.findall(q("w", "gridCol")) if grid is not None else []
-        widths = [_measure(column, "w") for column in columns]
-        if not widths or any(width is None for width in widths):
+        measured = [_measure(column, "w") for column in columns]
+        widths = [width for width in measured if width is not None]
+        if not widths or len(widths) != len(measured):
             continue
-        total = sum(widths)  # type: ignore[arg-type]
+        total = sum(widths)
         if total <= usable:
             continue
         factor = usable / total
         for column, width in zip(columns, widths, strict=True):
-            column.set(q("w", "w"), str(max(1, round(width * factor))))  # type: ignore[arg-type]
-        for cell_width in table.iter(q("w", "tcW")):
-            measured = _measure(cell_width, "w")
-            if measured and cell_width.get(q("w", "type")) == "dxa":
-                cell_width.set(q("w", "w"), str(max(1, round(measured * factor))))
+            column.set(q("w", "w"), str(max(1, round(width * factor))))
+        # The table's own preferred width, if stated in twips, must agree with
+        # its narrowed grid; left alone it would still claim the old width.
+        _scale_dxa(table.find(q("w", "tblPr") + "/" + q("w", "tblW")), factor)
+        # Only this table's cells: a nested table keeps its grid, so its cells
+        # must keep their widths too or the two would disagree.
+        for cell in table.iter(q("w", "tc")):
+            if _enclosing(parent_of, parent_of.get(cell), "tbl") is table:
+                _scale_dxa(cell.find(q("w", "tcPr") + "/" + q("w", "tcW")), factor)
         report["tablesNarrowed"] += 1
         report["picturesShrunk"] += _shrink_pictures(table, parent_of, factor)
     return report
+
+
+def _scale_dxa(width: Element | None, factor: float) -> None:
+    """Scales a stated width, but only one given in twips."""
+    measured = _measure(width, "w")
+    if width is not None and measured and width.get(q("w", "type")) == "dxa":
+        width.set(q("w", "w"), str(max(1, round(measured * factor))))
 
 
 def _shrink_pictures(table: Element, parent_of: dict, factor: float) -> int:
@@ -805,7 +825,7 @@ def _shrink_pictures(table: Element, parent_of: dict, factor: float) -> int:
     for cell in table.iter(q("w", "tc")):
         if _enclosing(parent_of, parent_of.get(cell), "tbl") is not table:
             continue
-        available = _cell_width(cell, parent_of, factor) - padding
+        available = _cell_width(cell, parent_of) - padding
         if available <= 0:
             continue
         limit = available * EMU_PER_DXA
@@ -826,8 +846,24 @@ def _measure_emu(inline: Element) -> int | None:
         return None
 
 
-def _cell_width(cell: Element, parent_of: dict, factor: float) -> int:
-    """The cell's own stated width, already scaled, or its share of the grid."""
+def _span(element: Element | None, name: str) -> int:
+    """A w:gridSpan or w:gridBefore count, defaulting to what Word assumes."""
+    found = element.find(q("w", name)) if element is not None else None
+    try:
+        value = int(found.get(q("w", "val"), "")) if found is not None else None
+    except ValueError:
+        value = None
+    if value is None:
+        return 1 if name == "gridSpan" else 0
+    return max(0, value)
+
+
+def _cell_width(cell: Element, parent_of: dict) -> int:
+    """The cell's own stated width, already scaled, or the grid columns it spans.
+
+    Returns 0 when the cell cannot be placed on the grid, so its pictures are
+    left alone rather than shrunk against a guess.
+    """
     stated = cell.find(q("w", "tcPr") + "/" + q("w", "tcW"))
     measured = _measure(stated, "w")
     if measured and stated is not None and stated.get(q("w", "type")) == "dxa":
@@ -837,9 +873,19 @@ def _cell_width(cell: Element, parent_of: dict, factor: float) -> int:
     columns = grid.findall(q("w", "gridCol")) if grid is not None else []
     widths = [_measure(column, "w") or 0 for column in columns]
     row = _enclosing(parent_of, cell, "tr")
-    cells = row.findall(q("w", "tc")) if row is not None else []
-    index = cells.index(cell) if cell in cells else 0
-    return widths[index] if index < len(widths) else round(sum(widths) * factor)
+    if row is None:
+        return 0
+    # Walk the row to find where this cell starts on the grid: cells skipped
+    # by w:gridBefore, then every earlier cell's w:gridSpan.
+    start = _span(row.find(q("w", "trPr")), "gridBefore")
+    for sibling in row.findall(q("w", "tc")):
+        span = _span(sibling.find(q("w", "tcPr")), "gridSpan")
+        if sibling is cell:
+            if start + span > len(widths):
+                return 0
+            return sum(widths[start : start + span])
+        start += span
+    return 0
 
 
 def transform(root: Element, ids: Ids | None = None) -> dict:

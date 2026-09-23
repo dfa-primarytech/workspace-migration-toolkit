@@ -931,3 +931,84 @@ def test_a_nested_table_is_measured_against_its_cell_not_the_page():
 
     assert report["tablesNarrowed"] == 1, "only the outer table is measured"
     assert widths(root)[2:] == [6000, 6000], "the nested grid is left alone"
+
+
+def inline_picture(cx, cy):
+    return (
+        "<w:p><w:r><w:drawing><wp:inline>"
+        f"<wp:extent cx='{cx}' cy='{cy}'/><wp:docPr/>"
+        '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        f"<pic:pic><pic:spPr><a:xfrm><a:ext cx='{cx}' cy='{cy}'/></a:xfrm></pic:spPr></pic:pic>"
+        "</a:graphicData></a:graphic>"
+        "</wp:inline></w:drawing></w:r></w:p>"
+    )
+
+
+def test_a_tracked_page_setup_change_is_measured_by_the_current_page():
+    """w:sectPrChange keeps the previous properties inside the current ones,
+    after them in document order. Measuring those would use the old page."""
+    body_section = (
+        "<w:sectPr><w:pgSz w:w='11906' w:h='16838'/>"
+        "<w:pgMar w:left='1440' w:right='1440' w:top='1440' w:bottom='1440'/>"
+        "<w:sectPrChange w:id='1' w:author='a'><w:sectPr>"
+        "<w:pgSz w:w='16838' w:h='11906'/>"
+        "<w:pgMar w:left='720' w:right='720' w:top='720' w:bottom='720'/>"
+        "</w:sectPr></w:sectPrChange></w:sectPr>"
+    )
+    root = parse_xml(document(wide_table() + body_section))
+    report = transform(root)
+
+    assert report["tablesNarrowed"] == 1
+    assert sum(widths(root)) <= 9026, "measured against the current A4 page, not the old one"
+
+
+def test_the_tables_own_stated_width_is_narrowed_with_its_grid():
+    table = wide_table().replace(
+        "<w:tblPr/>", "<w:tblPr><w:tblW w:w='12000' w:type='dxa'/></w:tblPr>"
+    )
+    root = parse_xml(document(table + A4_SECTION))
+    transform(root)
+
+    stated = int(root.find(".//" + q("w", "tblW")).get(q("w", "w")))
+    assert stated == sum(widths(root)), "the table must not claim a width its grid no longer has"
+
+
+def test_a_nested_tables_cells_keep_the_widths_its_grid_still_has():
+    inner = wide_table(columns=(6000, 6000))
+    root = parse_xml(document(wide_table(inner) + A4_SECTION))
+    transform(root)
+
+    nested = root.findall(".//" + q("w", "tbl"))[1]
+    cells = [int(w.get(q("w", "w"))) for w in nested.iter(q("w", "tcW"))]
+    assert cells == [6000, 6000], "nested cells must still agree with their untouched grid"
+
+
+def test_a_picture_in_a_merged_cell_is_measured_by_every_column_it_spans():
+    # The picture fits the two narrowed columns together, so it must not shrink.
+    table = (
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='6000'/><w:gridCol w:w='6000'/></w:tblGrid>"
+        f"<w:tr><w:tc><w:tcPr><w:gridSpan w:val='2'/></w:tcPr>{inline_picture(4500000, 2250000)}"
+        "</w:tc></w:tr>"
+        "<w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>"
+    )
+    root = parse_xml(document(table + A4_SECTION))
+    report = transform(root)
+
+    assert report["tablesNarrowed"] == 1
+    assert int(root.find(".//" + q("wp", "extent")).get("cx")) == 4500000
+    assert report["picturesShrunk"] == 0
+
+
+def test_a_cell_that_cannot_be_placed_on_the_grid_keeps_its_picture():
+    # Three cells over a two-column grid: the third has no column to measure.
+    # Big enough that shrinking it against a guessed width would show.
+    table = (
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='6000'/><w:gridCol w:w='6000'/></w:tblGrid>"
+        "<w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc>"
+        f"<w:tc>{inline_picture(5000000, 2500000)}</w:tc></w:tr></w:tbl>"
+    )
+    root = parse_xml(document(table + A4_SECTION))
+    report = transform(root)
+
+    assert int(root.find(".//" + q("wp", "extent")).get("cx")) == 5000000
+    assert report["picturesShrunk"] == 0
