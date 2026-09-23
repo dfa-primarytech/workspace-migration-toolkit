@@ -704,3 +704,36 @@ def test_every_other_part_survives_the_multi_part_rewrite(tmp_path):
     with zipfile.ZipFile(tmp_path / "out.docx") as archive:
         assert set(archive.namelist()) == original
         assert archive.read("word/media/image1.png").startswith(b"\x89PNG")
+
+
+def test_an_empty_text_box_produces_no_table(tmp_path):
+    """Found in a real worksheet: four boxes of a quarter-inch square, empty.
+
+    Word leaves these behind while a document is edited. Converting one gives
+    a floating table wrapping an empty cell, plus the empty paragraphs that
+    keep tables apart -- clutter that takes up space on the page and can
+    displace what is around it, in exchange for nothing, because there is no
+    text to make editable.
+    """
+    empty = TEXTBOX.replace("<w:p><w:r><w:t>Card text</w:t></w:r></w:p>", "")
+    root, report = transform_body(
+        tmp_path, anchor(empty, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION
+    )
+    assert report["textboxes"] == 0
+    assert root.find(".//" + q("w", "tbl")) is None
+
+
+def test_a_box_holding_only_a_picture_is_still_converted(tmp_path):
+    """The emptiness test must not discard content that simply is not text."""
+    with_picture = TEXTBOX.replace(
+        "<w:p><w:r><w:t>Card text</w:t></w:r></w:p>",
+        '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="100" cy="100"/>'
+        '<a:graphic><a:graphicData uri="pic"><a:blip r:embed="rId1"/>'
+        "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>",
+    )
+    root, report = transform_body(
+        tmp_path,
+        anchor(with_picture, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION,
+    )
+    assert report["textboxes"] == 1, "a box holding a picture was treated as empty"
+    assert root.find(".//" + q("w", "tbl")) is not None
