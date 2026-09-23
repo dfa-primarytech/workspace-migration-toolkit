@@ -1,5 +1,30 @@
 # Handoff
 
+- Agent: Codex / SilentMountain
+- Date: 2026-09-23
+- Branch: `feat/shared-font-substitution`, based on main `68f9eab`
+- Objective: create one reported font-substitution policy for PPTX, DOCX and PUB,
+  with an education-focused mapping and PPTX application path.
+- Changed files: shared fonts module; PPTX worker and Google upload path; platform
+  tests; `docs/font-compatibility.md`; coordination files.
+- Work completed: central AVAILABLE/SUBSTITUTED/UNKNOWN catalogue; exact Office
+  metric alternatives; education/handwriting candidates; cautious accessibility
+  recommendations; PPTX run and theme analysis; credential-free package rewrite;
+  converted-package upload; structured occurrence reporting.
+- Checks: 155 platform tests passed, 6 skipped; Ruff and formatting clean; mypy
+  clean; 19 legacy Node regressions passed. A focused Google test proves the
+  rewritten PPTX, rather than the source, is uploaded.
+- Known failures: none in offline checks.
+- Unresolved: Google Workspace font availability and visual fidelity need live
+  validation; DOCX and Publisher integrations are assigned but not in this branch.
+- Decisions: see 2026-09-23 font decision in `DECISIONS.md`.
+- Next task: review and merge this branch, then let DOCX and Publisher consume
+  the shared API and validate representative education resources.
+- Warnings: Google Fonts catalogue membership is not a live Workspace guarantee.
+  Do not auto-apply mappings marked `manualReview`; do not add font binaries.
+
+---
+
 - Agent: Claude Code
 - Date: 2026-09-22
 - Branch: `feat/docx-parser-renderer`, branched from `feat/platform-pptx-preflight` (PR #8). Must land after it.
