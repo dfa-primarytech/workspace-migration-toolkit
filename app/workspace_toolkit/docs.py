@@ -688,6 +688,160 @@ def shape_fill(anchor: Element) -> str | None:
 # --------------------------------------------------------------------------
 
 
+# A twip (dxa) is a twentieth of a point; an EMU is 914400 to the inch.
+EMU_PER_DXA = 635
+# Word's own default left and right cell padding when <w:tblCellMar> is absent.
+DEFAULT_CELL_MARGIN_DXA = 108
+
+
+def _measure(element: Element | None, name: str) -> int | None:
+    if element is None:
+        return None
+    try:
+        return int(element.get(q("w", name), ""))
+    except ValueError:
+        return None
+
+
+def printable_width(root: Element) -> int | None:
+    """The usable width in dxa, from the section that ends the body.
+
+    A document with several sections of differing width is measured by its
+    last one. That is the common case by a wide margin, and guessing per table
+    would need the layout we are trying to avoid depending on.
+    """
+    body = root.find(q("w", "body"))
+    if body is None:
+        return None
+    sections = [
+        properties for paragraph in body.iter(q("w", "sectPr")) for properties in [paragraph]
+    ]
+    if not sections:
+        return None
+    section = sections[-1]
+    width = _measure(section.find(q("w", "pgSz")), "w")
+    margins = section.find(q("w", "pgMar"))
+    left = _measure(margins, "left") or 0
+    right = _measure(margins, "right") or 0
+    if width is None or width <= 0:
+        return None
+    usable = width - left - right
+    return usable if usable > 0 else None
+
+
+def _cell_padding(table: Element) -> int:
+    margins = table.find(q("w", "tblPr") + "/" + q("w", "tblCellMar"))
+    left = _measure(margins.find(q("w", "left")) if margins is not None else None, "w")
+    right = _measure(margins.find(q("w", "right")) if margins is not None else None, "w")
+    left = DEFAULT_CELL_MARGIN_DXA if left is None else left
+    right = DEFAULT_CELL_MARGIN_DXA if right is None else right
+    return left + right
+
+
+def _scale_extent(holder: Element, factor: float) -> bool:
+    """Shrinks one picture's stated size, outer frame and inner geometry alike."""
+    changed = False
+    extent = holder.find(q("wp", "extent"))
+    sizes = [extent] if extent is not None else []
+    sizes += holder.findall(".//" + q("a", "ext"))
+    for size in sizes:
+        for axis in ("cx", "cy"):
+            try:
+                value = int(size.get(axis, ""))
+            except ValueError:
+                continue
+            size.set(axis, str(max(1, round(value * factor))))
+            changed = True
+    return changed
+
+
+def fit_tables_to_page(root: Element) -> dict:
+    """Narrows a table wider than the page, and the pictures inside it.
+
+    Word lets a table state columns totalling more than the paper can hold; it
+    simply runs off the edge. Measured on a real worksheet: about 575pt of
+    columns in about 523pt of printable width, so every row crossed the right
+    margin whatever the images did.
+
+    Scaling the grid alone is not enough -- a picture sized for the old column
+    would then overflow the new one -- so anything too wide for the cell it
+    now sits in is brought down by the same reasoning.
+
+    Only top-level tables are measured. A nested table is bounded by its cell,
+    not the page, and shrinking it against the page would compound.
+    """
+    usable = printable_width(root)
+    report = {"tablesNarrowed": 0, "picturesShrunk": 0}
+    if usable is None:
+        return report
+    parent_of = parents(root)
+    for table in root.iter(q("w", "tbl")):
+        if _enclosing(parent_of, parent_of.get(table), "tbl") is not None:
+            continue
+        grid = table.find(q("w", "tblGrid"))
+        columns = grid.findall(q("w", "gridCol")) if grid is not None else []
+        widths = [_measure(column, "w") for column in columns]
+        if not widths or any(width is None for width in widths):
+            continue
+        total = sum(widths)  # type: ignore[arg-type]
+        if total <= usable:
+            continue
+        factor = usable / total
+        for column, width in zip(columns, widths, strict=True):
+            column.set(q("w", "w"), str(max(1, round(width * factor))))  # type: ignore[arg-type]
+        for cell_width in table.iter(q("w", "tcW")):
+            measured = _measure(cell_width, "w")
+            if measured and cell_width.get(q("w", "type")) == "dxa":
+                cell_width.set(q("w", "w"), str(max(1, round(measured * factor))))
+        report["tablesNarrowed"] += 1
+        report["picturesShrunk"] += _shrink_pictures(table, parent_of, factor)
+    return report
+
+
+def _shrink_pictures(table: Element, parent_of: dict, factor: float) -> int:
+    """Brings inline pictures down with the columns that now hold them."""
+    padding = _cell_padding(table)
+    shrunk = 0
+    for cell in table.iter(q("w", "tc")):
+        if _enclosing(parent_of, parent_of.get(cell), "tbl") is not table:
+            continue
+        available = _cell_width(cell, parent_of, factor) - padding
+        if available <= 0:
+            continue
+        limit = available * EMU_PER_DXA
+        for inline in cell.iter(q("wp", "inline")):
+            width = _measure_emu(inline)
+            if width is None or width <= limit:
+                continue
+            if _scale_extent(inline, limit / width):
+                shrunk += 1
+    return shrunk
+
+
+def _measure_emu(inline: Element) -> int | None:
+    extent = inline.find(q("wp", "extent"))
+    try:
+        return int(extent.get("cx", "")) if extent is not None else None
+    except ValueError:
+        return None
+
+
+def _cell_width(cell: Element, parent_of: dict, factor: float) -> int:
+    """The cell's own stated width, already scaled, or its share of the grid."""
+    stated = cell.find(q("w", "tcPr") + "/" + q("w", "tcW"))
+    measured = _measure(stated, "w")
+    if measured and stated is not None and stated.get(q("w", "type")) == "dxa":
+        return measured
+    table = _enclosing(parent_of, cell, "tbl")
+    grid = table.find(q("w", "tblGrid")) if table is not None else None
+    columns = grid.findall(q("w", "gridCol")) if grid is not None else []
+    widths = [_measure(column, "w") or 0 for column in columns]
+    row = _enclosing(parent_of, cell, "tr")
+    cells = row.findall(q("w", "tc")) if row is not None else []
+    index = cells.index(cell) if cell in cells else 0
+    return widths[index] if index < len(widths) else round(sum(widths) * factor)
+
+
 def transform(root: Element, ids: Ids | None = None) -> dict:
     """Applies every pass, in the order they depend on each other."""
     ids = ids or Ids()
@@ -701,6 +855,9 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     # After the anchors: a legacy picture inside a text box only becomes
     # reachable once that text box has been moved into its table.
     report["legacyPictures"] = fix_legacy_pictures(root, ids)
+    # Last: the tables must hold every picture that is going to end up in them
+    # before they can be measured against the page.
+    report.update(fit_tables_to_page(root))
     remove_empty_paragraphs(root)
     return report
 

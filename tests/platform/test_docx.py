@@ -560,6 +560,8 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
         "textboxes": 1,
         "pictures": 0,
         "picturesInlined": 0,
+        "tablesNarrowed": 0,
+        "picturesShrunk": 0,
         "ink": 0,
         "legacyPictures": 0,
         "unsupported": {},
@@ -792,6 +794,25 @@ def transformed(tmp_path, body):
     return root, report
 
 
+# A4 is 11906 twips wide. With 1440 twip margins, 9026 are printable.
+A4_SECTION = (
+    "<w:p><w:pPr><w:sectPr>"
+    '<w:pgSz w:w="11906" w:h="16838"/>'
+    '<w:pgMar w:left="1440" w:right="1440" w:top="1440" w:bottom="1440"/>'
+    "</w:sectPr></w:pPr></w:p>"
+)
+
+
+def wide_table(inner="", columns=(6000, 6000)):
+    grid = "".join(f"<w:gridCol w:w='{w}'/>" for w in columns)
+    # `inner` goes in the first cell only, so counts are not silently doubled.
+    cells = "".join(
+        f"<w:tc><w:tcPr><w:tcW w:w='{w}' w:type='dxa'/></w:tcPr>{inner if n == 0 else ''}</w:tc>"
+        for n, w in enumerate(columns)
+    )
+    return f"<w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid><w:tr>{cells}</w:tr></w:tbl>"
+
+
 def parse_xml(text):
     from defusedxml.ElementTree import fromstring
 
@@ -841,3 +862,72 @@ def test_a_picture_sent_behind_the_text_stays_floating(tmp_path):
 
     assert root.find(".//" + q("wp", "anchor")) is not None
     assert report["picturesInlined"] == 0
+
+
+def widths(root):
+    return [int(c.get(q("w", "w"))) for c in root.iter(q("w", "gridCol"))]
+
+
+def test_a_table_wider_than_the_paper_is_brought_within_the_margins():
+    """Word lets a table state more columns than the page can hold.
+
+    Measured on a real worksheet: about 575pt of columns in about 523pt of
+    printable width, so every row crossed the right margin whatever the
+    images did.
+    """
+    root = parse_xml(document(wide_table() + A4_SECTION))
+    report = transform(root)
+
+    assert sum(widths(root)) <= 9026, "the table must fit between the margins"
+    assert widths(root) == [4513, 4513], "columns keep their proportions"
+    assert report["tablesNarrowed"] == 1
+
+    stated = [int(c.get(q("w", "w"))) for c in root.iter(q("w", "tcW"))]
+    assert stated == [4513, 4513], "the cells must agree with the grid they sit in"
+
+
+def test_a_table_that_already_fits_is_left_exactly_as_it_was():
+    root = parse_xml(document(wide_table(columns=(4000, 4000)) + A4_SECTION))
+    report = transform(root)
+
+    assert widths(root) == [4000, 4000], "nothing to fix means nothing to change"
+    assert report["tablesNarrowed"] == 0
+
+
+def test_a_picture_comes_down_with_the_column_that_holds_it():
+    """A picture sized for the old column would overflow the narrowed one."""
+    # Built here rather than from PICTURE: this needs the <a:ext> geometry a
+    # real picture carries, so the outer frame and inner shape can be compared.
+    picture = (
+        "<w:p><w:r><w:drawing><wp:inline>"
+        "<wp:extent cx='3810000' cy='1905000'/><wp:docPr/>"
+        '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        "<pic:pic><pic:blipFill><a:blip r:embed='rId1'/></pic:blipFill>"
+        "<pic:spPr><a:xfrm><a:ext cx='3810000' cy='1905000'/></a:xfrm></pic:spPr></pic:pic>"
+        "</a:graphicData></a:graphic>"
+        "</wp:inline></w:drawing></w:r></w:p>"
+    )
+    root = parse_xml(document(wide_table(picture) + A4_SECTION))
+    report = transform(root)
+
+    extent = root.find(".//" + q("wp", "extent"))
+    column = widths(root)[0]
+    limit = (column - 216) * 635  # both default cell margins
+    assert int(extent.get("cx")) <= limit, "the picture must fit its cell"
+    assert report["picturesShrunk"] == 1
+
+    # Shape is preserved: the inner geometry moves with the outer frame.
+    assert int(extent.get("cy")) < 1905000
+    inner = root.find(".//" + q("a", "ext"))
+    assert int(inner.get("cx")) == int(extent.get("cx")), "frame and geometry must agree"
+
+
+def test_a_nested_table_is_measured_against_its_cell_not_the_page():
+    """A nested table is bounded by its cell. Shrinking it against the page
+    would compound with the shrink its parent already took."""
+    inner = wide_table(columns=(6000, 6000))
+    root = parse_xml(document(wide_table(inner) + A4_SECTION))
+    report = transform(root)
+
+    assert report["tablesNarrowed"] == 1, "only the outer table is measured"
+    assert widths(root)[2:] == [6000, 6000], "the nested grid is left alone"
