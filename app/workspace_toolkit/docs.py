@@ -37,6 +37,8 @@ from xml.etree.ElementTree import Element, SubElement, tostring  # nosec B405
 from .docx import (
     COINCIDENT_SIZE_TOL,
     COINCIDENT_TOL_EMU,
+    EXTENSION_NS,
+    NS,
     OFF_VALUES,
     STYLES_PART,
     THEME_PART,
@@ -582,13 +584,22 @@ def remove_empty_paragraphs(root: Element, already_empty: set[Element]) -> None:
         # <w:hdr/> or a <w:tc> with none is invalid.
         if len(container.findall(q("w", "p"))) <= 1:
             continue
-        # A paragraph wedged between two tables is what stops them merging.
         siblings = list(container)
+        # These must *end* with a paragraph, not merely hold one. A text box
+        # whose last block is a table leaves a cell ending in w:tbl, and the
+        # paragraph appended to fix that is itself blank -- so without this it
+        # is removed again on the way out.
+        if siblings[-1] is paragraph and local(container.tag) in MUST_END_WITH_A_PARAGRAPH:
+            continue
+        # A paragraph wedged between two tables is what stops them merging.
         at = siblings.index(paragraph)
         if 0 < at < len(siblings) - 1:
             if local(siblings[at - 1].tag) == "tbl" and local(siblings[at + 1].tag) == "tbl":
                 continue
         container.remove(paragraph)
+
+
+MUST_END_WITH_A_PARAGRAPH = {"tc", "hdr", "ftr", "txbxContent", "body", "footnote", "endnote"}
 
 
 def _is_empty(paragraph: Element) -> bool:
@@ -748,9 +759,11 @@ def build_cell(item: Anchored, content: Element, width: int, rtl: bool = False) 
     for paragraph in list(content):
         content.remove(paragraph)
         cell.append(paragraph)
-    if cell.find(q("w", "p")) is None:
-        # OOXML requires a cell to end with a paragraph. This one is ours, so
-        # it has no author's direction to inherit.
+    if len(cell) == 0 or local(cell[-1].tag) != "p":
+        # OOXML requires a cell to *end* with a paragraph, not merely to hold
+        # one: a text box whose last block is a table left the cell ending in
+        # w:tbl. This paragraph is ours, so it has no author's direction to
+        # inherit.
         cell.append(new_paragraph(rtl))
     return cell
 
@@ -1287,7 +1300,47 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     return report
 
 
+IGNORABLE = q("mc", "Ignorable")
+
+
+def _declared_namespaces(root: Element) -> set[str]:
+    """Every namespace URI something in this tree actually uses."""
+    used: set[str] = set()
+    for element in root.iter():
+        if isinstance(element.tag, str) and element.tag.startswith("{"):
+            used.add(element.tag[1:].partition("}")[0])
+        for name in element.attrib:
+            if name.startswith("{"):
+                used.add(name[1:].partition("}")[0])
+    return used
+
+
+def prune_ignorable(root: Element) -> None:
+    """Drops mc:Ignorable prefixes that the output will not declare.
+
+    ElementTree declares only the namespaces something in the tree uses, so a
+    root that arrived carrying `mc:Ignorable="w14 w15 wp14 w16se w16cid"` came
+    out still naming prefixes whose xmlns declaration had gone. Markup
+    Compatibility (ECMA-376 Part 3) requires an Ignorable prefix to be
+    declared, so the file was invalid even when nothing in it had changed --
+    and it is handed to people to open in Word.
+    """
+    stated = root.get(IGNORABLE)
+    if stated is None:
+        return
+    known = {**EXTENSION_NS, **NS}
+    used = _declared_namespaces(root)
+    kept = [prefix for prefix in stated.split() if known.get(prefix) in used]
+    if kept:
+        root.set(IGNORABLE, " ".join(kept))
+    else:
+        # An empty mc:Ignorable is legal, but saying nothing is clearer than
+        # saying "ignore nothing".
+        del root.attrib[IGNORABLE]
+
+
 def serialise(root: Element) -> bytes:
+    prune_ignorable(root)
     return XML_DECLARATION + tostring(root, encoding="utf-8", xml_declaration=False)
 
 
