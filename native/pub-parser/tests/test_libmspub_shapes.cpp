@@ -315,3 +315,55 @@ TEST(libmspub_border_art_tiles_are_flagged_and_their_shape_stays_a_wrapper) {
   CHECK_EQ(doc.assets[0].uses.size(), std::size_t(4));
   CHECK_EQ(elementsOfType(doc, "wrapper").size(), std::size_t(1));
 }
+
+// --- embedded fonts ------------------------------------------------------------
+
+TEST(libmspub_embedded_font_is_measured_in_bytes_not_base64_characters) {
+  // libmspub defines every embedded font right after startDocument, before
+  // any page, as an EOT payload (application/vnd.ms-fontobject).
+  const std::string payload(100, '\x2a');
+  RVNGPropertyList font;
+  font.insert("librevenge:name", "SassoonPrimaryInfant");
+  font.insert("librevenge:mime-type", "application/vnd.ms-fontobject");
+  font.insert("office:binary-data", binary(payload));
+  IrCollector collector;
+  collector.startDocument(RVNGPropertyList());
+  collector.defineEmbeddedFont(font);
+  collector.startPage(page(8.0, 11.0));
+  collector.startTextObject(box(1, 1, 4, 1));
+  collector.openParagraph(RVNGPropertyList());
+  collector.openSpan(span("SassoonPrimaryInfant", 14));
+  collector.insertText("a");
+  collector.closeSpan();
+  collector.openSpan(span("SassoonPrimaryInfant", 14, true));
+  collector.insertText("b");
+  collector.closeSpan();
+  collector.closeParagraph();
+  collector.endTextObject();
+  const Document &doc = finishOnePage(collector);
+
+  CHECK_EQ(doc.fonts.size(), std::size_t(1));
+  const FontUse &used = doc.fonts[0];
+  CHECK(used.embedded);
+  CHECK_EQ(used.embeddedMime, std::string("application/vnd.ms-fontobject"));
+  CHECK_EQ(used.embeddedByteLength, 100LL); // base64 of 100 bytes is 136 characters
+  // Two runs use it; defining it is not a use.
+  CHECK_EQ(used.usageCount, 2LL);
+  CHECK_EQ(used.firstPageIndex, 0);
+}
+
+TEST(libmspub_embedded_font_never_used_reports_no_usage) {
+  RVNGPropertyList font;
+  font.insert("librevenge:name", "Unused Face");
+  font.insert("librevenge:mime-type", "application/vnd.ms-fontobject");
+  font.insert("office:binary-data", binary(std::string(2, 'x')));
+  IrCollector collector;
+  collector.startDocument(RVNGPropertyList());
+  collector.defineEmbeddedFont(font);
+  collector.startPage(page(8.0, 11.0));
+  const Document &doc = finishOnePage(collector);
+
+  CHECK_EQ(doc.fonts.size(), std::size_t(1));
+  CHECK_EQ(doc.fonts[0].usageCount, 0LL);
+  CHECK_EQ(doc.fonts[0].embeddedByteLength, 2LL); // "eHg=": one padding character
+}
