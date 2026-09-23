@@ -1417,6 +1417,11 @@ async def convert(
                 "tablesNarrowed",
                 "picturesShrunk",
                 "ink",
+                # A family we swapped is a change to the document, and PROJECT.md
+                # says every change is reported. The Slides path has always shown
+                # this; the Docs path replaced a typeface and said nothing.
+                "fontSubstitutions",
+                "legacyPictures",
                 "equations",
                 "regeneratedFields",
             }

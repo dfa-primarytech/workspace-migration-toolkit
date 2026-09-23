@@ -1048,3 +1048,18 @@ def test_the_layout_passes_say_what_they_did_in_the_report(tmp_path):
     for key in ("picturesInlined", "tablesNarrowed", "picturesShrunk"):
         assert key in report["conversion"], f"{key} never reaches the report"
     assert report["conversion"]["picturesInlined"] == 1
+
+
+def test_a_replaced_typeface_is_named_in_the_report(tmp_path):
+    """PROJECT.md: every change is reported.
+
+    A family swapped under #27 was applied silently on the Docs path, though
+    the Slides path had always shown it. "Baskerville became Libre
+    Baskerville" is exactly the kind of thing a person can check; a document
+    that quietly changed typeface is not.
+    """
+    body = para("<w:r><w:rPr><w:rFonts w:ascii='Baskerville'/></w:rPr><w:t>Hello</w:t></w:r>")
+    report, _ = converted_job(tmp_path, body + SECTION)
+
+    substitutions = report["conversion"]["fontSubstitutions"]
+    assert substitutions == {"Baskerville -> Libre Baskerville": 1}, substitutions
