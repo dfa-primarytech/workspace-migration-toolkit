@@ -22,17 +22,51 @@ Folding `<m:t>` into that token count looks like the fix and is not -- see
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+
 import pytest
-from workspace_toolkit.docs import count_equations, source_text, verify
+from workspace_toolkit.config import Settings
+from workspace_toolkit.docs import convert, count_equations, render_path, source_text, verify
+from workspace_toolkit.docx import parse
+from workspace_toolkit.google import DOCS_MIME
+from workspace_toolkit.package import DOCX, Package
 
 from .test_docx import (
     SECTION,
     TEXTBOX,
     anchor,
+    docx_with_header,
     offset,
     q,
     transform_body,
 )
+
+
+class FakeGoogle:
+    """The smallest double convert() will accept.
+
+    Deliberately not a mock of the whole Drive API: this test is about one
+    number surviving the trip from render.json into the report, and a double
+    that asserts on upload bodies would fail for reasons that have nothing to
+    do with equations.
+    """
+
+    async def request(self, method: str, url: str, **kwargs: object) -> dict:
+        return {"importFormats": {DOCX.mime: [DOCS_MIME]}}
+
+    async def folder(self) -> str:
+        return "folder1"
+
+    async def upload(self, path: Path, name: str, mime: str, folder: str, **kwargs: object) -> dict:
+        return {"id": "file-" + name}
+
+    async def export_text(self, file_id: str) -> str:
+        # Whatever the body text was; equation content is deliberately absent,
+        # which is the very uncertainty the warning exists to cover.
+        return ""
+
 
 MATH_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 
@@ -163,6 +197,90 @@ def test_equation_text_is_not_counted_as_body_text(tmp_path):
 def test_equations_are_counted(tmp_path, body, expected):
     root, _ = transform_body(tmp_path, body + SECTION)
     assert count_equations(root) == expected
+
+
+# ------------------------------------------------------------- the wiring
+#
+# count_equations and verify are both correct in isolation above. Nothing there
+# proves the number travels from one to the other, and a count that never
+# reaches the report is the same as no count at all.
+
+
+def test_render_counts_equations_in_every_part_not_just_the_body(tmp_path):
+    """Headers are processed too, and an equation in one is equally unverified.
+
+    The token comparison is body-only for a real reason -- Drive's plain-text
+    export does not reliably include headers, so comparing them would invent
+    mismatches. That reasoning is about *text comparison* and says nothing
+    about where an equation can be, but the count originally sat inside the
+    same body-only branch and inherited the restriction by accident.
+    """
+    source = tmp_path / "source.docx"
+    docx_with_header(
+        source,
+        f"<w:p>{DISPLAY_EQUATION}</w:p>" + SECTION,
+        header=f"<w:p>{FRACTION}</w:p>",
+    )
+    report = render_path(source, tmp_path / "out.docx", Settings())
+    assert report["equations"] == 2, (
+        f"expected the body's equation and the header's, got {report['equations']}"
+    )
+
+
+def test_an_equation_only_in_a_header_is_still_counted(tmp_path):
+    """The case that was silently zero: no body equation at all."""
+    source = tmp_path / "header-only.docx"
+    docx_with_header(
+        source,
+        "<w:p><w:r><w:t>Ordinary body copy</w:t></w:r></w:p>" + SECTION,
+        header=f"<w:p>{FRACTION}</w:p>",
+    )
+    report = render_path(source, tmp_path / "out.docx", Settings())
+    assert report["equations"] == 1, (
+        "an equation in a header was not counted, so the document would be "
+        "reported as containing none and no warning would be raised"
+    )
+
+
+def test_the_count_reaches_the_conversion_report_and_its_warning(tmp_path):
+    """End to end through the mocked Google path.
+
+    Everything else here tests a function. This tests the wiring: render
+    writes a count, convert reads it back out of render.json, and the warning
+    reaches the report a person actually sees. Break any link in that chain
+    and every other test in this file still passes.
+    """
+    job = tmp_path / "job"
+    result = job / "result"
+    result.mkdir(parents=True)
+
+    source = job / "source.docx"
+    docx_with_header(
+        source,
+        f"<w:p>{DISPLAY_EQUATION}</w:p>" + SECTION,
+        header=f"<w:p>{FRACTION}</w:p>",
+    )
+    package = Package(source, Settings(), DOCX)
+    try:
+        manifest = parse(package, "source.docx", "sha")
+    finally:
+        package.close()
+
+    render_report = render_path(source, result / "converted.docx", Settings())
+    (result / "render.json").write_text(json.dumps(render_report), encoding="utf-8")
+
+    report = asyncio.run(convert(job, manifest, FakeGoogle()))
+
+    assert report["status"] == "completed_with_warnings"
+    assert report["conversion"]["equations"] == 2, (
+        f"the count did not reach the conversion report: {report.get('conversion')}"
+    )
+    codes = {w["code"] for w in report["warnings"]}
+    assert "equations_not_verified" in codes, (
+        f"no equation warning in the report a person reads: {sorted(codes)}"
+    )
+    raised = next(w for w in report["warnings"] if w["code"] == "equations_not_verified")
+    assert raised["equationCount"] == 2
 
 
 def test_a_document_with_equations_warns_that_they_were_not_checked(tmp_path):

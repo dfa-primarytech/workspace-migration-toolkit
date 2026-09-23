@@ -661,8 +661,15 @@ def render(package: Package, destination: Path) -> dict:
             # Body text only. Drive's plain-text export does not reliably
             # include headers, so counting them would invent mismatches.
             tokens = Counter(source_text(root).split())
-            report["equations"] = count_equations(root)
         part_report = transform(root, ids)
+        # Every part, unlike the token comparison above: that is body-only
+        # because comparing header text would invent mismatches, which says
+        # nothing about where an equation can be. An equation in a letterhead
+        # is as unverified as one in the body.
+        #
+        # Counted after the transform, so a construct restated inside
+        # mc:Fallback is counted once rather than twice.
+        report["equations"] += count_equations(root)
         rewritten[name] = serialise(root)
         report["parts"].append(name)
         for key in ("textboxes", "pictures", "ink", "legacyPictures"):
@@ -719,32 +726,24 @@ def _same_size(a: dict, b: dict) -> bool:
 def source_text(root: Element) -> str:
     """All body text, used only to check nothing vanished during import.
 
-    Equation text lives in `<m:t>`, not `<w:t>`, and is deliberately left out
-    -- see count_equations for why counting it would invent mismatches rather
-    than catch them.
+    Equation text is `<m:t>`, not `<w:t>`, and is deliberately left out; see
+    count_equations.
     """
     return " ".join((node.text or "") for node in root.iter(q("w", "t")))
 
 
 def count_equations(root: Element) -> int:
-    """How many equations the document contains.
+    """How many equations this part contains.
 
-    Equations are the one kind of content this converter can neither rewrite
-    nor check. They survive the transform intact -- they are relocated like any
-    other markup -- but whether Google's importer keeps them is unknown, and
-    unknowable until a real conversion is observed.
+    Equation text is `<m:t>`, so it is not in the token comparison and a lost
+    equation would not show up as missing text. Folding it in is not the
+    answer: whether Drive's plain-text export includes equation content is
+    unknown, and if it does not, every maths document would report text it
+    never lost. The same reasoning already keeps headers out of that count.
 
-    The obvious move would be to fold `<m:t>` into the token check so a lost
-    equation shows up as missing text. That is a trap: if Google's plain-text
-    export omits equation content -- which is entirely plausible, since an
-    equation is not a run of text -- every maths document would report missing
-    text it had not actually lost. A warning that cries wolf on every worksheet
-    is worse than no warning, because people learn to dismiss it.
-
-    The same reasoning already keeps headers out of the token count. So the
-    count is reported and reviewers are told to look, which is honest about
-    what is known: the equation left here intact, and nobody has checked what
-    arrived.
+    So equations are counted and reported as unverified instead. They are not
+    the only content the text check cannot speak for -- layout is the standing
+    example -- but they are content a reader can be pointed at directly.
     """
     return sum(1 for _ in root.iter(q("m", "oMath")))
 
