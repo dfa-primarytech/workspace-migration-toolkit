@@ -39,6 +39,14 @@ from .test_docx import (
     run,
     write_docx,
 )
+from .test_docx_sections import (
+    A4_LANDSCAPE,
+    A4_PORTRAIT,
+    box,
+    final_section,
+    section_break_with,
+    text,
+)
 
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
 PDFTOTEXT = shutil.which("pdftotext")
@@ -72,6 +80,29 @@ def rendered_text(pdf: Path) -> str:
     )
     assert result.returncode == 0, f"pdftotext failed: {result.stderr}"
     return result.stdout
+
+
+def rendered_page_texts(pdf: Path) -> list[str]:
+    """The rendered text, split into pages.
+
+    `pdftotext` separates pages with a form feed in both the poppler and Xpdf
+    builds, which is why this reads pages that way rather than with `-bbox` or
+    a second tool: the two builds share a name and do not share options, and a
+    check that only works on the one CI happens to install is a check that can
+    silently stop meaning anything.
+    """
+    pages = rendered_text(pdf).split("\f")
+    while pages and not pages[-1].strip():
+        pages.pop()
+    return pages
+
+
+def page_holding(pages: list[str], needle: str) -> int:
+    """Index of the page carrying this text, or -1."""
+    for index, content in enumerate(pages):
+        if needle in content:
+            return index
+    return -1
 
 
 # LibreOffice is slow to start and writes a user profile on first run.
@@ -171,6 +202,49 @@ def test_header_content_survives_the_multi_part_rewrite(tmp_path):
     converted = convert_fixture(tmp_path, body, header=header)
     pdf = soffice_convert(converted, "pdf", tmp_path / "out")
     assert "Body copy" in rendered_text(pdf)
+
+
+@needs_pdftotext
+def test_a_box_on_the_section_break_is_laid_out_on_its_own_sections_page(tmp_path):
+    """The section fix, checked on the page rather than in our own XML.
+
+    The XML tests assert the converted table sits before the section break.
+    That is the mechanism, not the outcome: what a member of staff sees is
+    which page their text box lands on. Only a real layout engine can answer
+    that, and it is the one question our own parser can never be asked.
+
+    The portrait section ends with the paragraph carrying the text box, and a
+    landscape appendix follows. If the table crosses the break it is laid out
+    under the appendix's page setup, so it renders on the landscape page --
+    nothing errors, nothing is lost, it is simply on the wrong page.
+    """
+    body = (
+        "<w:p><w:r><w:t>Portrait body</w:t></w:r></w:p>"
+        + section_break_with(box(), size=A4_PORTRAIT)
+        + text("Appendix body")
+        + final_section(A4_LANDSCAPE)
+    )
+    converted = convert_fixture(tmp_path, body)
+    pdf = soffice_convert(converted, "pdf", tmp_path / "out")
+    pages = rendered_page_texts(pdf)
+
+    portrait = page_holding(pages, "Portrait body")
+    appendix = page_holding(pages, "Appendix body")
+    assert portrait >= 0 and appendix >= 0, f"a section's own text is missing: {pages}"
+
+    # Control: without a real page break the two sections share a page, and
+    # every assertion below would pass while proving nothing at all.
+    assert portrait != appendix, (
+        f"the two sections rendered onto one page, so this fixture cannot tell them apart: {pages}"
+    )
+
+    card = page_holding(pages, "Card text")
+    assert card >= 0, f"the converted text box reached no page at all: {pages}"
+    assert card == portrait, (
+        "the converted text box did not render on its own section's page. "
+        f"expected page {portrait + 1} with 'Portrait body', found it on page "
+        f"{card + 1}. pages={pages}"
+    )
 
 
 @needs_soffice
