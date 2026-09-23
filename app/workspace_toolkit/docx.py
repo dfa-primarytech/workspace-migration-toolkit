@@ -50,10 +50,30 @@ NS = {
     "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
 }
 
+# Namespaces this converter never reads, but which a real Word document names
+# in mc:Ignorable and sometimes uses. Registering them keeps their conventional
+# prefixes on output instead of ns0, ns1 -- which matters because mc:Ignorable
+# names prefixes as *text*: rename the prefix and the attribute is left pointing
+# at one that no longer exists.
+EXTENSION_NS = {
+    "w15": "http://schemas.microsoft.com/office/word/2012/wordml",
+    "w16se": "http://schemas.microsoft.com/office/word/2015/wordml/symex",
+    "w16cid": "http://schemas.microsoft.com/office/word/2016/wordml/cid",
+    "w16": "http://schemas.microsoft.com/office/word/2018/wordml",
+    "w16cex": "http://schemas.microsoft.com/office/word/2018/wordml/cex",
+    "wp14": "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing",
+    "wpg": "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup",
+    "wpi": "http://schemas.microsoft.com/office/word/2010/wordprocessingInk",
+    "wne": "http://schemas.microsoft.com/office/word/2006/wordml",
+    "w10": "urn:schemas-microsoft-com:office:word",
+    "o": "urn:schemas-microsoft-com:office:office",
+    "v": "urn:schemas-microsoft-com:vml",
+}
+
 # Keep the conventional prefixes on output. Word tolerates any prefix, but
 # mc:Ignorable names prefixes as *text*, so renaming them would leave a root
 # attribute pointing at prefixes that no longer exist.
-for _prefix, _uri in NS.items():
+for _prefix, _uri in {**EXTENSION_NS, **NS}.items():
     register_namespace(_prefix, _uri)
 
 EMU_PER_INCH = 914400

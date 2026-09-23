@@ -1426,3 +1426,76 @@ def test_a_size_is_read_from_the_right_property():
 
     extent = root.find(".//" + q("wp", "extent"))
     assert (int(extent.get("cx")), int(extent.get("cy"))) == (1270000, 635000)
+
+
+# ------------------------------------------------ schema validity (issue #44)
+
+
+def declared_prefixes(data: bytes) -> set[str]:
+    """The xmlns prefixes the serialised root actually declares."""
+    import re as _re
+
+    head = data.decode("utf-8")[: data.decode("utf-8").index(">") + 1]
+    return set(_re.findall(r"xmlns:([A-Za-z0-9_.-]+)=", head))
+
+
+def test_ignorable_never_names_a_prefix_the_output_does_not_declare():
+    """Markup Compatibility requires an Ignorable prefix to be declared.
+
+    ElementTree declares only the namespaces something in the tree uses, so a
+    root carrying mc:Ignorable="w14 w15 wp14 w16se" came out still naming
+    prefixes whose xmlns declaration had gone -- and the CLI hands that file to
+    people to open in Word.
+    """
+    from workspace_toolkit.docs import serialise
+
+    body = "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>" + SECTION
+    root = parse_xml(
+        f'<w:document {XMLNS} mc:Ignorable="w14 w15 wp14 w16se w16cid">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    data = serialise(root)
+    text = data.decode("utf-8")
+    stated = (
+        text[text.index("mc:Ignorable=") + 14 :].split('"')[0].split()
+        if "mc:Ignorable=" in text
+        else []
+    )
+
+    assert set(stated) <= declared_prefixes(data), f"{stated} vs {declared_prefixes(data)}"
+
+
+def test_a_prefix_that_is_still_used_keeps_its_name_and_its_declaration():
+    # w14 is used by the ink marker, so it must survive both the pruning and
+    # the prefix mapping -- ns0 would break the Ignorable text just as badly.
+    from workspace_toolkit.docs import serialise
+
+    body = f"<w:p><w:r>{INK}</w:r></w:p>" + SECTION
+    root = parse_xml(
+        f'<w:document {XMLNS} mc:Ignorable="w14 w15"><w:body>{body}</w:body></w:document>'
+    )
+    data = serialise(root)
+    text = data.decode("utf-8")
+
+    assert 'mc:Ignorable="w14"' in text, text[:400]
+    assert "xmlns:w14=" in text
+    assert "ns0" not in text
+
+
+def test_a_converted_text_box_never_leaves_a_cell_ending_in_a_table():
+    """Word requires a cell's last block to be a paragraph. A text box whose
+    last block is a table left the cell ending in w:tbl."""
+    inner = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='2000'/></w:tblGrid>"
+    inner += "<w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+    textbox = (
+        '<a:graphic><a:graphicData uri="x"><wps:wsp><wps:spPr/>'
+        f"<wps:txbx><w:txbxContent><w:p><w:r><w:t>Lead</w:t></w:r></w:p>{inner}"
+        "</w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic>"
+    )
+    body = anchor(textbox, h=("column", offset(0)), v=("paragraph", offset(0))) + A4_SECTION
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    assert report["textboxes"] == 1
+    outer = root.find(".//" + q("w", "tc"))
+    assert local(list(outer)[-1].tag) == "p", [local(c.tag) for c in outer]
