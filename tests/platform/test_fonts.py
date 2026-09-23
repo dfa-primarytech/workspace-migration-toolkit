@@ -142,3 +142,56 @@ def test_worker_writes_pptx_font_report(pptx, tmp_path, monkeypatch):
     # Calibri was in this set until it was measured as present in Google Docs.
     # Only families Docs genuinely lacks are replaced.
     assert {item["original"] for item in report["fontSubstitutions"]} == {"Aptos"}
+
+
+def render_slide(tmp_path, slide_body):
+    """Renders the fixture with slide 1's text body replaced; returns slide 1."""
+    parts = fixture_parts()
+    parts["ppt/slides/slide1.xml"] = parts["ppt/slides/slide1.xml"].replace(
+        "<a:p><a:r><a:t>Last slide</a:t></a:r></a:p>", slide_body
+    )
+    source = write_pptx(tmp_path / "source.pptx", parts)
+    report = render_path(source, tmp_path / "converted.pptx", Settings())
+    with zipfile.ZipFile(tmp_path / "converted.pptx") as package:
+        return package.read("ppt/slides/slide1.xml").decode(), report
+
+
+def test_only_the_latin_slot_is_substituted(tmp_path):
+    # Issue #50: the candidates are Latin faces. An East Asian, complex-script,
+    # symbol or bullet slot naming the same family keeps it.
+    slide, _ = render_slide(
+        tmp_path,
+        '<a:p><a:pPr><a:buFont typeface="Aptos"/></a:pPr><a:r><a:rPr>'
+        '<a:latin typeface="Aptos"/><a:ea typeface="Aptos"/><a:cs typeface="Aptos"/>'
+        '<a:sym typeface="Aptos"/></a:rPr><a:t>x</a:t></a:r></a:p>',
+    )
+    assert '<a:latin typeface="Carlito"' in slide
+    for slot in ("ea", "cs", "sym", "buFont"):
+        assert f'<a:{slot} typeface="Aptos"' in slide, f"the {slot} slot was substituted"
+
+
+def test_slide_text_that_looks_like_markup_is_never_rewritten(tmp_path):
+    # A `"` needs no escaping in text, so this is exactly what a lesson on
+    # HTML or CSS contains. It is content, not a font declaration.
+    slide, report = render_slide(
+        tmp_path, '<a:p><a:r><a:t>Set typeface="Aptos" in the style</a:t></a:r></a:p>'
+    )
+    assert 'typeface="Aptos" in the style' in slide
+    assert report["fontSubstitutions"][0]["occurrences"] == 1  # the theme's, only
+
+
+def test_a_replaced_face_loses_the_original_faces_metadata(tmp_path):
+    slide, _ = render_slide(
+        tmp_path,
+        '<a:p><a:r><a:rPr><a:latin typeface="Aptos" panose="020B0004020202020204" '
+        'pitchFamily="34" charset="0"/></a:rPr><a:t>x</a:t></a:r></a:p>',
+    )
+    assert '<a:latin typeface="Carlito"/>' in slide
+
+
+def test_a_symbol_charset_latin_slot_is_left_alone(tmp_path):
+    slide, _ = render_slide(
+        tmp_path,
+        '<a:p><a:r><a:rPr><a:latin typeface="Aptos" charset="2"/></a:rPr><a:t>x</a:t></a:r></a:p>',
+    )
+    assert '<a:latin typeface="Aptos" charset="2"/>' in slide

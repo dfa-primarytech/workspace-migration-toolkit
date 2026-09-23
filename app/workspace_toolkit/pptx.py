@@ -24,7 +24,15 @@ NS = {
     "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
 }
 
-TYPEFACE = re.compile(rb"(\btypeface\s*=\s*)([\"'])(.*?)\2")
+# The start tag of a DrawingML <a:latin>, whatever its prefix. Matching whole
+# start tags is what keeps slide *text* out of reach: a literal `"` needs no
+# escaping in text content, so a lesson about HTML can contain the characters
+# typeface="Segoe UI", but never the characters <a:latin in its text.
+LATIN_TAG = re.compile(rb"<(?:[A-Za-z_][\w.-]*:)?latin\b[^>]*>")
+TYPEFACE = re.compile(rb"(\stypeface\s*=\s*)([\"'])(.*?)\2")
+CHARSET = re.compile(rb"\scharset\s*=\s*([\"'])(.*?)\1")
+# Facts about the original face that are false once the name is replaced.
+STALE_METADATA = re.compile(rb"\s(?:panose|pitchFamily|charset)\s*=\s*([\"']).*?\1")
 
 
 def local(tag: str) -> str:
@@ -412,13 +420,29 @@ def analysis_report(manifest: dict) -> dict:
 
 
 def _substitute_typefaces(data: bytes, applied: Counter[tuple[str, str]]) -> bytes:
-    """Replace reviewed typeface attributes without reserialising whole XML parts."""
+    """Replace reviewed Latin typefaces without reserialising whole XML parts.
 
-    def replace(match: re.Match[bytes]) -> bytes:
+    Only `<a:latin>` is rewritten (issue #50). The shared service's candidates
+    are Latin faces with no statement of East Asian or complex-script
+    coverage, so `<a:ea>` and `<a:cs>` keep their families. `<a:sym>` and
+    `<a:buFont>` name symbol and bullet fonts, whose glyphs are mapped by code
+    point, and so does a Latin slot declaring the symbol character set. A
+    rewritten tag loses the PANOSE, pitch and character set it carried: they
+    describe the original face, not its replacement.
+    """
+
+    def replace(tag_match: re.Match[bytes]) -> bytes:
+        tag = tag_match.group(0)
+        match = TYPEFACE.search(tag)
+        if match is None:
+            return tag
+        charset = CHARSET.search(tag)
+        if charset is not None and charset.group(2).strip() in {b"2", b"02"}:
+            return tag
         try:
             original = unescape(match.group(3).decode("utf-8"))
         except UnicodeDecodeError:
-            return match.group(0)
+            return tag
         result = compatibility(original)
         replacement = result.get("replacement")
         if (
@@ -426,7 +450,7 @@ def _substitute_typefaces(data: bytes, applied: Counter[tuple[str, str]]) -> byt
             or result["manualReview"]
             or not isinstance(replacement, str)
         ):
-            return match.group(0)
+            return tag
         applied[(original, replacement)] += 1
         encoded = (
             replacement.replace("&", "&amp;")
@@ -436,9 +460,11 @@ def _substitute_typefaces(data: bytes, applied: Counter[tuple[str, str]]) -> byt
             .replace(">", "&gt;")
             .encode("utf-8")
         )
-        return match.group(1) + match.group(2) + encoded + match.group(2)
+        quote = match.group(2)
+        rewritten = tag[: match.start()] + match.group(1) + quote + encoded + quote
+        return STALE_METADATA.sub(b"", rewritten + tag[match.end() :])
 
-    return TYPEFACE.sub(replace, data)
+    return LATIN_TAG.sub(replace, data)
 
 
 def render(package: Package, destination: Path) -> dict:
