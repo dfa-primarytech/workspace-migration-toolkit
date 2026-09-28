@@ -206,6 +206,20 @@ Saved copies are named `<deck> – slide NN – <name>`, where `<name>` is the
 object's own name when PowerPoint gave it a meaningful one (it names an
 inserted video or sound after its file) and `video 1`, `audio 2` and so on
 otherwise. PowerPoint's defaults such as "Picture 3" count as no name.
+**"Make pictures smaller" is opt-in** (issue #36, step 3): a checkbox beside
+Convert, off by default, sent as `X-Compress-Pictures: 1` and honoured only on
+`/api/convert` -- checking a file never changes it. The worker then rewrites the
+converted copy (`pictures.py`); the person's own file is untouched. Each picture
+in a plain picture frame is reduced to the size it is drawn at, at 220 ppi
+(PowerPoint's Compress Pictures default), allowing for its crop, and a photo
+stored as PNG is re-saved as JPEG (the part is renamed and its relationships and
+content types follow). Left alone: pictures under 100 KB, formats other than PNG
+and JPEG, JPEGs with an EXIF rotation, CMYK, pictures with transparency or few
+colours (diagrams, screenshots, text), pictures used anywhere but a picture
+frame or inside a group, anything over 60 megapixels (refused undecoded), and
+any result not at least 10% smaller. The report lists every change
+(`pictures`) and warns `pictures_compressed`; a failure is never fatal
+(`pictures_not_compressed`, and the pictures go at full size). Uses Pillow.
 The server is Hypercorn, which speaks HTTP/2 without TLS: Cloud Run refuses an
 HTTP/1 request body over 32 MiB, so deploy with end-to-end HTTP/2 (the `h2c`
 port name in `deploy/cloud-run.example.yaml`). The subprocess inherits only a small runtime environment,

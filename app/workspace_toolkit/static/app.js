@@ -8,7 +8,7 @@ async function request(url, options = {}) {
   if (!response.ok || !body) throw new Error(body?.error?.message || 'The request failed. Please try again.');
   return body;
 }
-function busy(value) { for (const id of ['file','pick-drive','analyse','convert','logout']) $(id).disabled = value; }
+function busy(value) { for (const id of ['file','pick-drive','analyse','convert','smaller','logout']) $(id).disabled = value; }
 // The on-page summary above this is the report for a person; this is the
 // same data as raw JSON for IT/support to troubleshoot with. Tucked behind
 // <details> so a trial user isn't handed a JSON file as if it were the answer.
@@ -37,7 +37,7 @@ function pipelineFor(src) {
   return (session.formats || []).find(f => f.extension === ext);
 }
 function resetChoice() {
-  sourceHash = null; selected = null; $('convert').hidden = true;
+  sourceHash = null; selected = null; $('convert').hidden = true; $('smaller-choice').hidden = true; $('smaller').checked = false;
   $('summary').replaceChildren(); $('result').replaceChildren();
   $('picked').textContent = source ? `Selected: ${source.name}` : '';
 }
@@ -86,6 +86,8 @@ async function upload(convert) {
   if (convert && (source !== selected || !sourceHash)) throw new Error('Please check this file first.');
   const headers = {'X-Upload-Filename':encodeURIComponent(source.name),'X-CSRF-Token':session.csrfToken};
   if (convert) headers['X-Source-Sha256'] = sourceHash;
+  // Opt-in: only ever sent with a conversion (see web.py).
+  if (convert && $('smaller').checked) headers['X-Compress-Pictures'] = '1';
   if (source.driveId) {
     headers['Content-Type'] = 'application/octet-stream';
     headers['X-Drive-File-Id'] = source.driveId;
@@ -105,11 +107,11 @@ async function perform(convert) {
     const list = document.createElement('ul');
     for (const message of [...new Set(report.warnings.map(w=>w.message))]) { const li = document.createElement('li'); li.textContent = message; list.append(li); }
     parent.append(list);
-    if (!convert) { sourceHash = report.sourceSha256; selected = source; $('convert').hidden = false; }
+    if (!convert) { sourceHash = report.sourceSha256; selected = source; $('convert').hidden = false; $('smaller-choice').hidden = false; }
     else {
       if (report.url) link(report.url, 'Open in ' + ((chosen && chosen.destination) || 'Google Drive'), parent);
       if (report.folderUrl) link(report.folderUrl, 'Open recovered files in Drive', parent);
-      $('convert').hidden = true;
+      $('convert').hidden = true; $('smaller-choice').hidden = true;
     }
     download(report, parent);
     $('status').textContent = !convert ? 'Ready to convert. Review the findings above.' : report.status.startsWith('failed') ? 'Conversion did not finish. Check the report and any saved files before retrying.' : 'Conversion finished. Please review the result and report.';

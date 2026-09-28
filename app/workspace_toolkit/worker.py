@@ -8,6 +8,8 @@ from .config import Settings
 from .docs import render_path
 from .docx import analyse as analyse_docx
 from .errors import ToolkitError
+from .package import FORMATS
+from .pictures import compress
 from .pptx import analyse as analyse_pptx
 from .pptx import render_path as render_pptx
 
@@ -19,6 +21,7 @@ ANALYSERS = {"pptx": analyse_pptx, "docx": analyse_docx}
 def main() -> None:
     source, output, config = map(Path, sys.argv[1:4])
     fmt = sys.argv[4] if len(sys.argv) > 4 else "pptx"
+    smaller_pictures = len(sys.argv) > 5 and sys.argv[5] == "compress-pictures"
     settings = Settings(**json.loads(config.read_text(encoding="utf-8")))
     try:
         if sys.platform != "win32":
@@ -38,6 +41,16 @@ def main() -> None:
         elif fmt == "pptx":
             report = render_pptx(source, output / "converted.pptx", settings)
             (output / "render.json").write_text(json.dumps(report), encoding="utf-8")
+        if smaller_pictures:
+            # Only when asked for, and never fatal: a failure here leaves the
+            # converted file as it was, with its pictures at full size.
+            converted = output / ("converted." + fmt)
+            try:
+                result = compress(converted, settings, FORMATS["." + fmt])
+            except Exception:
+                converted.with_name(converted.name + ".smaller").unlink(missing_ok=True)
+                result = {"failed": True, "picturesCompressed": []}
+            (output / "pictures.json").write_text(json.dumps(result), encoding="utf-8")
     except ToolkitError as exc:
         (output / "error.json").write_text(
             json.dumps({"code": exc.code, "message": exc.message, "status": exc.status}),

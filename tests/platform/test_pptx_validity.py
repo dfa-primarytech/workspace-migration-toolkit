@@ -50,3 +50,29 @@ def test_libreoffice_opens_a_deck_whose_video_was_taken_out(tmp_path):
     stripped = slide_texts(converted, tmp_path / "stripped")
     assert len(stripped) == 2, f"stripped: LibreOffice laid out {len(stripped)} slides, not 2"
     assert "Volcanoes" in stripped[0] and "Hello school" in stripped[1], stripped
+
+
+@needs_pdftotext
+def test_libreoffice_opens_a_deck_whose_pictures_were_made_smaller(tmp_path):
+    # The deck's still image swapped for a large photograph stored as PNG, then
+    # both steps a conversion runs: take the video out, make pictures smaller.
+    from workspace_toolkit.package import PPTX
+    from workspace_toolkit.pictures import compress
+
+    from .test_pictures import encode, photo
+
+    source = tmp_path / "source.pptx"
+    with zipfile.ZipFile(DECK) as original, zipfile.ZipFile(source, "w") as copy:
+        for name in original.namelist():
+            data = original.read(name)
+            if name == "ppt/media/image1.png":
+                data = encode(photo(3000, 1688), "PNG")
+            copy.writestr(name, data, zipfile.ZIP_DEFLATED)
+    converted = tmp_path / "converted.pptx"
+    render_path(source, converted, Settings())
+    report = compress(converted, Settings(), PPTX)
+    assert [d["newPart"] for d in report["picturesCompressed"]] == ["ppt/media/image1.jpeg"]
+
+    stripped = slide_texts(converted, tmp_path / "smaller")
+    assert len(stripped) == 2, f"LibreOffice laid out {len(stripped)} slides, not 2"
+    assert "Volcanoes" in stripped[0] and "Hello school" in stripped[1], stripped
