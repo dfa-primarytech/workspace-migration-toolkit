@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
+from weakref import WeakKeyDictionary
 
 import httpx
 
@@ -27,6 +28,21 @@ LIBRARY = "Workspace conversions"
 # waiting out; anything else is a real refusal and retrying only hides it.
 TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
 UPLOAD_ATTEMPTS = 4
+
+
+# One lock per event loop -- in production, one per process. It is shared by
+# every person's jobs, which is fine: it covers a single search, and a create
+# only on someone's very first conversion. Keyed by loop because an
+# asyncio.Lock belongs to the loop that first waits on it.
+_library_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
+
+
+def _library_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _library_locks.get(loop)
+    if lock is None:
+        lock = _library_locks[loop] = asyncio.Lock()
+    return lock
 
 
 def http_status(exc: BaseException) -> int | None:
@@ -52,6 +68,9 @@ class Google:
     def __init__(self, token: str, client: httpx.AsyncClient):
         self.client = client
         self.headers = {"Authorization": "Bearer " + token}
+        # Things worth telling the person that happened in Drive itself rather
+        # than in the conversion; the caller adds them to the report.
+        self.warnings: list[dict] = []
 
     async def request(self, method: str, url: str, **kwargs) -> dict:
         try:
@@ -89,7 +108,41 @@ class Google:
         Under the `drive.file` scope a search only ever returns files this app
         created, so this can never adopt a folder of the person's own that
         happens to share the name.
+
+        Drive has no create-if-absent, so the search and the create are two
+        calls. Two jobs in this process take turns through a lock, so the
+        second finds the first's folder (issue #70). The lock cannot reach
+        another instance, so after creating a folder the search is repeated:
+        if an older library exists after all, that one is used -- the one
+        every later job will pick -- and the person is told a second folder
+        was made. Nothing is moved or deleted.
         """
+        async with _library_lock():
+            existing = await self._libraries(1)
+            if existing:
+                return existing[0]
+            made = await self.make_folder(LIBRARY)
+            try:
+                found = await self._libraries(2)
+            except ToolkitError:
+                # The folder exists and works; failing to double-check it is
+                # no reason to fail the conversion.
+                return made
+            if found and found[0] != made:
+                self.warnings.append(
+                    warning(
+                        "library_duplicated",
+                        f'Two "{LIBRARY}" folders were created in your Drive at the same '
+                        "moment. This conversion is in the older one, where later "
+                        "conversions will go too. If the other is empty, it can be deleted.",
+                        classification=C.IGNORED,
+                    )
+                )
+                return found[0]
+            return made
+
+    async def _libraries(self, limit: int) -> list[str]:
+        """Library folder ids, oldest first."""
         found = await self.request(
             "GET",
             DRIVE + "/files",
@@ -97,14 +150,15 @@ class Google:
                 "q": f"mimeType='{FOLDER_MIME}' and name='{LIBRARY}' and trashed=false",
                 "fields": "files(id)",
                 "orderBy": "createdTime",
-                "pageSize": 1,
+                "pageSize": limit,
                 "spaces": "drive",
             },
         )
-        existing = found.get("files") or []
-        if existing and isinstance(existing[0].get("id"), str):
-            return existing[0]["id"]
-        return await self.make_folder(LIBRARY)
+        return [
+            f["id"]
+            for f in found.get("files") or []
+            if isinstance(f, dict) and isinstance(f.get("id"), str) and f["id"]
+        ]
 
     async def folder(self, job_name: str = "Conversion") -> str:
         """A fresh subfolder for this job, inside the shared library folder."""

@@ -1,5 +1,28 @@
 # Handoff
 
+- Agent: Claude Code / QuietHeron (platform)
+- Date: 2026-09-28
+- Branch: `fix/library-folder-race`, based on main `bde062a`
+- Objective: #70. Two conversions at once could each create a "Workspace conversions" library folder. Implemented option 1 from the issue.
+- Files changed: `app/workspace_toolkit/google.py` (`library()`, new `_libraries()`, `_library_lock()`, `Google.warnings`), `app/workspace_toolkit/web.py` (the convert route adds `google.warnings` to the report), `tests/platform/test_google.py`, `tests/platform/test_web.py`, this file and BACKLOG.md.
+- Completed:
+  - The search and create in `library()` now run under a lock, one per event loop (so one per process in production), shared by everyone's jobs.
+  - After creating a library, the search runs again. If an older library turned up (made by another instance), that one is used, and a `library_duplicated` warning (IGNORED) goes into the report. Nothing is moved or deleted.
+  - A failed re-check keeps the folder that was just made, rather than failing the job.
+  - The warning is added in `web.py`, so PPTX and DOCX both get it without touching `docs.py` or `pipelines.py`.
+- Checks: platform 308 passed, 8 skipped (main `bde062a`: 304 and 8). Ruff check and format clean; mypy reports no issues in 17 files; Bandit reports no issues. The two new behaviours were each checked by breaking them. With the lock swapped for a null context, the concurrency test fails; with the re-check disabled, the other-instance test fails. The unmodified code passes both.
+- Known failures: none.
+- Unresolved:
+  - The re-check depends on Drive's search returning a folder created moments earlier. That hasn't been observed against live Drive; if search lags, a duplicate can still go unreported, as it did before.
+  - Only the report returned to the page carries the new warning. The copy the PPTX and DOCX pipelines save to Drive is written before `web.py` sees it. Adding it there means a change inside each pipeline, and `docs.py` belongs to the DOCX stream.
+- Decisions: none new; this is the issue's option 1.
+- Next task: #70 needs review and the human's merge. #52 has no open items left.
+- Warnings: the lock is per process. Cross-instance duplicates are detected, not prevented. Option 2 in #70 (keeping the library id in the session) would narrow that further.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code, working the DOCX issue queue at the human's request
 - Date: 2026-09-28 (later same day)
 - Branch: `fix/docx-header-footer-manifest`, PR #76, split out of #52 (BACKLOG item 12). Based on main after #71/#74/#73 merged.
