@@ -282,6 +282,7 @@ def _post(monkeypatch, tmp_path, route, compress_header):
         "X-CSRF-Token": "c",
     }
     first = client.post("/api/analyse", content=path.read_bytes(), headers=headers)
+    assert first.status_code == 200, first.text  # the server's own words if it refuses
     if route == "analyse":
         headers["X-Compress-Pictures"] = compress_header
         return client.post("/api/analyse", content=path.read_bytes(), headers=headers), sent, path
