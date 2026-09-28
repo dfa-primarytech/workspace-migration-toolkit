@@ -31,7 +31,7 @@ committed.
 | Everything else under `app/`, `deploy/`, `config.py` | Platform stream | |
 | `native/pub-parser/`, Publisher-owned Python | Publisher stream | |
 | `rescue/xlsx-sheets-mvp` and XLSX | XLSX stream ("Codex") | PR #72 open, draft |
-| `src/` (legacy Apps Script fixer) | Frozen | No further work planned; 19 Node regression tests still pass; stays deployed for staff use |
+| Legacy Apps Script fixer | Removed | Source deleted from the repo 2026-09-28 (see DECISIONS.md); DOCX work happens on the platform |
 
 Do not edit another stream's files without saying so in your handoff entry.
 
