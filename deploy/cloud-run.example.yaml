@@ -1,5 +1,9 @@
 # Cloud Run deployment template. Documentation only: no resources are created.
 # Replace placeholders, provision secrets separately, and obtain explicit deployment approval.
+# Deploy to europe-west2 (London) -- e.g. `gcloud run services replace this-file.yaml
+# --region=europe-west2`. Data residency during processing (stated on the frontend for
+# DPO review) depends on this; the app itself stores nothing, so this region is the
+# entire data-residency surface it controls. See .agent/DECISIONS.md, 2026-09-28.
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -16,7 +20,7 @@ spec:
       timeoutSeconds: 3600
       serviceAccountName: RUNTIME_SERVICE_ACCOUNT
       containers:
-        - image: REGION-docker.pkg.dev/PROJECT/REPOSITORY/IMAGE:DIGEST_OR_TAG
+        - image: europe-west2-docker.pkg.dev/PROJECT/REPOSITORY/IMAGE:DIGEST_OR_TAG
           ports:
             # End-to-end HTTP/2 (h2c). Over HTTP/1 Cloud Run refuses a request
             # body over 32 MiB; over HTTP/2 it sets no limit (issue #36).

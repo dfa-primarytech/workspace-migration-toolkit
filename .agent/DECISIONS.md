@@ -611,3 +611,25 @@ properties a tracked change keeps. This supersedes "measured by its last
 one" in `_final_section`'s docstring, which now serves only headers and
 footers: which sections use a header is not worked out, so a header is
 measured by the body's last section.
+
+## 2026-09-28: Deploy to europe-west2 (London), stated on the frontend for DPO review
+Cloud Run deployment (when it happens) will use `europe-west2`. The user's
+reasoning: a school's DPO reviewing this for sensitive materials will want
+UK data residency during processing, and the frontend disclaimer now states
+this directly, alongside "never stored" and "no AI/LLM involvement".
+
+Scope of the claim matters and is worded carefully: this app never persists
+anything itself (see the 2026-09-22 OAuth decision -- no document/token
+database, per-job temp workspace deleted after each operation), so
+`europe-west2` bounds where transient *processing* happens, which is the
+whole data-residency surface this app controls. Where the *converted file
+itself* ends up living is Google Drive storage, governed by the trust's own
+Google Workspace data-location policy, not by this app -- the disclaimer
+says "processed" / "converts", not "stored", specifically to avoid
+overclaiming a guarantee this service doesn't provide.
+
+`deploy/cloud-run.example.yaml` and `docs/platform.md` now name the region
+explicitly instead of leaving it as an unstated placeholder. No GCP
+resources were created by this change -- it is a deployment intention
+recorded ahead of the actual Cloud Run setup work (see the outstanding
+GCP-setup checklist in HANDOFF.md).

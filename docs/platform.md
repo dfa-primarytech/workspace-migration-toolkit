@@ -156,6 +156,11 @@ docker run --rm -p 8080:8080 --env-file .env workspace-toolkit
 The container runs as a non-root user and listens on `$PORT`. `/healthz` checks
 process availability, not Google readiness. Cloud Run configuration is documented
 in `deploy/cloud-run.example.yaml`; it is a template, not an automatic deployment.
+Deploy to `europe-west2` (London): the app stores nothing itself, so this region
+is the entire data-residency surface it controls, and the frontend states it
+directly for DPO review ahead of converting sensitive material. Where the
+converted file ends up living is Google Drive storage, governed by the
+organisation's own Workspace data-location policy, not by this app.
 Use a 3600-second service request timeout (Cloud Run's maximum, as the
 example sets), concurrency 2, and adequate memory for both parser children and
 temporary files (the example uses 2 GiB).
