@@ -21,6 +21,12 @@ a:hover{color:var(--fg-link-hover)}
 #files li{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 16px;padding:10px 0;border-bottom:1px solid var(--border-1);margin:0}
 #files .name{font-weight:var(--weight-semibold);overflow-wrap:anywhere}
 #files .state{font-size:var(--fs-14);color:var(--fg-2)}
+.disclaimer{background:var(--bg-tint);border-left:4px solid var(--pt-primary);border-radius:var(--radius-sm);padding:14px 18px;margin:20px 0}
+.disclaimer p{font-size:var(--fs-14);font-weight:var(--weight-semibold);color:var(--fg-1);margin:0}
+details{margin-top:16px;font-size:var(--fs-14);color:var(--fg-2)}
+details summary{cursor:pointer;color:var(--fg-link);font-weight:var(--weight-semibold)}
+details summary:hover{color:var(--fg-link-hover)}
+details p{font-size:var(--fs-14);margin:8px 0}
 #status{font-weight:var(--weight-semibold)}
 li{margin-bottom:8px}
 [hidden]{display:none!important}
