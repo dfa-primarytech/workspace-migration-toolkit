@@ -551,7 +551,15 @@ def make_inline_drawing(rid: str, cx: int, cy: int, name: str, ids: Ids) -> Elem
 
 
 def empty_paragraphs(root: Element) -> set[Element]:
-    """Paragraphs with nothing in them but properties, as the part stands now."""
+    """Paragraphs with nothing in them but properties, as the part stands now.
+
+    The set holds the elements themselves, so it stays right only while the
+    passes *move* paragraphs rather than rebuild them. A converted text box's
+    paragraphs are the same objects in their new cell, so an author's blank
+    line there is still recognised. A pass that copied a paragraph (deepcopy,
+    or building a new one from its children) would make the copy look like
+    something this converter emptied, and it would be removed.
+    """
     return {p for p in root.iter(q("w", "p")) if _is_empty(p)}
 
 
@@ -1775,6 +1783,10 @@ def _cached_result_text(root: Element) -> set[int]:
     return skip
 
 
+FALLBACK = q("mc", "Fallback")
+WORD_BREAKS = {q("w", "tab"), q("w", "ptab"), q("w", "br"), q("w", "cr")}
+
+
 def source_text(root: Element) -> str:
     """All body text, used only to check nothing vanished during import.
 
@@ -1809,6 +1821,10 @@ def source_text(root: Element) -> str:
     """
     skip = _cached_result_text(root)
     pieces: list[str] = []
+    # A depth-first walk on an explicit stack. Children are pushed in reverse
+    # so they pop in reading order. A paragraph pushes None *before* its
+    # children; the stack is last-in-first-out, so that None pops only after
+    # every child is done, and marks where the paragraph ends.
     stack: list[Element | None] = [root]
     while stack:
         node = stack.pop()
@@ -1831,10 +1847,6 @@ def source_text(root: Element) -> str:
             stack.append(None)
         stack.extend(reversed(list(node)))
     return "".join(pieces)
-
-
-FALLBACK = q("mc", "Fallback")
-WORD_BREAKS = {q("w", "tab"), q("w", "ptab"), q("w", "br"), q("w", "cr")}
 
 
 def _is_hidden(run: Element) -> bool:
