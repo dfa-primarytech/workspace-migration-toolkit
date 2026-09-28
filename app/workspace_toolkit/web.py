@@ -18,11 +18,40 @@ from .config import Settings
 from .errors import ToolkitError
 from .google import Google
 from .jobs import preflight, workspace
+from .model import Compatibility as C
+from .model import warning
 from .package import validate_upload_name
 from .pipelines import describe, resolve
 
 logger = logging.getLogger("workspace_toolkit")
 STATIC = Path(__file__).parent / "static"
+
+
+# Google's published conversion limits (support.google.com/drive/answer/37603),
+# checked 2026-09-28 and not yet observed live. They are Google's, not ours:
+# nothing is refused here, but a person should know before converting.
+IMPORT_LIMITS = {
+    "docx": ("Google Docs", 50_000_000),
+    "pptx": ("Google Slides", 100_000_000),
+    "xlsx": ("Google Sheets", 100_000_000),
+}
+
+
+def import_limit_warning(key: str, size: int) -> list[dict]:
+    if key not in IMPORT_LIMITS or size <= IMPORT_LIMITS[key][1]:
+        return []
+    product, limit = IMPORT_LIMITS[key]
+    return [
+        warning(
+            "beyond_import_limit",
+            f"This file is {size / 1_000_000:,.0f} MB. Google's published limit for "
+            f"converting a file to {product} is {limit // 1_000_000} MB, so Google is "
+            "likely to refuse it.",
+            classification=C.UNSUPPORTED,
+            sizeBytes=size,
+            limitBytes=limit,
+        )
+    ]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -165,18 +194,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.delete_cookie(SESSION)
         return response
 
-    async def run(request: Request, do_convert: bool):
-        session = auth.session(request, csrf=True)
-        # Google's token lasts an hour and a conversion can take job_timeout.
-        # Refuse up front rather than lose the token halfway through the
-        # uploads and hand back a partial conversion.
-        if do_convert and float(session["expires"]) - time.time() < settings.job_timeout:
+    def over_limit(size: int) -> bool:
+        return settings.max_upload_bytes is not None and size > settings.max_upload_bytes
+
+    def require_time(session: dict, do_convert: bool, allowed: int) -> None:
+        # Google's token lasts an hour, and a conversion is allowed `allowed`
+        # seconds. Refuse up front rather than lose the token halfway through
+        # the uploads and hand back a partial conversion.
+        if do_convert and float(session["expires"]) - time.time() < allowed:
             raise ToolkitError(
                 "session_expiring",
                 "Your Google sign-in expires before a conversion could finish. "
                 "Please sign out, sign in again, and convert.",
                 401,
             )
+
+    async def run(request: Request, do_convert: bool):
+        session = auth.session(request, csrf=True)
         filename = unquote(request.headers.get("x-upload-filename", ""))
         pipeline = resolve(filename)
         validate_upload_name(filename, request.headers.get("content-type", ""), pipeline.fmt)
@@ -188,6 +222,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise ToolkitError(
                 "picker_unavailable", "Adding a file from Drive is not available.", 503
             )
+        declared = 0
         if drive_file_id is None:
             length = request.headers.get("content-length")
             if length:
@@ -195,10 +230,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     declared = int(length)
                 except ValueError as exc:
                     raise ToolkitError("invalid_size", "Invalid upload size.") from exc
-                if declared < 0 or declared > settings.max_upload_bytes:
+                if declared < 0 or over_limit(declared):
                     raise ToolkitError(
                         "upload_too_large", "This file exceeds the upload size limit.", 413
                     )
+        # A Drive file's size is unknown until it is fetched, so this is
+        # checked again once it is on disk.
+        require_time(session, do_convert, settings.job_timeout_for(declared))
         if gate.locked():
             raise ToolkitError("busy", "The converter is busy. Please try again shortly.", 503)
         async with gate:
@@ -206,7 +244,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 began = time.monotonic()
                 progress: dict = {}
                 try:
-                    async with asyncio.timeout(settings.job_timeout):
+                    async with asyncio.timeout(settings.job_timeout_for(declared)) as deadline:
                         # Constructed unconditionally now rather than only at
                         # convert time: a Drive-sourced file needs it just to
                         # be fetched, even for an analyse-only request.
@@ -218,12 +256,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 size = await google.download(
                                     drive_file_id, destination, settings.max_upload_bytes
                                 )
+                                allowed = settings.job_timeout_for(size)
+                                require_time(session, do_convert, allowed)
+                                deadline.reschedule(
+                                    asyncio.get_running_loop().time()
+                                    + allowed
+                                    - (time.monotonic() - began)
+                                )
                             else:
                                 size = 0
                                 with destination.open("xb") as stream:
                                     async for chunk in request.stream():
                                         size += len(chunk)
-                                        if size > settings.max_upload_bytes:
+                                        if over_limit(size):
                                             raise ToolkitError(
                                                 "upload_too_large",
                                                 "This file exceeds the upload size limit.",
@@ -236,8 +281,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 )
 
                             manifest = await preflight(root, settings, pipeline.fmt)
+                            beyond = import_limit_warning(pipeline.fmt.key, size)
                             if not do_convert:
-                                return pipeline.analysis_report(manifest)
+                                analysis = pipeline.analysis_report(manifest)
+                                analysis.setdefault("warnings", []).extend(beyond)
+                                return analysis
                             if (
                                 request.headers.get("x-source-sha256")
                                 != manifest["source"]["sha256"]
@@ -256,7 +304,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             )
                             # Added here rather than in each pipeline, so every
                             # format reports what happened in Drive the same way.
-                            report.setdefault("warnings", []).extend(google.warnings)
+                            report.setdefault("warnings", []).extend(beyond + google.warnings)
                             return report
                 except TimeoutError:
                     if progress.get("folderUrl"):

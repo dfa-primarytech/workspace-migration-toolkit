@@ -411,3 +411,94 @@ def test_an_empty_drive_file_is_refused_the_same_way_as_an_empty_upload(monkeypa
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "empty_upload"
+
+
+# ------------------------------------------------ no fixed size limit (#36)
+
+
+def test_the_browser_is_told_there_is_no_limit():
+    body = TestClient(create_app(configured()), base_url="http://localhost:8080")
+    assert body.get("/api/session").json()["maxUploadBytes"] is None
+
+
+def test_a_file_beyond_googles_import_limit_is_warned_about_not_refused(monkeypatch, pptx):
+    from workspace_toolkit import web
+
+    monkeypatch.setitem(web.IMPORT_LIMITS, "pptx", ("Google Slides", 100))
+    client = signed_client(configured())
+    response = client.post(
+        "/api/analyse",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+        },
+    )
+    assert response.status_code == 200, response.text
+    codes = [w["code"] for w in response.json()["warnings"]]
+    assert "beyond_import_limit" in codes
+
+
+def test_a_file_within_googles_import_limit_gets_no_such_warning(pptx):
+    client = signed_client(configured())
+    response = client.post(
+        "/api/analyse",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+        },
+    )
+    assert "beyond_import_limit" not in [w["code"] for w in response.json()["warnings"]]
+
+
+def _drive_convert(monkeypatch, reported_size, expires_in):
+    """A Drive pick whose download reports `reported_size` bytes."""
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    async def fake_download(self, file_id, destination, max_bytes):
+        destination.write_bytes(b"x")
+        return reported_size
+
+    async def analysed(root, settings, fmt):
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        return {"status": "completed"}
+
+    monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: replace(resolve("x.pptx"), convert=converted))
+    settings = configured(picker_api_key="test-picker-key")
+    app = create_app(settings)
+    client = TestClient(app, base_url=settings.base_url)
+    data = {"access_token": "t", "expires": time.time() + expires_in, "csrf": "test-csrf"}
+    client.cookies.set(SESSION, app.state.auth.seal(data))
+    return client.post(
+        "/api/convert",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+            "X-Source-SHA256": "abc",
+        },
+    )
+
+
+def test_a_large_drive_file_is_checked_against_the_sign_in_once_its_size_is_known(monkeypatch):
+    # A Drive file's size is unknown until it is fetched; a 1 GiB file is
+    # allowed about 38 minutes, which a sign-in with 16 minutes left cannot cover.
+    response = _drive_convert(monkeypatch, 1024 * 1024 * 1024, expires_in=1000)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "session_expiring"
+
+
+def test_a_small_drive_file_converts_with_the_same_sign_in(monkeypatch):
+    response = _drive_convert(monkeypatch, 1000, expires_in=1000)
+    assert response.status_code == 200, response.text

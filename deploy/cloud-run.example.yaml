@@ -11,12 +11,17 @@ spec:
         autoscaling.knative.dev/maxScale: '2'
     spec:
       containerConcurrency: 2
-      timeoutSeconds: 300
+      # Cloud Run's maximum. The app's own job allowance grows with file size
+      # and stays under this (job_timeout_ceiling, 3300 s).
+      timeoutSeconds: 3600
       serviceAccountName: RUNTIME_SERVICE_ACCOUNT
       containers:
         - image: REGION-docker.pkg.dev/PROJECT/REPOSITORY/IMAGE:DIGEST_OR_TAG
           ports:
-            - containerPort: 8080
+            # End-to-end HTTP/2 (h2c). Over HTTP/1 Cloud Run refuses a request
+            # body over 32 MiB; over HTTP/2 it sets no limit (issue #36).
+            - name: h2c
+              containerPort: 8080
           resources:
             limits:
               cpu: '2'
