@@ -81,10 +81,10 @@ work above is further along.
 native import, and the shared font-substitution catalogue (PPTX applies
 MEDIUM-confidence candidates automatically; DOCX applies HIGH only -- an
 intentional difference, see `docs/publisher-font-audit.md`). #52's audit
-is fully triaged: seven low-severity findings fixed, one deferred as #70
-(two concurrent conversions can create two library folders -- a lock/
-re-check fix is designed but not yet built), one was DOCX's (now fixed),
-one wasn't applicable.
+is fully resolved: seven low-severity findings fixed directly, the
+library-folder race (#70, two concurrent conversions could each create a
+"Workspace conversions" folder) fixed with a lock plus re-check, the DOCX
+header/footer finding fixed, and one wasn't applicable.
 
 **XLSX** has a working MVP on `rescue/xlsx-sheets-mvp` (PR #72, draft) --
 fixes a `.xlsm` upload crash and chart-sheet rejection from #51 -- with a
