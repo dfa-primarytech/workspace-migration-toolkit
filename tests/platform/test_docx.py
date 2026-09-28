@@ -628,6 +628,7 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
         "picturesUnplaced": 0,
         "tablesNarrowed": 0,
         "picturesShrunk": 0,
+        "rowsProtected": 0,
         "ink": 0,
         "legacyPictures": 0,
         "unsupported": {},
@@ -907,6 +908,34 @@ def test_a_picture_floating_inside_a_cell_becomes_cell_content(tmp_path):
 
     names = [local(child.tag) for child in inline]
     assert names == sorted(names, key=["extent", "effectExtent", "docPr", "graphic"].index), names
+
+
+def test_a_row_that_gains_an_inline_picture_is_protected_from_splitting(tmp_path):
+    """#55: a row #34 just made taller must not split across a page break."""
+    body = in_cell(anchor(PICTURE, h=("column", offset(0)), v=("paragraph", offset(0)))) + SECTION
+    root, report = transformed(tmp_path, body)
+    assert report["rowsProtected"] == 1
+    row = root.find(".//" + q("w", "tr"))
+    cant_split = row.find(q("w", "trPr") + "/" + q("w", "cantSplit"))
+    assert cant_split is not None
+
+
+TINY_PAGE = (
+    "<w:p><w:pPr><w:sectPr>"
+    '<w:pgSz w:w="11906" w:h="1000"/>'
+    '<w:pgMar w:left="0" w:right="0" w:top="0" w:bottom="0"/>'
+    "</w:sectPr></w:pPr></w:p>"
+)
+
+
+def test_a_picture_taller_than_the_page_leaves_its_row_unprotected(tmp_path):
+    """Word cannot honour w:cantSplit on a row already taller than a page."""
+    body = in_cell(anchor(PICTURE, h=("column", offset(0)), v=("paragraph", offset(0)))) + TINY_PAGE
+    root, report = transformed(tmp_path, body)
+    assert report["rowsProtected"] == 0
+    row = root.find(".//" + q("w", "tr"))
+    trPr = row.find(q("w", "trPr"))
+    assert trPr is None or trPr.find(q("w", "cantSplit")) is None
 
 
 def test_a_picture_floating_outside_any_cell_is_left_alone(tmp_path):
