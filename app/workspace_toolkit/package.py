@@ -103,7 +103,7 @@ def validate_upload_name(filename: str, mime: str, fmt: Format = PPTX) -> None:
         raise ToolkitError("invalid_filename", f"Please choose {fmt.chooser}.")
     if not filename.lower().endswith(fmt.suffix):
         raise ToolkitError("unsupported_type", f"Only {fmt.chooser} files are supported here.")
-    if mime.split(";", 1)[0].lower() not in {fmt.mime, "application/octet-stream"}:
+    if mime.split(";", 1)[0].lower() not in {fmt.mime.lower(), "application/octet-stream"}:
         raise ToolkitError("invalid_mime", f"This file does not have a supported {fmt.key} type.")
 
 

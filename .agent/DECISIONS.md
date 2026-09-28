@@ -170,3 +170,22 @@ This was verified against library source, not against a real grouped document.
 PUB-001's acceptance test asserts its one layer is a wrapper, and it must be re-run
 locally. If that layer reclassifies, it is a finding to record deliberately, not a
 number to edit.
+
+## 2026-09-28: Excel source format and non-worksheet sheets (#51)
+
+Keep the worker package byte-for-byte in its source format. A macro-enabled
+container without VBA is not renamed to XLSX: check import capability and upload
+using XLSM's own MIME type and emitted path. Actual VBA still blocks native import.
+
+Chart sheets are retained in the source package and inventoried with an
+UNSUPPORTED review finding; no verified layout/editability claim is made.
+Dialog sheets and both Excel macro-sheet variants require manual migration,
+including when no VBA project exists. Never execute or translate their automation.
+These are unsupported capabilities, not deliberate content omissions (IGNORED).
+Read-back does not demand grid semantics from source chart sheets.
+
+The manifest intentionally retains sheet names and external workbook filenames
+for verification/dependency matching. Web workspaces are temporary; CLI output
+retains the manifest and must be treated as document data. Reports omit those
+names, values, formula expressions and macro source. The earlier content-free,
+ephemeral-only manifest wording was inaccurate and is superseded here.

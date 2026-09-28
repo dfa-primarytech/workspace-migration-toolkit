@@ -1,9 +1,11 @@
-"""Bounded, content-free Excel workbook preflight.
+"""Bounded Excel workbook preflight without cell values, formulas or VBA source.
 
 The manifest contains structural facts needed by the batch planner and Google
 boundary. Cell values, formula expressions and VBA source are deliberately not
-serialised. The job workspace is temporary and is the only place the manifest
-exists before its redacted report is returned.
+serialised. Sheet names and external workbook filenames remain in the manifest
+for structural verification and dependency matching. Web jobs delete it with
+their workspace; the offline CLI retains it in the requested output directory.
+Only the redacted report is suitable for sharing as content-free diagnostics.
 """
 
 from __future__ import annotations
@@ -25,8 +27,18 @@ from .package import XLSM, XLSX, Format, Package, digest
 NS = {
     "x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "xm": "http://schemas.microsoft.com/office/excel/2006/main",
 }
 REL_WORKSHEET = NS["r"] + "/worksheet"
+MACRO_REL = "http://schemas.microsoft.com/office/2006/relationships/"
+# International macro sheets use the same root element as ordinary macro sheets.
+SHEET_TYPES = {
+    REL_WORKSHEET: ("worksheet", "x", "worksheet"),
+    NS["r"] + "/chartsheet": ("chartsheet", "x", "chartsheet"),
+    NS["r"] + "/dialogsheet": ("dialogsheet", "x", "dialogsheet"),
+    MACRO_REL + "xlMacrosheet": ("macrosheet", "xm", "macrosheet"),
+    MACRO_REL + "xlIntlMacrosheet": ("intlMacrosheet", "xm", "macrosheet"),
+}
 REL_EXTERNAL = NS["r"] + "/externalLinkPath"
 CELL = re.compile(r"^([A-Z]{1,4})([1-9][0-9]*)$")
 RANGE = re.compile(r"^([A-Z]{1,4}[1-9][0-9]*)(?::([A-Z]{1,4}[1-9][0-9]*))?$")
@@ -138,12 +150,31 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
         list(workbook_sheets) if workbook_sheets is not None else [], start=1
     ):
         relationship = relationships.get(sheet.get(q("r", "id"), ""))
-        if not relationship or relationship["type"] != REL_WORKSHEET or relationship["external"]:
-            raise ToolkitError("invalid_workbook", "A worksheet reference is missing or invalid.")
+        if (
+            not relationship
+            or relationship["type"] not in SHEET_TYPES
+            or relationship["external"]
+            or relationship["missing"]
+        ):
+            raise ToolkitError("invalid_workbook", "A sheet reference is missing or invalid.")
         part = relationship["resolved"]
         root = package.xml(part)
-        if root.tag != q("x", "worksheet"):
-            raise ToolkitError("invalid_workbook", "A worksheet has invalid markup.")
+        sheet_type, namespace, root_name = SHEET_TYPES[relationship["type"]]
+        if root.tag != q(namespace, root_name):
+            raise ToolkitError("invalid_workbook", "A sheet has invalid markup.")
+        identity = {
+            "index": index,
+            "name": sheet.get("name", ""),
+            "state": sheet.get("state", "visible"),
+            "sourcePart": part,
+            "sheetType": sheet_type,
+            "protected": root.find(q("x", "sheetProtection")) is not None,
+        }
+        if sheet_type != "worksheet":
+            # Preserve the part in the byte-for-byte copy, but do not invent
+            # worksheet cell counts for charts, dialogs or executable macro sheets.
+            sheets.append(identity)
+            continue
         dimension = root.find(q("x", "dimension"))
         rows, columns = range_size(dimension.get("ref") if dimension is not None else None)
         actual_rows = actual_columns = populated = formulas = errors = 0
@@ -182,10 +213,7 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
         error_cells += errors
         sheets.append(
             {
-                "index": index,
-                "name": sheet.get("name", ""),
-                "state": sheet.get("state", "visible"),
-                "sourcePart": part,
+                **identity,
                 "rows": rows,
                 "columns": columns,
                 "populatedCells": populated,
@@ -195,7 +223,6 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
                 "conditionalFormats": sum(1 for _ in root.iter(q("x", "conditionalFormatting"))),
                 "dataValidations": sum(1 for _ in root.iter(q("x", "dataValidation"))),
                 "hyperlinks": sum(1 for _ in root.iter(q("x", "hyperlink"))),
-                "protected": root.find(q("x", "sheetProtection")) is not None,
             }
         )
 
@@ -203,8 +230,11 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
     inventory = {
         "sheetCount": len(sheets),
         "totalGridCells": total_grid_cells,
-        "populatedCells": sum(s["populatedCells"] for s in sheets),
-        "formulaCells": sum(s["formulaCells"] for s in sheets),
+        "populatedCells": sum(s.get("populatedCells", 0) for s in sheets),
+        "formulaCells": sum(s.get("formulaCells", 0) for s in sheets),
+        "chartSheets": sum(s["sheetType"] == "chartsheet" for s in sheets),
+        "dialogSheets": sum(s["sheetType"] == "dialogsheet" for s in sheets),
+        "macroSheets": sum(s["sheetType"] in {"macrosheet", "intlMacrosheet"} for s in sheets),
         "formulaTypes": dict(sorted(formula_types.items())),
         "errorCells": error_cells,
         "oversizedCells": oversized_cells,
@@ -242,6 +272,34 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
 
 def findings(inventory: dict, sheets: list[dict], external_count: int) -> list[dict]:
     result: list[dict] = []
+    for sheet in sheets:
+        sheet_type = sheet["sheetType"]
+        if sheet_type == "worksheet":
+            continue
+        if sheet_type == "chartsheet":
+            code = "chart_sheet_needs_review"
+            message = (
+                "A chart sheet is preserved in the workbook sent to Google. "
+                "Its chart layout and editability are not verified; review it after import."
+            )
+        elif sheet_type == "dialogsheet":
+            code = "dialog_sheet_needs_manual_migration"
+            message = "A dialog sheet was detected. Its controls need manual migration."
+        else:
+            code = "macro_sheet_needs_manual_migration"
+            message = (
+                "An Excel macro sheet was detected. Its automation needs manual migration "
+                "and is never executed or translated automatically."
+            )
+        result.append(
+            warning(
+                code,
+                message,
+                sheetIndex=sheet["index"],
+                sheetType=sheet_type,
+                classification=C.UNSUPPORTED,
+            )
+        )
     if inventory["totalGridCells"] > GOOGLE_MAX_CELLS:
         result.append(
             warning(
@@ -252,7 +310,7 @@ def findings(inventory: dict, sheets: list[dict], external_count: int) -> list[d
                 classification=C.UNSUPPORTED,
             )
         )
-    if any(sheet["columns"] > GOOGLE_MAX_COLUMNS for sheet in sheets):
+    if any(sheet.get("columns", 0) > GOOGLE_MAX_COLUMNS for sheet in sheets):
         result.append(
             warning(
                 "google_column_limit",
@@ -378,6 +436,8 @@ def tier(manifest: dict, dependencies_resolved: bool = False) -> str:
         "activex_need_manual_migration",
         "embedded_objects_need_manual_migration",
         "vba_needs_manual_migration",
+        "dialog_sheet_needs_manual_migration",
+        "macro_sheet_needs_manual_migration",
     }
     codes = {item["code"] for item in manifest["warnings"]}
     if codes & hard_codes or (manifest["externalWorkbookTargets"] and not dependencies_resolved):
@@ -408,6 +468,9 @@ def analysis_report(manifest: dict) -> dict:
             key: inventory[key]
             for key in (
                 "charts",
+                "chartSheets",
+                "dialogSheets",
+                "macroSheets",
                 "pivotTables",
                 "queryTables",
                 "connections",

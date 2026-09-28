@@ -2,9 +2,11 @@
 
 ## MVP boundary
 
-The Excel path uses Google Drive's native XLSX import for ordinary workbooks.
+The Excel path uses Google Drive's native import for ordinary Excel workbooks.
 The worker first validates and inventories the OOXML package without network
-credentials, then copies the package byte-for-byte to `converted.xlsx`. This
+credentials, then copies the package byte-for-byte to `converted.xlsx` or
+`converted.xlsm`, retaining the source format. Import capability is checked
+against that format's MIME type, which is also used for upload. This
 preserves formulas and workbook structures for the native importer rather than
 attempting to reinterpret them in Python.
 
@@ -20,8 +22,11 @@ key derived from its source digest, an attempt counter and explicit status.
 Retry changes state but never silently repeats a Google create operation after
 an uncertain response.
 
-Preflight records external workbook target filenames only in the ephemeral
-manifest. The batch planner matches those names to other files uploaded in the
+Preflight records sheet names and external workbook target filenames in the
+manifest. Web jobs delete that manifest with the temporary workspace; the offline
+CLI retains it in the output directory requested by its caller. Treat that output
+as document data, not a shareable diagnostic report. The batch planner matches
+external filenames to other files uploaded in the
 same batch, detects cycles and can map resolved targets to destination Drive
 IDs after their jobs finish. Conversion reports expose counts and findings,
 not filenames, formulas or cell contents. This MVP does not rewrite Excel
@@ -48,8 +53,28 @@ Per-file outcomes are:
 VBA projects are read from the package only to calculate a content-free
 inventory (count, byte length and digest). They are never executed, translated,
 logged, placed in the conversion report or uploaded separately. Macro-enabled
-workbooks are archived to the customer's private Drive folder and assigned
-`manual_migration_required`; they are not imported as a Google Sheet.
+workbooks containing VBA are archived to the customer's private Drive folder and
+assigned `manual_migration_required`; they are not imported as a Google Sheet.
+An `.xlsm` container without VBA or other blocking features can proceed to native
+import if Google advertises that source MIME type for the account. An unsupported
+source type returns a report retaining the archived original's link.
+
+Chart sheets are inventoried separately from worksheet grids and preserved in
+the source package. They remain `UNSUPPORTED` findings requiring review: the
+tool does not establish whether their layout or editability survives import.
+They do not reject an otherwise convertible workbook. Read-back counts all sheets
+but requires an editable grid only for source worksheets.
+
+Dialog sheets and Excel macro sheets (including international macro sheets) are
+also inventoried and preserved. They require manual migration even without a VBA
+project. Macro-sheet automation is never executed or translated. These are
+`UNSUPPORTED`, not `IGNORED`: the tool cannot safely represent their behaviour.
+Missing, external or mismatched sheet references still produce explicit errors.
+
+The sheet kinds follow Microsoft's
+[SpreadsheetML sheet documentation](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-sheets)
+and [Office macro-format specification](https://officeprotocoldoc.z19.web.core.windows.net/files/MS-OFFMACRO/%5BMS-OFFMACRO%5D.pdf).
+This describes source structure, not verified Google import behaviour.
 
 No Apps Script is generated in this MVP. Any later bounded script generation
 must live behind a separate Google API interface, require explicit user or
@@ -77,3 +102,11 @@ transpilation is out of scope.
 Operational logs contain job ID, file type, duration and error code only. They
 must never contain filenames, worksheet names, cell values, formulas or macro
 source.
+
+## Issue #51 follow-ups
+
+The upload-path crash, non-worksheet rejection and conflict with main are fixed.
+The manifest's retained names are documented above. Remaining audit items are the
+dimension-based cell-limit estimate (which can overstate a workbook's extent),
+one-based sheet indexes, and integrating or removing the unused stale-workspace
+sweeper. These are not claimed fixed by the upload/chart-sheet regression tests.

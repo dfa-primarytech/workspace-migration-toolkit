@@ -1,5 +1,22 @@
 # Handoff
 
+- Agent: Codex
+- Date: 2026-09-28
+- Branch: `rescue/xlsx-sheets-mvp`, main `9f58568` incorporated by merge `92b9d43`.
+- Objective: fix issue #51's .xlsm crash, chart-sheet rejection and main conflicts, with generated fixtures and a draft PR.
+- Files changed: `app/workspace_toolkit/sheets.py`, `xlsx.py`, `package.py`; `tests/platform/test_xlsx.py`, `test_xlsx_issue51.py` (new); `docs/xlsx-migration.md`; coordination files. CLI conflict resolved to main verbatim. Existing XLSX registration and DOCX test updates were inherited, not newly edited.
+- Completed: reproduced FileNotFoundError after archiving a generated .xlsm and invalid_workbook for a generated worksheet/chart-sheet workbook. Uploads now select the correct package and MIME, and check capability for that MIME. Chart sheets are inventoried, preserved and reported; dialog and macro sheets require manual migration. Added 13 regression cases, including the current web call, unsupported MIME recovery and invalid references. Fixed original_name integration, named folders and case-insensitive XLSM MIME validation. Documented manifest retention accurately.
+- Checks: `pytest tests/platform tests/publisher -q -rs`: 334 passed, 42 skipped (8 LibreOffice/Poppler, 34 Publisher parser/fixture). Ruff check and format --check over app, platform tests, Publisher Python tests and document-model passed; mypy app passed (20 files); Bandit passed; secret scan and JavaScript syntax passed; 19 Node regressions passed. openpyxl opened both generated chart-workbook formats; CLI preserved their packages and reported converted paths. Windows/Python 3.14, locked development dependencies. No live Google test.
+- Known failures: none in executed checks. Two dependency deprecation warnings and an existing unused Bandit suppression warning remain. Native C++ and unavailable rendering/private-fixture checks were not run.
+- Unresolved: #51's dimension-based grid estimate, one-based sheet indexes and unused sweeper remain. Live Sheets compatibility remains unverified; the draft includes the inherited XLSX MVP, not only this turn's fixes.
+- Decisions: source format retained end to end; chart sheets reported UNSUPPORTED for review, dialog/macro sheets UNSUPPORTED for manual migration; manifest privacy wording corrected. See DECISIONS.md.
+- Next task: review the draft and remaining #51 audit items; obtain human approval before any merge.
+- Warnings: no GCP resources, credentials or real school documents used or committed. DOCX production and native/ match main; pipelines.py matches the rescued branch. Earlier uncommitted review notes remain untouched in the original checkout.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron, working the issue queue at the human's request
 - Date: 2026-09-23
 - Branches: `fix/xml-element-limit` (#59, fixes #46), `fix/dangling-relationships` (#61, fixes #47, stacked on #59), `fix/pptx-font-rewrite-scope` (this branch, fixes #50). All based on main `6ae8dee`.

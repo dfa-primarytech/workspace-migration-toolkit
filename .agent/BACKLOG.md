@@ -1,5 +1,14 @@
 # Backlog
 
+## XLSX update — 28 September 2026
+
+Issue #51's .xlsm upload crash, chart-sheet rejection and main conflict are fixed
+on `rescue/xlsx-sheets-mvp`, pending draft review. Main's CLI behaviour is retained.
+Review the inherited XLSX MVP together with the fixes before approving a merge.
+The manifest privacy boundary is now documented accurately. Follow-ups still
+include dimension-based limit overestimation, index consistency and the unused
+workspace sweeper. Live Sheets import remains unverified.
+
 1. Verify the shared font catalogue against a live Google Workspace test tenant,
    compare representative before/after layouts, and add school-configurable aliases.
 2. Harden the PPTX parser and mocked Google boundary tests; expand deterministic fixtures.

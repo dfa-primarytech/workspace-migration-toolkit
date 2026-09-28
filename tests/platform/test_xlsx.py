@@ -245,7 +245,7 @@ def test_macro_workbook_is_archived_but_not_imported(tmp_path):
         def __init__(self):
             self.uploads = []
 
-        async def folder(self):
+        async def folder(self, name="Conversion"):
             return "folder"
 
         async def upload(self, path, name, mime, parent, **kwargs):

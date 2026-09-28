@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from .errors import ToolkitError
-from .google import DRIVE
+from .google import DRIVE, SEPARATOR, clean_name
 from .model import Compatibility as C
 from .model import warning
 from .package import XLSM, XLSX
@@ -30,7 +30,7 @@ def verify(manifest: dict, spreadsheet: dict) -> list[dict]:
         findings.append(
             warning(
                 "sheet_count_changed",
-                "The number of worksheets changed during import.",
+                "The number of sheets changed during import.",
                 sourceCount=len(source),
                 convertedCount=len(converted),
                 classification=C.UNSUPPORTED,
@@ -38,7 +38,10 @@ def verify(manifest: dict, spreadsheet: dict) -> list[dict]:
         )
     for original, target in zip(source, converted, strict=False):
         properties = target.get("properties", {})
-        if properties.get("sheetType", "GRID") != "GRID":
+        if (
+            original.get("sheetType", "worksheet") == "worksheet"
+            and properties.get("sheetType", "GRID") != "GRID"
+        ):
             findings.append(
                 warning(
                     "sheet_type_changed",
@@ -84,15 +87,19 @@ async def convert(
     output_name: str = "Converted workbook",
     original_policy: str = "archive",
     dependencies_resolved: bool = False,
+    original_name: str = "",
 ) -> dict:
     if original_policy not in ORIGINAL_POLICIES:
         raise ValueError("Unknown original workbook policy")
+    document = clean_name(original_name)
+    if document:
+        output_name = f"{document}{SEPARATOR}converted"
     report = progress if progress is not None else {}
     report.update(analysis_report(manifest))
     report.update(status="converting", outputs=[], assetOutputs=[])
     fmt = XLSM if manifest["source"]["type"] == "xlsm" else XLSX
     try:
-        folder = await google.folder()
+        folder = await google.folder(output_name)
         report["folderUrl"] = "https://drive.google.com/drive/folders/" + folder
         if original_policy == "archive":
             original = await google.upload(
@@ -111,16 +118,16 @@ async def convert(
             formats = await google.request(
                 "GET", DRIVE + "/about", params={"fields": "importFormats"}
             )
-            if SHEETS_MIME not in formats.get("importFormats", {}).get(XLSX.mime, []):
+            if SHEETS_MIME not in formats.get("importFormats", {}).get(fmt.mime, []):
                 raise ToolkitError(
                     "conversion_unavailable",
                     "Google does not currently offer Excel conversion for this account.",
                     422,
                 )
             uploaded = await google.upload(
-                root / "result/converted.xlsx",
+                root / "result" / ("converted" + fmt.suffix),
                 output_name,
-                XLSX.mime,
+                fmt.mime,
                 folder,
                 convert=True,
                 target=SHEETS_MIME,

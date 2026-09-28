@@ -1,5 +1,25 @@
 # Current state
 
+## XLSX issue #51 — 28 September 2026
+
+`rescue/xlsx-sheets-mvp` now includes main `9f58568` through merge `92b9d43`.
+The CLI conflict retained main's complete implementation, including converted
+paths and token redaction. DOCX production files and Publisher native files match
+main; pipelines.py retains the rescue branch's existing registrations unchanged.
+
+Generated workbooks reproduced the .xlsm missing-file crash and chart-sheet
+rejection before the fix. Upload path, advertised import capability and MIME now
+use the actual format. Chart sheets are preserved and reported for review; dialog
+and macro sheets are inventoried and escalated to manual migration. The Sheets
+boundary accepts main's original_name keyword and uses the named conversion folder.
+Case-insensitive MIME validation now accepts the macroEnabled source type.
+
+334 Python tests passed, 42 skipped; 19 Node regressions passed. Ruff lint/format,
+mypy, Bandit and secret scan passed. Generated chart workbooks opened with
+openpyxl and passed CLI byte-preservation checks. No live Google validation.
+Draft review is the next step; no merge is authorized. #51's dimension estimate,
+one-based indexes and unused sweeper remain follow-ups.
+
 ## First run against live Google, 23 September 2026
 
 The toolkit ran end to end against a real Google account for the first time:
