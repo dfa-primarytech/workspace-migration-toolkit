@@ -1,8 +1,9 @@
 # Shared platform and PPTX prototype
 
-The legacy Apps Script DOCX application in `src/` is unchanged. The new Python
-application lives in `app/workspace_toolkit/` and can be deployed independently.
-No Publisher parser or custom PowerPoint renderer is included.
+The earlier Apps Script DOCX application has been removed from this repo; DOCX
+now converts through this same platform. The Python application lives in
+`app/workspace_toolkit/` and can be deployed independently. No Publisher
+parser or custom PowerPoint renderer is included.
 
 ## What works
 
@@ -224,5 +225,4 @@ node --check app/workspace_toolkit/static/app.js
 ```
 
 GitHub Actions runs these checks plus a Linux Docker build and health smoke test.
-It does not deploy. Keep `src/` untouched and compare it to the baseline when
-working on the shared platform.
+It does not deploy.

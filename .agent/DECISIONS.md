@@ -244,3 +244,28 @@ assistant -- the client secret was read from a downloaded JSON file, and the
 short-lived access token used for the two API calls above was pasted by the
 human from their own already-authenticated browser session, not obtained by
 the assistant signing in. See CURRENT.md for what to do next.
+
+## 2026-09-28: Remove the legacy Apps Script DOCX fixer, superseding its freeze
+The Apps Script DOCX fixer (`src/`, previously frozen as a reference/fallback
+per the 2026-09-22 decision above) is now removed from the repo entirely,
+along with its Node regression suite (`tests/regression.test.cjs`) and every
+doc reference to it (README.md, AGENTS.md, PROJECT.md, CONTRIBUTING.md,
+docs/platform.md, docs/publisher-parser.md).
+
+Rationale, from the user directly: keeping a second, worse DOCX converter
+around only makes sense if someone would actually prefer it -- e.g. an
+Apps-Script-only user who doesn't want to stand up the platform app. But the
+Apps Script version had a known, already-diagnosed regression (it always
+flattens floating text boxes to inline tables, losing position entirely,
+even though the platform's own probe-document work confirmed Google Docs
+honours OOXML floating-table positioning (`w:tblpPr`) and that fix was never
+ported back). Given that gap, and that all further DOCX effort was already
+committed to the platform per the 2026-09-22 decision, the user chose to
+remove it rather than maintain it as a permanently-inferior parallel tool.
+
+`Code.gs`'s git history (including the `feat/docx-floating-tables` reference
+branch) still exists in this repo if the Apps Script approach is ever wanted
+back; nothing was force-deleted from git history, only the working tree.
+Any live Apps Script deployment already running at the trust is unaffected
+by this repo change -- this removes the maintained source, not a running
+service.
