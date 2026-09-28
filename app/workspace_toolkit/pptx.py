@@ -66,25 +66,49 @@ def paragraphs(root: Element) -> list[dict]:
     return result
 
 
-def geometry(element: Element) -> dict:
-    xfrm = next((e for e in element.iter() if local(e.tag) == "xfrm"), None)
+# Maps a shape's own coordinates to slide points: (scale x, scale y, shift x,
+# shift y). A slide's top-level shapes are already in slide space; a group's
+# children are in the group's chOff/chExt space, and groups nest.
+Space = tuple[float, float, float, float]
+SLIDE_SPACE: Space = (1.0, 1.0, 0.0, 0.0)
+
+
+def _xfrm(element: Element) -> Element | None:
+    return next((e for e in element.iter() if local(e.tag) == "xfrm"), None)
+
+
+def _pair(xfrm: Element, kind: str, keys: tuple[str, str]) -> tuple[float, float] | None:
+    node = next((e for e in xfrm if local(e.tag) == kind), None)
+    if node is None:
+        return None
+    try:
+        return emu_to_points(node.attrib[keys[0]]), emu_to_points(node.attrib[keys[1]])
+    except (KeyError, ValueError) as exc:
+        raise ToolkitError(
+            "invalid_geometry", "The presentation contains invalid object coordinates."
+        ) from exc
+
+
+def geometry(element: Element, space: Space = SLIDE_SPACE) -> dict:
+    """Bounds in slide points, with the source transform kept as written.
+
+    A rotated or flipped group is mapped as if unrotated, the same way each
+    shape's bounds are its unrotated box and its rotation is reported apart.
+    """
+    xfrm = _xfrm(element)
     if xfrm is None:
         return {"bounds": None, "rotation": None}
-    off = next((e for e in xfrm if local(e.tag) == "off"), None)
-    ext = next((e for e in xfrm if local(e.tag) == "ext"), None)
+    off = _pair(xfrm, "off", ("x", "y"))
+    ext = _pair(xfrm, "ext", ("cx", "cy"))
     bounds = None
     if off is not None and ext is not None:
-        try:
-            bounds = {
-                "x": emu_to_points(off.attrib["x"]),
-                "y": emu_to_points(off.attrib["y"]),
-                "width": emu_to_points(ext.attrib["cx"]),
-                "height": emu_to_points(ext.attrib["cy"]),
-            }
-        except (KeyError, ValueError) as exc:
-            raise ToolkitError(
-                "invalid_geometry", "The presentation contains invalid object coordinates."
-            ) from exc
+        sx, sy, dx, dy = space
+        bounds = {
+            "x": dx + sx * off[0],
+            "y": dy + sy * off[1],
+            "width": sx * ext[0],
+            "height": sy * ext[1],
+        }
     return {
         "bounds": bounds,
         "rotation": int(xfrm.get("rot", "0")) / 60000,
@@ -93,6 +117,29 @@ def geometry(element: Element) -> dict:
             "children": [{"kind": local(e.tag), **e.attrib} for e in xfrm],
         },
     }
+
+
+def child_space(group: Element, space: Space) -> Space:
+    """The space a group's children are placed in, composed with the group's own."""
+    xfrm = _xfrm(group)
+    if xfrm is None:
+        return space
+    off = _pair(xfrm, "off", ("x", "y"))
+    ext = _pair(xfrm, "ext", ("cx", "cy"))
+    child_off = _pair(xfrm, "chOff", ("x", "y"))
+    child_ext = _pair(xfrm, "chExt", ("cx", "cy"))
+    if off is None or ext is None or child_off is None or child_ext is None:
+        return space
+    # A zero-sized child space has no scale to recover; keep the children's size.
+    kx = ext[0] / child_ext[0] if child_ext[0] else 1.0
+    ky = ext[1] / child_ext[1] if child_ext[1] else 1.0
+    sx, sy, dx, dy = space
+    return (
+        sx * kx,
+        sy * ky,
+        dx + sx * (off[0] - kx * child_off[0]),
+        dy + sy * (off[1] - ky * child_off[1]),
+    )
 
 
 def analyse(path: Path, output: Path, settings: Settings | None = None) -> dict:
@@ -238,6 +285,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
         def walk(
             parent: Element,
             parent_id: str | None = None,
+            space: Space = SLIDE_SPACE,
             *,
             order=order,
             elements=elements,
@@ -281,7 +329,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                     "parentId": parent_id,
                     "paragraphs": pars,
                     "sourceKind": tag,
-                    **geometry(node),
+                    **geometry(node, space),
                     "relationshipIds": [],
                     "assetIds": [],
                     "warnings": [],
@@ -316,7 +364,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                     )
                 elements.append(obj)
                 if tag == "grpSp":
-                    walk(node, oid)
+                    walk(node, oid, child_space(node, space))
 
         tree = root.find("p:cSld/p:spTree", NS)
         if tree is None:

@@ -1,5 +1,36 @@
 # Handoff
 
+- Agent: Claude Code / QuietHeron (Publisher and platform)
+- Date: 2026-09-28
+- Branch: `fix/low-severity-audit-52`, based on main `9f58568`
+- Objective: triage issue #52's ten low-severity findings against today's main, fix the trivial ones, and hand off the rest.
+- Files changed: `app/workspace_toolkit/jobs.py`, `web.py`, `pptx.py`, `static/app.js`; `native/pub-parser/src/main.cpp`, `src/collector.cpp`; `packages/document-model/validation.py`; `tests/platform/test_preflight.py`, `test_web.py`; `tests/publisher/test_cli.py`, `test_schema.py`; coordination files.
+- Completed. Seven were fixed:
+  - Preflight lets `CancelledError` through after killing the worker, so a job timeout reports as `job_timeout`, not "took too long to analyse".
+  - `/api/convert` refuses a Google sign-in with less than `job_timeout` left (`session_expiring`, 401). `/api/analyse` is unaffected.
+  - PPTX group children get slide-space bounds through each group's `chOff`/`chExt`, composed through nested groups.
+  - `app.js` shows its own message when a reply isn't JSON.
+  - `basename()` splits on `\` as well as `/`.
+  - `classifyLayer` scans from the layer's own index, so each close costs its own contents, not the document.
+  - `validate_bundle` checks each payload's SHA-256.
+
+  Three were not fixed:
+  - The library-folder race is filed as #70: no one-line fix works across instances, and cleanup would mean writing to Drive.
+  - DOCX analysis ignoring headers and footers is still current in `docx.parse`. It was flagged to SilverDog on #52 and not touched.
+  - The PR #39 `mimetypes` item is not applicable: #39 merged with an explicit `EXTENSIONS` table.
+- Checks: platform 295 passed, 8 skipped (main: 291 and 8). Publisher unittest: 59 run, 35 skipped (main: 56 run, 34 skipped). The new CLI test needs the native binary, so it skips here. Every new Python test was run against the unfixed code and fails there (7 of 7 platform and validator tests; the CLI test can't run locally). Ruff check and format are clean over `app`, `tests/platform`, `tests/publisher` and `packages/document-model`. mypy reports no issues in 17 files. Bandit is clean. `node --check` on app.js passes, and `request()` was exercised against 413/400 plain-text, 422 JSON, and 200 JSON and non-JSON replies.
+- Known failures: none locally. **The C++ changes were not compiled here** (no toolchain on this machine). CI's native job and container build are the evidence.
+- Unresolved:
+  - The `classifyLayer` change has no timing test. Its correctness rests on the existing classification tests, and its speed on the reasoning in the comment.
+  - A rotated or flipped PPTX group is still mapped as if unrotated, which is consistent with how each shape's own bounds are reported.
+- Decisions: none new.
+- Next task: the #56 follow-up (SilverDog's non-blocking notes), then #70 if the platform owner agrees to option 1.
+- Warnings: the DOCX header/footer finding is SilverDog's, in `docx.py`. Don't fix it from this stream.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron, working the issue queue at the human's request
 - Date: 2026-09-23
 - Branches: `fix/xml-element-limit` (#59, fixes #46), `fix/dangling-relationships` (#61, fixes #47, stacked on #59), `fix/pptx-font-rewrite-scope` (this branch, fixes #50). All based on main `6ae8dee`.
