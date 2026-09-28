@@ -9,6 +9,49 @@ PR descriptions have the same detail in full.
 
 - Agent: Claude Code / QuietHeron (platform)
 - Date: 2026-09-28
+- Branch: `feat/compress-pictures`, based on main `706a84c`
+- Objective: #36 step 3. An opt-in "Make pictures smaller", for image-heavy files that stay over Google's limit once video is out.
+- Files changed:
+  - `app/workspace_toolkit/pictures.py` (new);
+  - `worker.py` (runs it after render when asked; never fatal);
+  - `jobs.py` (`compress_pictures` passed through; allowance doubled);
+  - `web.py` (`X-Compress-Pictures` honoured on convert only; `pictures_report`; the over-limit warning names the option);
+  - `static/index.html`, `app.js`, `style.css` (the checkbox);
+  - `pyproject.toml` and both lockfiles (Pillow 12.3.0);
+  - `tests/platform/test_pictures.py` (new, 15 tests), `test_pptx_validity.py` (a second LibreOffice check), `test_web.py` (stand-ins accept the new option);
+  - `.github/workflows/pptx-validity.yml` (also triggers on `pictures.py`);
+  - `docs/platform.md`; this file.
+- Completed:
+  - **What it does, to the converted copy only:**
+    - pictures in plain picture frames (PowerPoint and Word alike) are resized to their drawn size at 220 ppi, allowing for crops;
+    - PNG photos become JPEG, with the part renamed and its rels and content types updated.
+  - **What it leaves alone:** anything it can't be sure about. See `docs/platform.md` for the list.
+- Checks:
+  - Platform 368 passed, 10 skipped (main: 353 and 9). The extra skip is the new LibreOffice check, which runs in CI.
+  - Ruff clean; mypy reports no issues in 18 files; `pip-audit -r requirements.lock` finds no known vulnerabilities.
+  - A test found a real bug before commit: the resize scale took the smaller of the two needs, so a cropped or stretched picture dropped below 220 ppi on one side. Now fixed; the test fails with the old rule.
+  - Local LibreOffice 26.8 on the realistic fixture with a 3000x1688 PNG photo swapped in: after stripping and compression the package went from 7.0 MB to 0.1 MB, and the picture became a 1320x743 JPEG (6 in x 220). Both original and result render 2 slides with their text and the picture on slide 1.
+- Known failures: none.
+- **Found on the way, and fixed.** CI failed three new tests on Linux only.
+  - Reproduced on the human's Docker host (a capped container of its own, labelled `wmt-test`).
+  - Cause: `test_fonts.py` ran `worker.main()` in the pytest process, which applied the worker's OS limits to the test runner for good. Every later worker then inherited a 768 MiB hard address-space cap, and since #84 a worker asks for 768 MiB plus 2x the file. A process cannot raise a hard limit, so `setrlimit` failed and surfaced as `parse_failed`.
+  - Fixes:
+    - `worker.limit()` never asks above an inherited hard limit. This was latent in production too: a container started with tight limits would have failed every file.
+    - The font test no longer caps the runner.
+    - New Linux-only test: a worker under a stricter inherited limit still runs. It fails without the fix.
+  - Result on Linux, full suite as a non-root user: 369 passed, 10 skipped.
+- Unresolved:
+  - No real image-heavy school file has been through this. Worth judging picture quality by eye on the first one.
+  - Google's handling of the renamed `.jpeg` parts is not observed live.
+  - Pictures inside groups and shape fills are never compressed. That could matter for some decks, but it can't be measured safely.
+- Decisions: opt-in, off by default, and only on convert.
+- Next task: #36 is complete in design terms; close it once someone has run a real large file end to end.
+- Warnings: Pillow is new to the image. Its decompression-bomb limit is set per call (60 MP), in the worker.
+
+---
+
+- Agent: Claude Code / QuietHeron (platform)
+- Date: 2026-09-28
 - Branch: `feat/strip-video-for-slides`, based on main `1b5efa6`
 - Objective: #36 step 2. Take embedded video out of a deck before it goes to Google, so large decks fit Slides' 100 MB conversion limit and upload faster.
 - Files changed: `app/workspace_toolkit/pptx.py` (`strip_videos` and helpers, called from `render`; a `video_saved_separately` analysis warning), `google.py` (`videos_removed_warnings`, `conversion.videosRemoved`), `web.py` (import-limit warning judged on the converted file); `tests/platform/test_pptx_video.py` (new, 12 tests), `test_pptx_validity.py` (new, LibreOffice), `test_web.py` (one test); `.github/workflows/pptx-validity.yml` (new); `docs/platform.md`; this file.

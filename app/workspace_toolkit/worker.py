@@ -14,6 +14,7 @@ from .pictures import compress
 from .pptx import analyse as analyse_pptx
 from .pptx import render_path as render_pptx
 from .publisher import analyse as analyse_pub
+from .publisher import render_path as render_pub
 
 # Deliberately not importing the pipelines registry: that pulls in the Google
 # client, and this subprocess must never hold credentials or reach the network.
@@ -64,6 +65,17 @@ def main() -> None:
         elif fmt == "pptx":
             report = render_pptx(source, output / "converted.pptx", settings)
             (output / "render.json").write_text(json.dumps(report), encoding="utf-8")
+        elif fmt == "pub":
+            # The pictures are drawn here too, from untrusted payloads, inside
+            # the same limits; the app only sends the plan this writes. A
+            # failure here must not stop the file being checked: converting
+            # it is refused instead, for want of a plan.
+            try:
+                render_pub(output)
+            except Exception as exc:  # noqa: BLE001
+                (output / "plan-error.json").write_text(
+                    json.dumps({"error": type(exc).__name__}), encoding="utf-8"
+                )
         if smaller_pictures:
             # Only when asked for, and never fatal: a failure here leaves the
             # converted file as it was, with its pictures at full size.

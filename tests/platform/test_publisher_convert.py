@@ -1,0 +1,504 @@
+"""Sending a planned Publisher conversion (Publisher step 3), against a fake Google.
+
+`FakeGoogle` behaves like the parts of Drive, Slides, Cloud Storage and IAM
+the converter uses. It applies each batchUpdate, and it refuses a picture
+unless its link is signed and its stored copy still exists. Nothing reaches
+the network, and no document is real.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import re
+from datetime import UTC, datetime
+from urllib.parse import parse_qs, unquote, urlsplit
+
+import httpx
+import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from workspace_toolkit import publisher_convert, storage
+from workspace_toolkit.config import Settings
+from workspace_toolkit.errors import ToolkitError
+from workspace_toolkit.google import Google
+from workspace_toolkit.publisher import render_path
+from workspace_toolkit.publisher_slides import check, plan
+from workspace_toolkit.storage import Bucket, Credentials, canonical, scrub
+
+from .test_publisher_slides import document, image, paragraph, pictures, run, text_box
+
+SIGNER = "wmt-signer@example-project.iam.gserviceaccount.com"
+READY = Settings(publisher_bucket="wmt-pictures", publisher_signer=SIGNER)
+A5_EMU = {
+    "width": {"magnitude": 5346000, "unit": "EMU"},
+    "height": {"magnitude": 7560000, "unit": "EMU"},
+}
+
+
+# ------------------------------------------------------------------ signing
+
+
+# Google's own V4 signing conformance cases (googleapis/conformance-tests,
+# storage/v1/v4_signatures.json): the canonical request and string to sign
+# must match exactly for Google to accept the signature.
+CONFORMANCE = [
+    (
+        "test-object",
+        "2019-02-01T09:00:00Z",
+        10,
+        "00e2fb794ea93d7adb703edaebdd509821fcc7d4f1a79ac5c8d2b394df109320",  # pragma: allowlist secret -- a published SHA-256
+    ),
+    (
+        "test-object",
+        "2019-03-01T09:00:00Z",
+        20,
+        "779f19fdb6fd381390e2d5af04947cf21750277ee3c20e0c97b7e46a1dff8907",  # pragma: allowlist secret -- a published SHA-256
+    ),
+    (
+        "/path/with/slashes/under_score/amper&sand/file.ext",
+        "2019-02-01T09:00:00Z",
+        10,
+        "63c601ecd6ccfec84f1113fc906609cbdf7651395f4300cecd96ddd2c35164f8",  # pragma: allowlist secret -- a published SHA-256
+    ),
+]
+
+
+@pytest.mark.parametrize("name, timestamp, seconds, digest", CONFORMANCE)
+def test_links_are_signed_exactly_as_google_specifies(name, timestamp, seconds, digest):
+    when = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    request, to_sign, _ = canonical(
+        "test-bucket",
+        name,
+        "test-iam-credentials@dummy-project-id.iam.gserviceaccount.com",
+        when,
+        seconds,
+    )
+    stamp = when.strftime("%Y%m%dT%H%M%SZ")
+    assert (
+        to_sign == f"GOOG4-RSA-SHA256\n{stamp}\n{when:%Y%m%d}/auto/storage/goog4_request\n{digest}"
+    )
+    assert request.startswith("GET\n/test-bucket/")
+    assert request.endswith("\nhost:storage.googleapis.com\n\nhost\nUNSIGNED-PAYLOAD")
+
+
+class Token(Credentials):
+    def __init__(self, client, value="sa-token"):
+        super().__init__(client)
+        self.value = value
+
+    async def _fetch(self):
+        return self.value, 3600
+
+
+def test_a_signed_link_carries_googles_signature_of_the_right_string():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer sa-token"
+        assert unquote(request.url.path).endswith(f"/serviceAccounts/{SIGNER}:signBlob")
+        payload = base64.b64decode(json.loads(request.content)["payload"])
+        seen["payload"] = payload
+        signature = key.sign(payload, padding.PKCS1v15(), hashes.SHA256())
+        return httpx.Response(
+            200, json={"keyId": "k", "signedBlob": base64.b64encode(signature).decode()}
+        )
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            bucket = Bucket("wmt-pictures", SIGNER, Token(client), client)
+            return await bucket.sign("publisher/abc.png", now=datetime(2026, 9, 28, 12, tzinfo=UTC))
+
+    url = asyncio.run(go())
+    parts = urlsplit(url)
+    assert (
+        parts.netloc == "storage.googleapis.com" and parts.path == "/wmt-pictures/publisher/abc.png"
+    )
+    query = parse_qs(parts.query)
+    assert query["X-Goog-Expires"] == ["900"]  # 15 minutes
+    assert query["X-Goog-Credential"] == [f"{SIGNER}/20260928/auto/storage/goog4_request"]
+    _, expected, _ = canonical(
+        "wmt-pictures", "publisher/abc.png", SIGNER, datetime(2026, 9, 28, 12, tzinfo=UTC), 900
+    )
+    assert seen["payload"] == expected.encode()
+    signature = bytes.fromhex(query["X-Goog-Signature"][0])
+    key.public_key().verify(signature, expected.encode(), padding.PKCS1v15(), hashes.SHA256())
+
+
+def test_a_signed_link_never_reaches_a_report():
+    text = "failed: https://storage.googleapis.com/b/o.png?X-Goog-Algorithm=x&X-Goog-Signature=abc123 end"
+    assert scrub(text) == "failed: [signed link] end"
+
+
+def test_credentials_are_the_apps_own_and_never_a_key_file(tmp_path, monkeypatch):
+    async def pick():
+        async with httpx.AsyncClient() as client:
+            return storage.credentials(client)
+
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    adc = tmp_path / "adc.json"
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+    adc.write_text(
+        json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": "c",
+                "client_secret": "s",
+                "refresh_token": "r",
+            }
+        )
+    )
+    assert isinstance(asyncio.run(pick()), storage.UserCredentials)
+    adc.write_text(json.dumps({"type": "service_account", "private_key": "…"}))
+    with pytest.raises(ToolkitError, match="gcloud login"):
+        asyncio.run(pick())
+    adc.unlink()
+    with pytest.raises(ToolkitError) as missing:
+        asyncio.run(pick())
+    assert missing.value.code == "publisher_storage_unavailable"
+    monkeypatch.setenv("K_SERVICE", "workspace-toolkit")
+    assert isinstance(asyncio.run(pick()), storage.MetadataCredentials)
+
+
+# ------------------------------------------------------------------ a fake Google
+
+
+class FakeGoogle:
+    """Just enough of Drive, Slides, Cloud Storage and IAM to convert against."""
+
+    def __init__(self, *, refuse: set[str] = frozenset(), page_size=A5_EMU, lose_reply=False):
+        self.refuse = refuse  # objectIds whose pictures Slides "cannot fetch"
+        self.page_size = page_size
+        self.lose_reply = lose_reply
+        self.slides: dict[str, list[dict]] = {}
+        self.order: list[str] = []
+        self.objects: dict[str, dict] = {}
+        self.stored: set[str] = set()
+        self.ever_stored: set[str] = set()
+        self.tokens: dict[str, set[str]] = {"user": set(), "app": set()}
+        self.batches = 0
+        self.presentations = 0
+        self.saved: list[bytes] = []
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        host, path = request.url.host, request.url.path
+        token = request.headers.get("Authorization", "")
+        if host in {"storage.googleapis.com", "iamcredentials.googleapis.com"}:
+            self.tokens["app"].add(token)
+            return self.storage(request)
+        self.tokens["user"].add(token)
+        if host == "slides.googleapis.com":
+            return self.slides_api(request)
+        if path.startswith("/upload/drive") and request.method == "POST":
+            return httpx.Response(
+                200,
+                headers={
+                    "Location": "https://www.googleapis.com/upload/drive/v3/files?upload_id=1"
+                },
+            )
+        if path.startswith("/upload/drive") and request.method == "PUT":
+            self.saved.append(request.read())
+            return httpx.Response(200, json={"id": "report-1"})
+        if path == "/drive/v3/files" and request.method == "GET":
+            return httpx.Response(200, json={"files": []})
+        if path == "/drive/v3/files" and request.method == "POST":
+            return httpx.Response(200, json={"id": "folder-1"})
+        if path.startswith("/drive/v3/files/") and request.method == "GET":
+            return httpx.Response(200, json={"parents": ["root"]})
+        if path.startswith("/drive/v3/files/") and request.method == "PATCH":
+            assert request.url.params["addParents"] == "folder-1"
+            return httpx.Response(200, json={"id": path.rsplit("/", 1)[-1]})
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    def storage(self, request: httpx.Request) -> httpx.Response:
+        if "signBlob" in request.url.path:
+            return httpx.Response(200, json={"signedBlob": base64.b64encode(b"\x01\x02").decode()})
+        if request.method == "POST":
+            name = request.url.params["name"]
+            assert request.url.params["ifGenerationMatch"] == "0"
+            assert name.startswith("publisher/") and re.fullmatch(
+                r"publisher/[0-9a-f]{32}\.\w+", name
+            )
+            self.stored.add(name)
+            self.ever_stored.add(name)
+            return httpx.Response(200, json={"name": name})
+        if request.method == "DELETE":
+            self.stored.discard(unquote(request.url.path.rsplit("/o/", 1)[1]))
+            return httpx.Response(204)
+        raise AssertionError(request.url)
+
+    def slides_api(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/v1/presentations":
+            self.presentations += 1
+            body = json.loads(request.content)
+            assert body["pageSize"]["width"]["unit"] == "PT"
+            self.slides = {"p": []}
+            self.order = ["p"]
+            return httpx.Response(
+                200,
+                json={
+                    "presentationId": "pres-1",
+                    "pageSize": self.page_size,
+                    "slides": [{"objectId": "p"}],
+                },
+            )
+        if request.method == "POST" and path.endswith(":batchUpdate"):
+            return self.batch(json.loads(request.content)["requests"])
+        if request.method == "GET" and "/pages/" in path:
+            slide = path.rsplit("/", 1)[-1]
+            if slide not in self.slides:
+                return httpx.Response(404, json={})
+            return httpx.Response(200, json={"objectId": slide, "pageElements": self.tree(slide)})
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "pageSize": self.page_size,
+                    "slides": [{"objectId": s, "pageElements": self.tree(s)} for s in self.order],
+                },
+            )
+        raise AssertionError(request.url)
+
+    def tree(self, slide: str) -> list[dict]:
+        def node(object_id):
+            element = self.objects[object_id]
+            result = {"objectId": object_id}
+            if element.get("children"):
+                result["elementGroup"] = {"children": [node(c) for c in element["children"]]}
+            if "text" in element:
+                result["shape"] = {
+                    "text": {"textElements": [{"textRun": {"content": element["text"]}}]}
+                }
+            return result
+
+        return [node(o) for o in self.slides[slide]]
+
+    def batch(self, requests: list[dict]) -> httpx.Response:
+        self.batches += 1
+        # Atomic, as Slides is: check everything before changing anything.
+        for index, request in enumerate(requests):
+            image = request.get("createImage")
+            if image:
+                parts = urlsplit(image["url"])
+                name = parts.path.split("/", 2)[2]
+                if (
+                    "X-Goog-Signature" not in parts.query
+                    or name not in self.stored
+                    or image["objectId"] in self.refuse
+                ):
+                    return httpx.Response(
+                        400,
+                        json={
+                            "error": {
+                                "message": f"Invalid requests[{index}].createImage: "
+                                f"There was a problem retrieving the image {image['url']}"
+                            }
+                        },
+                    )
+        for request in requests:
+            kind, body = next(iter(request.items()))
+            if kind == "createSlide":
+                self.slides[body["objectId"]] = []
+                self.order.insert(body["insertionIndex"], body["objectId"])
+            elif kind == "deleteObject":
+                self.slides.pop(body["objectId"], None)
+                self.order.remove(body["objectId"])
+            elif kind in {"createShape", "createImage", "createLine", "createTable"}:
+                page = body["elementProperties"]["pageObjectId"]
+                self.objects[body["objectId"]] = {"page": page}
+                self.slides[page].append(body["objectId"])
+            elif kind == "insertText" and "cellLocation" not in body:
+                element = self.objects[body["objectId"]]
+                element["text"] = element.get("text", "") + body["text"]
+            elif kind == "groupObjects":
+                children = body["childrenObjectIds"]
+                page = self.objects[children[0]]["page"]
+                for child in children:
+                    self.slides[page].remove(child)
+                self.objects[body["groupObjectId"]] = {"page": page, "children": children}
+                self.slides[page].append(body["groupObjectId"])
+        if self.lose_reply:
+            self.lose_reply = False
+            raise httpx.ReadError("the reply was lost")
+        return httpx.Response(200, json={"replies": []})
+
+
+# ------------------------------------------------------------------ converting
+
+
+def job(tmp_path, doc, prepared):
+    result = tmp_path / "result"
+    result.mkdir(exist_ok=True)
+    planned = plan(doc, prepared, title="placeholder")
+    (result / "plan.json").write_text(json.dumps(planned.as_dict(result)), encoding="utf-8")
+    manifest = {
+        "source": {"sha256": "ab" * 32},
+        "document": doc,
+        "assets": {"assets": []},
+        "report": {},
+    }
+    return tmp_path, manifest
+
+
+def booklet(tmp_path):
+    (tmp_path / "result").mkdir()
+    prepared = pictures(tmp_path / "result", logo=(100, 100), photo=(300, 200))
+    doc = document(
+        [
+            text_box(
+                "el_1",
+                0,
+                (10, 10, 300, 60),
+                paragraph(run("Reading at home", font="SassoonPrimaryInfant")),
+            ),
+            image("el_2", 1, (300, 10, 100, 100), "logo"),
+        ],
+        [
+            image("el_3", 0, (20, 20, 300, 200), "photo"),
+            image("el_4", 1, (20, 300, 100, 100), "logo"),
+        ],
+    )
+    return job(tmp_path, doc, prepared)
+
+
+def convert(tmp_path, fake: FakeGoogle, root, manifest, settings=READY, monkeypatch=None):
+    transport = httpx.MockTransport(fake.handle)
+    monkeypatch.setattr(
+        publisher_convert, "storage_client", lambda: httpx.AsyncClient(transport=transport)
+    )
+    monkeypatch.setattr(publisher_convert, "credentials", lambda client: Token(client))
+
+    async def go():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await publisher_convert.convert(
+                root,
+                manifest,
+                Google("user-token", client),
+                original_name="RWI booklet",
+                settings=settings,
+            )
+
+    return asyncio.run(go())
+
+
+def test_a_publication_is_built_page_by_page_and_checked(tmp_path, monkeypatch):
+    fake = FakeGoogle()
+    root, manifest = booklet(tmp_path)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert report["status"] == "completed_with_warnings", report["warnings"]
+    assert report["url"] == "https://docs.google.com/presentation/d/pres-1/edit"
+    assert report["verification"] == "objects_page_size_and_text_checked"
+    assert fake.presentations == 1
+    assert fake.order == ["wmt_page_0001", "wmt_page_0002"]  # Google's own slide removed
+    assert fake.slides["wmt_page_0001"] == ["wmt_el_1", "wmt_el_2"]  # paint order
+    assert fake.objects["wmt_el_1"]["text"] == "Reading at home"
+    codes = [w["code"] for w in report["warnings"]]
+    assert "objects_missing" not in codes and "text_differs" not in codes
+    assert "font-substituted" in codes  # Sassoon → Andika, reported
+    assert report["conversion"]["statusCounts"]["NATIVE"] == 3
+
+
+def test_pictures_are_stored_briefly_and_the_bucket_is_left_empty(tmp_path, monkeypatch):
+    fake = FakeGoogle()
+    root, manifest = booklet(tmp_path)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert len(fake.ever_stored) == 3  # the logo once per page it is on, the photo once
+    assert fake.stored == set()
+    # The bucket sees only the app's own account; Drive and Slides only the person's.
+    assert fake.tokens["app"] == {"Bearer sa-token"}
+    assert fake.tokens["user"] == {"Bearer user-token"}
+    saved = b"".join(fake.saved) + json.dumps(report).encode()
+    assert b"X-Goog-Signature" not in saved and b"storage.googleapis.com" not in saved
+
+
+def test_a_picture_slides_will_not_take_leaves_a_marked_box_not_a_lost_page(tmp_path, monkeypatch):
+    fake = FakeGoogle(refuse={"wmt_el_3"})
+    root, manifest = booklet(tmp_path)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert fake.slides["wmt_page_0002"] == ["wmt_el_3", "wmt_el_4"]  # the page was still built
+    assert "picture from the original" in fake.objects["wmt_el_3"]["text"]
+    codes = [w["code"] for w in report["warnings"]]
+    assert "pictures_refused" in codes and "objects_missing" not in codes
+    assert fake.stored == set()
+    assert "problem retrieving" not in json.dumps(report)  # Google's words, with the link, stay out
+
+
+def test_a_changed_page_size_is_reported(tmp_path, monkeypatch):
+    wide = {
+        "width": {"magnitude": 9144000, "unit": "EMU"},
+        "height": {"magnitude": 5143500, "unit": "EMU"},
+    }
+    fake = FakeGoogle(page_size=wide)
+    root, manifest = booklet(tmp_path)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    (note,) = [w for w in report["warnings"] if w["code"] == "page_size_changed"]
+    assert "720 × 405" in note["message"] and "421 × 595" in note["message"]
+
+
+def test_a_lost_reply_is_not_sent_twice(tmp_path, monkeypatch):
+    fake = FakeGoogle(lose_reply=True)
+    root, manifest = booklet(tmp_path)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert report["status"].startswith("completed")
+    assert fake.batches == 3  # setup (applied, reply lost, found by looking) + two pages
+    assert fake.order == ["wmt_page_0001", "wmt_page_0002"]
+
+
+def test_nothing_is_made_where_conversion_is_not_set_up(tmp_path, monkeypatch):
+    fake = FakeGoogle()
+    root, manifest = booklet(tmp_path)
+    report = convert(tmp_path, fake, root, manifest, settings=Settings(), monkeypatch=monkeypatch)
+    assert report["status"] == "failed"
+    assert report["warnings"][-1]["code"] == "not_convertible"
+    assert fake.presentations == 0 and not fake.tokens["user"]
+
+
+def test_without_a_plan_the_file_is_refused_plainly(tmp_path, monkeypatch):
+    fake = FakeGoogle()
+    root, manifest = booklet(tmp_path)
+    (root / "result" / "plan.json").unlink()
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert report["warnings"][-1]["code"] == "plan_unavailable"
+    assert fake.presentations == 0
+
+
+def test_a_plan_cannot_point_outside_its_job(tmp_path, monkeypatch):
+    fake = FakeGoogle()
+    root, manifest = booklet(tmp_path)
+    planned = json.loads((root / "result" / "plan.json").read_text())
+    planned["pictures"]["logo"]["path"] = "../../secret.png"
+    (root / "result" / "plan.json").write_text(json.dumps(planned))
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert report["status"].startswith("failed") and fake.presentations == 0
+
+
+def test_the_worker_plans_a_parsed_bundle(tmp_path):
+    from PIL import Image
+
+    bundle = tmp_path / "bundle"
+    (bundle / "assets").mkdir(parents=True)
+    Image.new("RGB", (40, 30), "red").save(bundle / "assets" / ("a" * 64 + ".png"))
+    doc = document([image("el_1", 0, (10, 10, 40, 30), "asset_0001")])
+    assets = {
+        "assets": [
+            {
+                "id": "asset_0001",
+                "filename": "assets/" + "a" * 64 + ".png",
+                "mimeType": "image/png",
+                "byteLength": 100,
+                "pixelWidth": 40,
+                "pixelHeight": 30,
+            }
+        ]
+    }
+    (bundle / "document.json").write_text(json.dumps(doc))
+    (bundle / "assets.json").write_text(json.dumps(assets))
+    data = render_path(tmp_path)
+    assert json.loads((tmp_path / "plan.json").read_text()) == data
+    assert data["pictures"]["asset_0001"]["path"] == "bundle/assets/" + "a" * 64 + ".png"
+    from workspace_toolkit.publisher_slides import Plan
+
+    assert check(Plan.from_dict(data, tmp_path)) == []

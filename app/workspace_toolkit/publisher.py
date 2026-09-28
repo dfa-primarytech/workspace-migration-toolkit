@@ -8,8 +8,8 @@ analysis worker, with a hard timeout of its own because the parser's
 `--max-seconds` cannot stop a hang inside libmspub, and turns the bundle into
 the manifest the rest of the app expects.
 
-Converting to Google Slides is not part of this step (see DECISIONS.md,
-2026-09-28): a `.pub` can be checked, and the check says so.
+`render_path` then plans the Slides requests, in the same worker;
+`publisher_convert` sends them.
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ from .errors import ToolkitError
 from .fonts import catalogue
 from .model import Compatibility as C
 from .model import warning
+from .publisher_art import prepare
+from .publisher_slides import plan
 
 # What the parser's failure codes mean, in words a member of staff can act on.
 REFUSALS = {
@@ -134,14 +136,6 @@ def analysis_report(manifest: dict) -> dict:
                 classification=C.UNSUPPORTED,
             )
         )
-    notes.append(
-        warning(
-            "publisher_check_only",
-            "Publisher files can be checked here. Converting them to Google Slides is "
-            "not available yet.",
-            classification=C.IGNORED,
-        )
-    )
     first = pages[0] if pages else {}
     return {
         "schemaVersion": "1.0",
@@ -161,10 +155,18 @@ def analysis_report(manifest: dict) -> dict:
     }
 
 
-async def convert(*args, **kwargs) -> dict:
-    """Not yet: the Slides renderer is the next step (DECISIONS.md, 2026-09-28)."""
-    raise ToolkitError(
-        "publisher_convert_unavailable",
-        "Converting Publisher files to Google Slides is not available yet.",
-        501,
-    )
+def render_path(output: Path) -> dict:
+    """Plans the Slides requests for a parsed bundle, and draws its pictures.
+
+    Runs in the analysis worker, beside the parser: the pictures are drawn
+    from the document's own payloads. Writes `plan.json`, which the app sends
+    without reading the document again.
+    """
+    bundle = output / "bundle"
+    document = json.loads((bundle / "document.json").read_text(encoding="utf-8"))
+    assets = json.loads((bundle / "assets.json").read_text(encoding="utf-8"))
+    prepared = prepare(document, assets, bundle, output / "art")
+    result = plan(document, prepared, title="Converted publication")
+    data = result.as_dict(output)
+    (output / "plan.json").write_text(json.dumps(data), encoding="utf-8")
+    return data

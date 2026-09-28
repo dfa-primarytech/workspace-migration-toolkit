@@ -321,3 +321,24 @@ reported per element, and none is verified against Google until step 4.
 - **Requests are grouped per page** so step 3 can sign picture links a page
   at a time within their 15-minute life.
 
+## 2026-09-28: Publisher picture delivery (step 3)
+How the approved bucket-and-signed-link route is built:
+
+- **No key files.** The app acts as its own service account: from the
+  metadata server on Cloud Run, or a developer's `gcloud` application-default
+  login elsewhere. Links are signed by Google through IAM `signBlob`. A
+  downloaded service-account key is refused: it is a long-lived secret on disk.
+- **No new dependencies.** V4 signing is about 30 lines over `httpx`, and is
+  tested against Google's published conformance cases.
+- **One page at a time.** Store that page's pictures, sign 15-minute links,
+  send the page, and delete the copies in a `finally`. Links live seconds in
+  practice. The bucket's one-day lifecycle rule is the backstop.
+- **Two identities, kept apart.** The person's `drive.file` token creates
+  and edits the presentation. The app's account only touches the bucket.
+- **Nothing that could carry a link is reported.** Only the index of a
+  refused request is read from a Slides error; its text is never kept.
+- **A refused picture becomes the marked box** from step 2, and the page is
+  sent again, rather than the page being lost.
+- **Convert appears only where a bucket is configured.** `describe()`
+  now takes the settings, so a deployment without one still offers Check.
+

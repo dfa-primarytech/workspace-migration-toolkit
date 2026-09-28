@@ -28,6 +28,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .fonts import FontStatus, catalogue, compatibility
 from .model import Compatibility as C
@@ -111,6 +112,37 @@ class Plan:
     pictures: dict[str, Picture]
     slides: list[str]
     report: dict
+
+    def as_dict(self, root: Path) -> dict:
+        """For plan.json: the worker writes it, the app sends it."""
+        return {
+            "create": self.create,
+            "setup": self.setup,
+            "pages": self.pages,
+            "slides": self.slides,
+            "report": self.report,
+            "pictures": {
+                key: {
+                    "path": picture.path.relative_to(root).as_posix(),
+                    "width": picture.width,
+                    "height": picture.height,
+                    "mime": picture.mime,
+                }
+                for key, picture in self.pictures.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, root: Path) -> Plan:
+        pictures = {}
+        for key, item in data["pictures"].items():
+            path = (root / item["path"]).resolve()
+            if not path.is_relative_to(root.resolve()):
+                raise ValueError("a picture outside the job")
+            pictures[key] = Picture(key, path, item["width"], item["height"], item["mime"])
+        return cls(
+            data["create"], data["setup"], data["pages"], pictures, data["slides"], data["report"]
+        )
 
     def keys_for(self, page: int) -> list[str]:
         """The pictures a page's requests need links for."""
@@ -518,6 +550,40 @@ def placed(object_id: str, page: str, frame: Frame) -> dict:
 # ------------------------------------------------------------------ elements
 
 
+def missing_picture(object_id: str, where: dict) -> list[dict]:
+    """A dashed box saying a picture could not be converted, where it was."""
+    return [
+        {
+            "createShape": {
+                "objectId": object_id,
+                "shapeType": "RECTANGLE",
+                "elementProperties": where,
+            }
+        },
+        {
+            "updateShapeProperties": {
+                "objectId": object_id,
+                "shapeProperties": {
+                    "shapeBackgroundFill": {"propertyState": "NOT_RENDERED"},
+                    "outline": {
+                        "outlineFill": solid((192, 0, 0)),
+                        "weight": {"magnitude": 1, "unit": "PT"},
+                        "dashStyle": "DASH",
+                    },
+                },
+                "fields": "shapeBackgroundFill,outline",
+            }
+        },
+        {
+            "insertText": {
+                "objectId": object_id,
+                "insertionIndex": 0,
+                "text": "A picture from the original could not be converted.",
+            }
+        },
+    ]
+
+
 class PageBuilder:
     def __init__(self, page: dict, slide: str, prepared: Prepared, fonts: dict[str, dict]):
         self.page = page
@@ -618,36 +684,7 @@ class PageBuilder:
     def _missing(self, element: dict, frame: Frame, reason: str) -> None:
         """A marked space where a picture could not go, so it is not lost silently."""
         object_id = oid(element["id"])
-        self.requests += [
-            {
-                "createShape": {
-                    "objectId": object_id,
-                    "shapeType": "RECTANGLE",
-                    "elementProperties": placed(object_id, self.slide, frame),
-                }
-            },
-            {
-                "updateShapeProperties": {
-                    "objectId": object_id,
-                    "shapeProperties": {
-                        "shapeBackgroundFill": {"propertyState": "NOT_RENDERED"},
-                        "outline": {
-                            "outlineFill": solid((192, 0, 0)),
-                            "weight": {"magnitude": 1, "unit": "PT"},
-                            "dashStyle": "DASH",
-                        },
-                    },
-                    "fields": "shapeBackgroundFill,outline",
-                }
-            },
-            {
-                "insertText": {
-                    "objectId": object_id,
-                    "insertionIndex": 0,
-                    "text": "A picture from the original could not be converted.",
-                }
-            },
-        ]
+        self.requests += missing_picture(object_id, placed(object_id, self.slide, frame))
         entry = self.line(element, C.UNSUPPORTED, note("picture-missing", reason))
         self.made(element, entry, object_id)
 

@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import docs, docx, google, pptx, publisher
+from . import docs, docx, google, pptx, publisher, publisher_convert
+from .config import Settings
 from .errors import ToolkitError
 from .package import DOCX, PPTX, PUB, Format
 
@@ -26,7 +27,12 @@ class Pipeline:
     convert: Callable[..., Awaitable[dict]]
     kind: str  # what the output is, for the report
     destination: str  # where it ends up, for people
-    convertible: bool = True  # False while a format can be checked but not converted
+    # Whether this deployment can convert it, not only check it.
+    ready: Callable[[Settings], bool] = lambda settings: True
+    needs_settings: bool = False  # its convert() takes settings=
+
+    def convertible(self, settings: Settings) -> bool:
+        return self.ready(settings)
 
     @property
     def source_name(self) -> str:
@@ -52,10 +58,12 @@ PIPELINES: dict[str, Pipeline] = {
     ".pub": Pipeline(
         fmt=PUB,
         analysis_report=publisher.analysis_report,
-        convert=publisher.convert,
+        convert=publisher_convert.convert,
         kind="presentation",
         destination="Google Slides",
-        convertible=False,  # the Slides renderer is the next step (DECISIONS.md)
+        # Pictures reach Slides through a bucket the deployment must provide.
+        ready=lambda settings: settings.publisher_ready,
+        needs_settings=True,
     ),
 }
 
@@ -67,7 +75,7 @@ def resolve(filename: str) -> Pipeline:
     return pipeline
 
 
-def describe() -> list[dict[str, Any]]:
+def describe(settings: Settings) -> list[dict[str, Any]]:
     """What the browser needs to know about the formats on offer."""
     return [
         {
@@ -75,7 +83,7 @@ def describe() -> list[dict[str, Any]]:
             "destination": pipeline.destination,
             "kind": pipeline.kind,
             "mime": pipeline.fmt.mime,
-            "convertible": pipeline.convertible,
+            "convertible": pipeline.convertible(settings),
         }
         for suffix, pipeline in PIPELINES.items()
     ]
