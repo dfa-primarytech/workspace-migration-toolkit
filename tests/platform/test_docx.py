@@ -1261,6 +1261,64 @@ def test_a_picture_floating_above_a_table_lands_in_the_cell_it_was_drawn_over():
     ], cells
 
 
+def test_pictures_stacked_in_separate_paragraphs_above_a_table_are_placed():
+    """A worksheet often gives each question picture its own paragraph rather
+    than several inside one. See #55: the walk above the table has to cross
+    every paragraph that holds nothing but pictures, not just the last one.
+    """
+    body = (
+        para(floating(200000, 100000))
+        + para(floating(4000000, 100000))
+        + para(floating(200000, 2000000))
+        + para(floating(4000000, 2000000))
+        + question_table(rows=2)
+    )
+    report, cells = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 4
+    assert report["picturesUnplaced"] == 0
+    assert cells == [
+        ["Can I count to ten?", 0],
+        ["Can I count to ten?", 0],
+        ["1.", 1],
+        ["1.", 1],
+        ["2.", 1],
+        ["2.", 1],
+    ], cells
+
+
+def test_a_blank_paragraph_between_stacked_pictures_is_walked_through():
+    """An author's own spacer line between two picture paragraphs is not
+    content that should stop the walk -- it is exactly what #42 protects."""
+    body = (
+        para(floating(200000, 100000))
+        + "<w:p/>"
+        + para(floating(4000000, 100000))
+        + question_table(rows=1, columns=(5752, 5752))
+    )
+    report, cells = placed_pictures(body)
+    assert report["picturesPlaced"] == 2
+    assert report["picturesUnplaced"] == 0
+
+
+def test_text_between_stacked_pictures_stops_the_walk():
+    """A paragraph carrying real content -- a question's own instructions --
+    is not a picture placeholder, so the walk above the table must not cross
+    it. The picture on the far side of it is left exactly as it was found.
+    """
+    body = (
+        para(floating(200000, 100000))
+        + "<w:p><w:r><w:t>Read the question first.</w:t></w:r></w:p>"
+        + para(floating(4000000, 100000))
+        + question_table(rows=1, columns=(5752, 5752))
+    )
+    report, cells = placed_pictures(body)
+    # Only the picture after the text (directly above the table) is placed.
+    assert report["picturesPlaced"] == 1
+    assert report["picturesUnplaced"] == 0
+    assert [c for c in cells if c[1]] == [["1.", 1]]
+
+
 def test_a_placed_picture_is_centred_rather_than_given_a_recovered_offset():
     # The offset described a position on the page. Inside a cell it would mean
     # something else entirely, so it is deliberately not carried across.

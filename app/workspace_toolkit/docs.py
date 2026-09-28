@@ -1147,6 +1147,22 @@ def _page_anchored(anchor: Element) -> bool:
     return down is not None and down[0] == "page"
 
 
+def _picture_only_paragraph(paragraph: Element) -> bool:
+    """True for a paragraph that carries nothing but anchored pictures, or
+    nothing at all -- a blank spacer between two stacked question images.
+
+    A worksheet often puts each picture in its own paragraph rather than
+    several in one, so the run of paragraphs directly above a table has to be
+    walked, not just the last one. But the walk has to stop at the first
+    paragraph holding anything else -- a question's own instructions, say --
+    or a picture belonging to that text would be swept up with it.
+    """
+    text = "".join(node.text or "" for node in paragraph.iter(q("w", "t"))).strip()
+    if text:
+        return False
+    return all(classify(a)[0] == "picture" for a in paragraph.iter(q("wp", "anchor")))
+
+
 def place_orphan_pictures(root: Element, ids: Ids) -> dict:
     """Moves a picture floating above a table into the cell it was drawn over."""
     parent_of = parents(root)
@@ -1156,19 +1172,27 @@ def place_orphan_pictures(root: Element, ids: Ids) -> dict:
         for index, block in enumerate(blocks[:-1]):
             if local(block.tag) != "p" or local(blocks[index + 1].tag) != "tbl":
                 continue
-            _place_above(root, block, blocks[index + 1], parent_of, ids, report)
+            run = []
+            i = index
+            while i >= 0 and local(blocks[i].tag) == "p" and _picture_only_paragraph(blocks[i]):
+                run.append(blocks[i])
+                i -= 1
+            run.reverse()
+            if not any(list(p.iter(q("wp", "anchor"))) for p in run):
+                continue
+            _place_above(root, run, blocks[index + 1], parent_of, ids, report)
     return report
 
 
 def _place_above(
     root: Element,
-    paragraph: Element,
+    paragraphs: list[Element],
     table: Element,
     parent_of: dict,
     ids: Ids,
     report: dict,
 ) -> None:
-    anchors = list(paragraph.iter(q("wp", "anchor")))
+    anchors = [anchor for paragraph in paragraphs for anchor in paragraph.iter(q("wp", "anchor"))]
     if not anchors:
         return
     pictures = [
@@ -1227,7 +1251,11 @@ def _place_above(
         # arbitrarily -- unless the constant between them is known exactly,
         # which it is when the paragraph starts the text area.
         top = _margin(root, "top")
-        if frames != {"page", "paragraph"} or top is None or not _starts_the_page(root, paragraph):
+        if (
+            frames != {"page", "paragraph"}
+            or top is None
+            or not _starts_the_page(root, paragraphs[0])
+        ):
             report["picturesUnplaced"] += len(anchors)
             return
         for column, found in placed.items():
