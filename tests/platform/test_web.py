@@ -502,3 +502,23 @@ def test_a_large_drive_file_is_checked_against_the_sign_in_once_its_size_is_know
 def test_a_small_drive_file_converts_with_the_same_sign_in(monkeypatch):
     response = _drive_convert(monkeypatch, 1000, expires_in=1000)
     assert response.status_code == 200, response.text
+
+
+def test_the_import_limit_is_judged_on_what_google_receives(monkeypatch, pptx):
+    # A deck over the limit only because of its video is fine: the video is
+    # taken out before upload (issue #36, step 2).
+    from workspace_toolkit import web
+
+    monkeypatch.setitem(web.IMPORT_LIMITS, "pptx", ("Google Slides", pptx.stat().st_size - 1))
+    client = signed_client(configured())
+    response = client.post(
+        "/api/analyse",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert "beyond_import_limit" not in [w["code"] for w in response.json()["warnings"]]

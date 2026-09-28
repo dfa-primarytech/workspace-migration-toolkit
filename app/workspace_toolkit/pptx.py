@@ -10,6 +10,8 @@ from pathlib import Path
 # Type annotation only; XML parsing always uses defusedxml.
 from xml.etree.ElementTree import Element  # nosec B405
 
+from defusedxml import ElementTree as SafeET
+
 from .config import Settings
 from .errors import ToolkitError
 from .fonts import FontStatus, catalogue, compatibility
@@ -394,7 +396,18 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
     if not slides:
         raise ToolkitError("no_slides", "The presentation contains no slides.")
     for asset in assets.values():
-        if asset["kind"] in {"audio", "video", "embedded"}:
+        if asset["kind"] == "video":
+            warnings.append(
+                warning(
+                    "video_saved_separately",
+                    "Google Slides does not import embedded video, so this video's slide "
+                    "will show its still image. The video itself is saved in the "
+                    "conversion folder in Drive.",
+                    assetId=asset["id"],
+                    classification=C.UNSUPPORTED,
+                )
+            )
+        elif asset["kind"] in {"audio", "embedded"}:
             warnings.append(
                 warning(
                     "embedded_asset",
@@ -527,6 +540,170 @@ def _substitute_typefaces(data: bytes, applied: Counter[tuple[str, str]]) -> byt
     return LATIN_TAG.sub(replace, data)
 
 
+# --- embedded video (issue #36) ----------------------------------------------
+#
+# Google Slides does not import embedded video (docs/research.md), and the
+# conversion already saves each video to Drive beside the deck. Sending the
+# video to Google anyway only costs upload time and counts toward its 100 MB
+# conversion limit, which is what a large deck usually exceeds. So a video is
+# taken out before upload: its part, the relationships to it, and the markup
+# that plays it. The picture element stays, with its poster frame, so the slide
+# keeps the video's still image where the video was. Audio is left alone.
+#
+# The markup is edited as bytes, like the font rewrite, so nothing else in the
+# part is re-serialised; the parser only decides what to remove, and checks
+# the result. A part that fails the check keeps its video.
+
+VIDEO_RELATIONSHIPS = ("/relationships/video", "/relationships/media")
+_Q = rb"(?:[A-Za-z_][\w.-]*:)?"
+PLAYS_MEDIA = re.compile(
+    rb"<(?P<q>" + _Q + rb"(?:videoFile|quickTimeFile|media))\b(?P<attrs>[^>]*?)"
+    rb"(?:/>|>.*?</(?P=q)>)",
+    re.S,
+)
+REFERENCE = re.compile(rb"\s" + _Q + rb"(?:link|embed)\s*=\s*([\"'])(.*?)\1")
+TIMING_VIDEO = re.compile(rb"<(?P<q>" + _Q + rb"video)\b[^>]*>(?P<body>.*?)</(?P=q)>", re.S)
+SHAPE_TARGET = re.compile(rb"\sspid\s*=\s*([\"'])(.*?)\1")
+# Left empty once their only child is gone. An empty p:ext is invalid (it
+# must hold one element); an empty list is merely untidy.
+EMPTIED = re.compile(rb"<(?P<q>" + _Q + rb"(?:ext|extLst|childTnLst))\b[^>]*>\s*</(?P=q)>")
+RELATIONSHIP = re.compile(rb"<" + _Q + rb"Relationship\b[^>]*?/>")
+OVERRIDE = re.compile(rb"<" + _Q + rb"Override\b[^>]*?/>")
+ATTRIBUTE = re.compile(rb"\s(Id|PartName)\s*=\s*([\"'])(.*?)\2")
+
+
+def _rels_name(part: str) -> str:
+    folder, _, base = part.rpartition("/")
+    return f"{folder}/_rels/{base}.rels" if folder else f"_rels/{base}.rels"
+
+
+def _attribute(tag: bytes, name: bytes) -> str | None:
+    for match in ATTRIBUTE.finditer(tag):
+        if match.group(1) == name:
+            return match.group(3).decode("utf-8", "replace")
+    return None
+
+
+def _values(pattern: re.Pattern[bytes], text: bytes) -> set[str]:
+    return {m.group(2).decode("utf-8", "replace") for m in pattern.finditer(text)}
+
+
+def _video_shapes(root: Element, rids: set[str]) -> set[str]:
+    """The ids of picture shapes whose video is being removed."""
+    shapes = set()
+    r = f"{{{NS['r']}}}"
+    for pic in root.iter(f"{{{NS['p']}}}pic"):
+        plays = any(
+            local(node.tag) in {"videoFile", "quickTimeFile", "media"}
+            and {node.get(r + "link"), node.get(r + "embed")} & rids
+            for node in pic.iter()
+        )
+        properties = pic.find("p:nvPicPr/p:cNvPr", NS)
+        if plays and properties is not None and properties.get("id"):
+            shapes.add(properties.get("id", ""))
+    return shapes
+
+
+def _strip_part(data: bytes, rids: set[str]) -> bytes | None:
+    """The part without the markup that plays these relationships, or None if
+    the result could not be confirmed sound."""
+    try:
+        before = SafeET.fromstring(data)
+    except SafeET.ParseError:
+        return None
+    shapes = _video_shapes(before, rids)
+    result = PLAYS_MEDIA.sub(
+        lambda m: b"" if _values(REFERENCE, m["attrs"]) & rids else m.group(0), data
+    )
+    result = TIMING_VIDEO.sub(
+        lambda m: b"" if _values(SHAPE_TARGET, m["body"]) & shapes else m.group(0), result
+    )
+    while (tidier := EMPTIED.sub(b"", result)) != result:
+        result = tidier
+    try:
+        after = SafeET.fromstring(result)
+    except SafeET.ParseError:
+        return None
+    pictures = f"{{{NS['p']}}}pic"
+    if sum(1 for _ in after.iter(pictures)) != sum(1 for _ in before.iter(pictures)):
+        return None  # every picture, poster frames included, must survive
+    r = f"{{{NS['r']}}}"
+    for node in after.iter():
+        if any(key.startswith(r) and value in rids for key, value in node.attrib.items()):
+            return None
+    return result
+
+
+def _strip_relationships(data: bytes, rids: set[str]) -> bytes:
+    return RELATIONSHIP.sub(
+        lambda m: b"" if _attribute(m.group(0), b"Id") in rids else m.group(0), data
+    )
+
+
+def strip_videos(package: Package, parts: dict[str, bytes]) -> list[dict]:
+    """Takes embedded video out of `parts` (name -> bytes, edited in place).
+
+    Returns what was removed. A video is removed only if every relationship
+    to it is a video or media one -- a file also used as a picture stays --
+    and only if every part that plays it can be edited and checked.
+    """
+    references: dict[str, list[tuple[str, str, bool]]] = {}
+    for rels in sorted(n for n in package.names if n.endswith(".rels") and n != "_rels/.rels"):
+        folder, _, base = rels.rpartition("/")
+        part = folder.removesuffix("_rels") + base.removesuffix(".rels")
+        for rel in package.relationships(part):
+            if rel["external"] or not rel["resolved"]:
+                continue
+            is_video = rel["type"].endswith(VIDEO_RELATIONSHIPS)
+            references.setdefault(rel["resolved"], []).append((part, rel["id"], is_video))
+    videos = {
+        target
+        for target, refs in references.items()
+        if package.mime(target).startswith("video/") and all(v for _, _, v in refs)
+    }
+    while videos:
+        by_part: dict[str, set[str]] = {}
+        for target in videos:
+            for part, rid, _ in references[target]:
+                by_part.setdefault(part, set()).add(rid)
+        edited: dict[str, bytes] = {}
+        refused: set[str] = set()
+        for part, rids in sorted(by_part.items()):
+            source = parts.get(part) or package.read(part, package.settings.max_xml_bytes)
+            stripped = _strip_part(source, rids)
+            if stripped is None:
+                refused |= {t for t in videos if any(p == part for p, _, _ in references[t])}
+                continue
+            edited[part] = stripped
+            rels = _rels_name(part)
+            edited[rels] = _strip_relationships(parts.get(rels) or package.read(rels), rids)
+        if refused:
+            videos -= refused
+            continue
+        parts.update(edited)
+        break
+    if not videos:
+        return []
+    overrides = {"/" + target.casefold() for target in videos}
+    types = parts.get("[Content_Types].xml") or package.read("[Content_Types].xml")
+    parts["[Content_Types].xml"] = OVERRIDE.sub(
+        lambda m: (
+            b""
+            if (_attribute(m.group(0), b"PartName") or "").casefold() in overrides
+            else m.group(0)
+        ),
+        types,
+    )
+    return [
+        {
+            "part": target,
+            "bytes": package.zip.getinfo(target).file_size,
+            "usedBy": sorted({p for p, _, _ in references[target]}),
+        }
+        for target in sorted(videos)
+    ]
+
+
 def render(package: Package, destination: Path) -> dict:
     """Write a Google-ready PPTX with reviewed font candidates applied."""
     rewritten: dict[str, bytes] = {}
@@ -538,9 +715,12 @@ def render(package: Package, destination: Path) -> dict:
             if target != source:
                 rewritten[name] = target
 
+    videos = strip_videos(package, rewritten)
+    removed = {video["part"] for video in videos}
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as out:
-        for name in sorted(package.names):
+        for name in sorted(package.names - removed):
             out.writestr(name, rewritten.get(name) or package.read(name))
 
     return {
@@ -554,6 +734,7 @@ def render(package: Package, destination: Path) -> dict:
             for (original, replacement), count in sorted(applied.items())
         ],
         "rewrittenParts": sorted(rewritten),
+        "videosRemoved": videos,
     }
 
 

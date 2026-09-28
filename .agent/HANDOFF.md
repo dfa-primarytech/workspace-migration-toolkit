@@ -2,6 +2,35 @@
 
 - Agent: Claude Code / QuietHeron (platform)
 - Date: 2026-09-28
+- Branch: `feat/strip-video-for-slides`, based on main `1b5efa6`
+- Objective: #36 step 2. Take embedded video out of a deck before it goes to Google, so large decks fit Slides' 100 MB conversion limit and upload faster.
+- Files changed: `app/workspace_toolkit/pptx.py` (`strip_videos` and helpers, called from `render`; a `video_saved_separately` analysis warning), `google.py` (`videos_removed_warnings`, `conversion.videosRemoved`), `web.py` (import-limit warning judged on the converted file); `tests/platform/test_pptx_video.py` (new, 12 tests), `test_pptx_validity.py` (new, LibreOffice), `test_web.py` (one test); `.github/workflows/pptx-validity.yml` (new); `docs/platform.md`; this file.
+- Completed:
+  - **What is removed.** A video part goes if every relationship to it is a video or `p14:media` one. Its relationships, its `a:videoFile` / `p14:media` markup (and a `p:ext` / `p:extLst` / `p:childTnLst` left empty), and the `p:video` timing nodes that target its shape are removed too.
+  - **What stays.** The picture element and its poster frame, so the slide shows a still image.
+  - **How it's edited.** As bytes, like the font rewrite. Each edited part is re-parsed and checked: every picture must survive and no removed id may remain referenced. A part that fails the check keeps its video.
+  - **Audio is untouched,** because transition sounds share the same relationships.
+- Checks:
+  - Platform 346 passed, 9 skipped (main: 334 and 8). The extra skip is the LibreOffice check, which runs in CI.
+  - Ruff clean; mypy reports no issues in 17 files.
+  - A reference-integrity test checks that every `r:*` attribute resolves and every internal target exists after stripping.
+  - The import-limit test was confirmed to depend on stripping: without it, the converted deck is exactly the source size.
+- Known failures: none locally.
+- Unresolved:
+  - "Slides does not import embedded video" is from `docs/research.md` and not observed live.
+  - No real PowerPoint deck with video has been through this. The fixtures are hand-written in PowerPoint's shape, including the 2007 link-only form.
+  - Orphan video parts (with no relationship to them) are not removed.
+  - The Drive copy of a video is the only one the conversion makes once the video is stripped; `removed_video_not_saved` says so if it fails.
+- Decisions: video is stripped unconditionally, not only for large decks, because Google drops it anyway.
+- Next task: #36 step 3 (opt-in picture compression), which needs the human's sign-off and a UI choice.
+- Warnings: `docx-validity.yml` says a skipped test fails the job, but its flags only report skips. The new `pptx-validity.yml` enforces it by checking the summary line. The DOCX workflow is the DOCX stream's and was not changed.
+
+---
+
+## Previous handoff
+
+- Agent: Claude Code / QuietHeron (platform)
+- Date: 2026-09-28
 - Branch: `feat/no-upload-size-limit`, based on main `b5a116d`
 - Objective: #36 step 1. The human wants no file size limit that staff can see: a "25 MB" line on the page made staff assume their files wouldn't convert.
 - Files changed: `app/workspace_toolkit/config.py`, `package.py`, `jobs.py`, `worker.py`, `web.py`, `google.py` (`download`), `cli.py`, `server.py` (Hypercorn), `static/app.js`; `pyproject.toml`, `requirements.lock`, `requirements-dev.lock`; `deploy/cloud-run.example.yaml`; `docs/platform.md`; `tests/platform/test_preflight.py`, `test_web.py`.

@@ -629,6 +629,55 @@ async def save_assets(
         )
 
 
+def videos_removed_warnings(videos: list[dict], manifest: dict, report: dict) -> list[dict]:
+    """What to tell a person about videos taken out before upload (issue #36).
+
+    Once a video is taken out, its copy in the conversion folder is the only
+    one the conversion made -- so a copy that failed is not a missed safety
+    net, as for other assets, but a video the person must fetch themselves.
+    """
+    if not videos:
+        return []
+    by_part = {
+        part: asset["id"] for asset in manifest["assets"].values() for part in asset["sourceParts"]
+    }
+    saved = {output["assetId"] for output in report.get("assetOutputs", [])}
+    missing = [video["part"] for video in videos if by_part.get(video["part"]) not in saved]
+    total = sum(video["bytes"] for video in videos)
+    plural = len(videos) != 1
+    where = (
+        ""
+        if missing
+        else f", and {'the videos are' if plural else 'the video is'} in the conversion folder"
+    )
+    notes = [
+        warning(
+            "videos_removed",
+            f"{len(videos)} embedded video{'s' if plural else ''} "
+            f"({total / 1_000_000:,.1f} MB) {'were' if plural else 'was'} not sent "
+            "to Google, which does not import embedded video. "
+            f"{'Each slide shows its' if plural else 'The slide shows the'} video's still image"
+            f"{where}.",
+            classification=C.IGNORED,
+            count=len(videos),
+            bytes=total,
+        )
+    ]
+    if missing:
+        notes.append(
+            warning(
+                "removed_video_not_saved",
+                f"{len(missing)} video{'s' if len(missing) != 1 else ''} could not be saved "
+                "to the conversion folder, so the converted presentation has only "
+                f"{'their' if len(missing) != 1 else 'its'} still image. The video is still "
+                "in your original file.",
+                classification=C.UNSUPPORTED,
+                parts=missing,
+            )
+        )
+    return notes
+
+
 async def convert(
     root: Path,
     manifest: dict,
@@ -670,9 +719,12 @@ async def convert(
         render_report = root / "result" / "render.json"
         if render_report.exists():
             rendered_details = json.loads(render_report.read_text(encoding="utf-8"))
+            videos = rendered_details.get("videosRemoved", [])
             report["conversion"] = {
-                "fontSubstitutions": rendered_details.get("fontSubstitutions", [])
+                "fontSubstitutions": rendered_details.get("fontSubstitutions", []),
+                "videosRemoved": videos,
             }
+            report["warnings"].extend(videos_removed_warnings(videos, manifest, report))
         report["verification"] = "page_size_count_and_text_checked"
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:

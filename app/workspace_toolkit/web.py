@@ -44,7 +44,7 @@ def import_limit_warning(key: str, size: int) -> list[dict]:
     return [
         warning(
             "beyond_import_limit",
-            f"This file is {size / 1_000_000:,.0f} MB. Google's published limit for "
+            f"The file sent to Google would be {size / 1_000_000:,.0f} MB. Google's published limit for "
             f"converting a file to {product} is {limit // 1_000_000} MB, so Google is "
             "likely to refuse it.",
             classification=C.UNSUPPORTED,
@@ -281,7 +281,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 )
 
                             manifest = await preflight(root, settings, pipeline.fmt)
-                            beyond = import_limit_warning(pipeline.fmt.key, size)
+                            # What Google receives: for a deck, without its video.
+                            sent = root / "result" / ("converted" + pipeline.fmt.suffix)
+                            beyond = import_limit_warning(
+                                pipeline.fmt.key, sent.stat().st_size if sent.exists() else size
+                            )
                             if not do_convert:
                                 analysis = pipeline.analysis_report(manifest)
                                 analysis.setdefault("warnings", []).extend(beyond)
