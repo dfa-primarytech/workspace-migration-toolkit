@@ -181,13 +181,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 409,
                             )
                         async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-                            return await pipeline.convert(
+                            google = Google(session["access_token"], client)
+                            report = await pipeline.convert(
                                 root,
                                 manifest,
-                                Google(session["access_token"], client),
+                                google,
                                 progress,
                                 original_name=Path(filename).stem,
                             )
+                            # Added here rather than in each pipeline, so every
+                            # format reports what happened in Drive the same way.
+                            report.setdefault("warnings", []).extend(google.warnings)
+                            return report
                 except TimeoutError:
                     if progress.get("folderUrl"):
                         progress.update(

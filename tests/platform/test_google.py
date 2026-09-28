@@ -7,7 +7,14 @@ import httpx
 import pytest
 from workspace_toolkit.config import Settings
 from workspace_toolkit.errors import ToolkitError
-from workspace_toolkit.google import Google, asset_names, convert, google_text, verify
+from workspace_toolkit.google import (
+    LIBRARY,
+    Google,
+    asset_names,
+    convert,
+    google_text,
+    verify,
+)
 from workspace_toolkit.package import PPTX_MIME
 from workspace_toolkit.pptx import analyse, render_path
 
@@ -293,6 +300,8 @@ def test_the_library_folder_is_created_once_when_it_is_missing():
     first_run = [
         lambda r: httpx.Response(200, json={"files": []}),
         lambda r: httpx.Response(200, json={"id": "library-new"}),
+        # The search again, after creating it: only ours is there.
+        lambda r: httpx.Response(200, json={"files": [{"id": "library-new"}]}),
         lambda r: httpx.Response(200, json={"id": "job-1"}),
     ]
 
@@ -306,6 +315,91 @@ def test_the_library_folder_is_created_once_when_it_is_missing():
         assert created[1]["parents"] == ["library-new"]
 
     asyncio.run(run())
+
+
+class Drive:
+    """A stateful Drive stand-in for folders. Every call yields to the event
+    loop first, the way a real network call does, so concurrent jobs
+    interleave between the search and the create."""
+
+    def __init__(self, elsewhere=None):
+        self.folders = []  # (id, name, parent), oldest first
+        self.calls = []
+        # Another instance creating a library just as this one does.
+        self.elsewhere = elsewhere
+
+    async def handler(self, request):
+        await asyncio.sleep(0)
+        self.calls.append(request)
+        if request.method == "GET":
+            size = int(request.url.params["pageSize"])
+            ids = [f[0] for f in self.folders if f[1] == LIBRARY and f[2] is None]
+            return httpx.Response(200, json={"files": [{"id": i} for i in ids[:size]]})
+        body = json_body(request)
+        parent = (body.get("parents") or [None])[0]
+        if parent is None and self.elsewhere:
+            self.folders.append((self.elsewhere, LIBRARY, None))
+            self.elsewhere = None
+        folder_id = f"folder-{len(self.folders) + 1}"
+        self.folders.append((folder_id, body["name"], parent))
+        return httpx.Response(200, json={"id": folder_id})
+
+    def libraries(self):
+        return [f[0] for f in self.folders if f[1] == LIBRARY and f[2] is None]
+
+
+def test_two_conversions_at_once_share_one_library_folder():
+    """Issue #70: both jobs searched, both missed, and both created a library."""
+    drive = Drive()
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(drive.handler)) as client:
+            one, two = Google("test-token", client), Google("test-token", client)
+            jobs = await asyncio.gather(one.folder("First"), two.folder("Second"))
+        return jobs, one.warnings + two.warnings
+
+    jobs, warnings = asyncio.run(run())
+    assert len(drive.libraries()) == 1, drive.folders
+    parents = {f[2] for f in drive.folders if f[0] in jobs}
+    assert parents == set(drive.libraries()), "both jobs belong in the one library"
+    assert warnings == []
+
+
+def test_a_library_made_elsewhere_at_the_same_moment_wins_and_is_reported():
+    """The lock cannot reach another instance, so the re-check is what finds it."""
+    drive = Drive(elsewhere="library-older")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(drive.handler)) as client:
+            google = Google("test-token", client)
+            job = await google.folder("Worksheet")
+        return job, google.warnings
+
+    job, warnings = asyncio.run(run())
+    assert drive.libraries() == ["library-older", "folder-2"]
+    assert next(f[2] for f in drive.folders if f[0] == job) == "library-older"
+    assert [w["code"] for w in warnings] == ["library_duplicated"]
+    assert all(c.method in {"GET", "POST"} for c in drive.calls), "nothing moved or deleted"
+
+
+def test_a_failed_recheck_keeps_the_folder_it_made():
+    responses = [
+        lambda r: httpx.Response(200, json={"files": []}),
+        lambda r: httpx.Response(200, json={"id": "library-new"}),
+        lambda r: httpx.Response(500),
+        lambda r: httpx.Response(200, json={"id": "job-1"}),
+    ]
+
+    async def run():
+        calls, transport = transport_calls(responses)
+        async with httpx.AsyncClient(transport=transport) as client:
+            google = Google("test-token", client)
+            await google.folder("Worksheet")
+        return calls, google.warnings
+
+    calls, warnings = asyncio.run(run())
+    assert json_body(calls[-1])["parents"] == ["library-new"]
+    assert warnings == []
 
 
 def test_a_throttled_asset_copy_is_retried_until_it_lands(tmp_path, monkeypatch):

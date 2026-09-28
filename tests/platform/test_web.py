@@ -243,3 +243,35 @@ def test_convert_refuses_a_sign_in_that_would_expire_mid_job(pptx):
     assert (
         client.post("/api/analyse", content=pptx.read_bytes(), headers=headers).status_code == 200
     )
+
+
+def test_what_happened_in_drive_reaches_the_report(monkeypatch, pptx):
+    """Issue #70: a duplicate library folder is reported whichever format ran."""
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    async def analysed(root, settings, fmt):
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        google.warnings.append({"code": "library_duplicated", "message": "two folders"})
+        return {"status": "completed", "warnings": [{"code": "own"}]}
+
+    pipeline = replace(resolve("x.pptx"), convert=converted)
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: pipeline)
+    client = signed_client(configured())
+    response = client.post(
+        "/api/convert",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Source-SHA256": "abc",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert [w["code"] for w in response.json()["warnings"]] == ["own", "library_duplicated"]
