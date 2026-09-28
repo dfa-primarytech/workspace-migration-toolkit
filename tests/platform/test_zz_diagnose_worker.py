@@ -40,7 +40,7 @@ def test_diagnose_the_worker_on_this_deck(tmp_path):
     for mode in ("unlimited", "limited"):
         out = tmp_path / mode
         out.mkdir()
-        run = subprocess.run(
+        run = subprocess.run(  # noqa: S603 -- fixed argv, temporary diagnostic
             [sys.executable, "-c", SCRIPT, str(source), str(out), mode],
             capture_output=True,
             text=True,
