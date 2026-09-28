@@ -18,6 +18,25 @@ from .pptx import render_path as render_pptx
 ANALYSERS = {"pptx": analyse_pptx, "docx": analyse_docx}
 
 
+def limit(name: str, value: int) -> None:
+    """Caps this process, never above a cap it already has.
+
+    A process can lower its own limits but never raise them, so asking for
+    more than an inherited hard limit fails -- and since the memory cap grows
+    with the file, a large file would then fail where a small one passed. An
+    environment that is already stricter keeps its own, stricter limit.
+    """
+    if sys.platform == "win32":  # no OS resource limits there
+        return
+    import resource
+
+    kind = getattr(resource, name)
+    _, hard = resource.getrlimit(kind)
+    if hard != resource.RLIM_INFINITY:
+        value = min(value, hard)
+    resource.setrlimit(kind, (value, value))
+
+
 def main() -> None:
     source, output, config = map(Path, sys.argv[1:4])
     fmt = sys.argv[4] if len(sys.argv) > 4 else "pptx"
@@ -25,13 +44,11 @@ def main() -> None:
     settings = Settings(**json.loads(config.read_text(encoding="utf-8")))
     try:
         if sys.platform != "win32":
-            import resource
-
-            memory = settings.worker_memory_for(source.stat().st_size)
-            resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
-            resource.setrlimit(
-                resource.RLIMIT_CPU, (settings.parser_timeout + 2, settings.parser_timeout + 2)
+            limit(
+                "RLIMIT_AS",
+                settings.worker_memory_for(source.stat().st_size),
             )
+            limit("RLIMIT_CPU", settings.parser_timeout + 2)
         ANALYSERS[fmt](source, output, settings)
         if fmt == "docx":
             # Rewriting happens here too: it is the same bounded, credential-free

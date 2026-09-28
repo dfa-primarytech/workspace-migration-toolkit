@@ -24,7 +24,15 @@
   - Ruff clean; mypy reports no issues in 18 files; `pip-audit -r requirements.lock` finds no known vulnerabilities.
   - A test found a real bug before commit: the resize scale took the smaller of the two needs, so a cropped or stretched picture dropped below 220 ppi on one side. Now fixed; the test fails with the old rule.
   - Local LibreOffice 26.8 on the realistic fixture with a 3000x1688 PNG photo swapped in: after stripping and compression the package went from 7.0 MB to 0.1 MB, and the picture became a 1320x743 JPEG (6 in x 220). Both original and result render 2 slides with their text and the picture on slide 1.
-- Known failures: none locally.
+- Known failures: none.
+- **Found on the way, and fixed.** CI failed three new tests on Linux only.
+  - Reproduced on the human's Docker host (a capped container of its own, labelled `wmt-test`).
+  - Cause: `test_fonts.py` ran `worker.main()` in the pytest process, which applied the worker's OS limits to the test runner for good. Every later worker then inherited a 768 MiB hard address-space cap, and since #84 a worker asks for 768 MiB plus 2x the file. A process cannot raise a hard limit, so `setrlimit` failed and surfaced as `parse_failed`.
+  - Fixes:
+    - `worker.limit()` never asks above an inherited hard limit. This was latent in production too: a container started with tight limits would have failed every file.
+    - The font test no longer caps the runner.
+    - New Linux-only test: a worker under a stricter inherited limit still runs. It fails without the fix.
+  - Result on Linux, full suite as a non-root user: 369 passed, 10 skipped.
 - Unresolved:
   - No real image-heavy school file has been through this. Worth judging picture quality by eye on the first one.
   - Google's handling of the renamed `.jpeg` parts is not observed live.
