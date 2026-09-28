@@ -68,14 +68,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # markup a third party generates. frame-src/script-src/connect-src
         # were confirmed sufficient as originally written.
         script_src = "'self'" + (" https://apis.google.com" if settings.picker_ready else "")
-        style_src = "'self'" + (" 'unsafe-inline'" if settings.picker_ready else "")
+        # PrimaryTech brand.css @imports Source Sans 3 from Google Fonts
+        # (see brand.css's own header) -- unconditional, unlike the Picker
+        # additions below, since it isn't gated by any feature flag.
+        style_src = "'self' https://fonts.googleapis.com" + (
+            " 'unsafe-inline'" if settings.picker_ready else ""
+        )
         frame_src = " frame-src https://docs.google.com;" if settings.picker_ready else ""
         connect_src = (
             " connect-src 'self' https://www.googleapis.com;" if settings.picker_ready else ""
         )
         response.headers["Content-Security-Policy"] = (
             f"default-src 'self'; script-src {script_src}; style-src {style_src}; "
-            f"img-src 'self';{frame_src}{connect_src} frame-ancestors 'none'; "
+            f"font-src 'self' https://fonts.gstatic.com; img-src 'self';"
+            f"{frame_src}{connect_src} frame-ancestors 'none'; "
             "base-uri 'none'; form-action 'self'"
         )
         if settings.secure_cookies:
