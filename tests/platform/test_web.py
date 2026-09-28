@@ -281,9 +281,8 @@ def test_session_advertises_picker_availability():
     signed_in = signed_client(configured(picker_api_key="test-picker-key"))
     body = signed_in.get("/api/session").json()
     assert body["pickerEnabled"] is True
-    assert (
-        body["pickerApiKey"] == "test-picker-key"
-    )  # pragma: allowlist secret -- synthetic fixture
+    key = body["pickerApiKey"]
+    assert key == "test-picker-key"  # pragma: allowlist secret -- synthetic fixture
     not_configured = signed_client(configured())
     body = not_configured.get("/api/session").json()
     assert body["pickerEnabled"] is False
