@@ -1,5 +1,89 @@
 # Current state
 
+## First run against live Google, 23 September 2026
+
+The toolkit ran end to end against a real Google account for the first time:
+a real Word worksheet was converted to a Google Doc through the app's own
+`/api/convert`, not by hand. Three things came out of it.
+
+**The font fix holds.** Every family resolved `AVAILABLE` with no replacement,
+against 1,476 substitutions the same worksheet drew before #30.
+
+**Three upload defects, now fixed.** 27 of 65 private asset copies uploaded and
+the 28th was refused; that one refusal abandoned the other 37, skipped the
+document's own verification, and reported a good conversion as failed. The
+failing status was also discarded before it reached the report, so the cause
+could not be read off it afterwards. Retries, per-asset tolerance and a
+preserved failure detail are in `fix/asset-upload-resilience`.
+
+**Every run made a new top-level folder.** There is now one `Workspace
+conversions` library with a dated subfolder per job. Found by the human.
+
+Still unmeasured: whether the offsets of in-cell floating images survive, and
+whether Google de-duplicates images stacked at identical offsets. The latter
+is the standing explanation for 12 lost image placements and is not yet tested.
+
+**Only what the import drops is copied, and it is named.** Every picture in
+a document was being copied out beside it: 65 photographs became 65 uploads,
+65 files to scroll past and 65 chances to be throttled, for pictures the
+importer had already carried in safely. Only embedded audio, video, OLE
+objects and picture formats no browser draws are copied now -- which was the
+original point of the copies. Corrected by the human.
+
+The copies that remain are named. Every private copy went to Drive as a
+bare SHA-256 with no extension, which made the safety net unusable: putting a
+picture back into a deck by hand means knowing which slide wanted it. Copies are
+now named `<source> - slide NN - image N.ext`, numbered in deck order, with the
+slide numbers zero-padded so the folder sorts the way the deck runs. A document
+gets no page number, because nothing in a `.docx` manifest links an asset to a
+page and its `pages` are section breaks rather than printed pages. The asset id
+moves into the report beside the name, so a file in Drive can still be matched
+to the manifest. Asked for by the human.
+
+
+## The worksheet, measured end to end, 23 September 2026
+
+The Place Value worksheet was run through the converter locally and its output
+inspected element by element, rather than judged from the report. That is how
+every item below was found, and it is the method the next person should use.
+
+**The report could not measure its own repairs.** `picturesInlined`,
+`tablesNarrowed` and `picturesShrunk` were dropped twice on the way out -- by the
+per-part aggregation and again by the report's filter -- so a run made
+specifically to measure #34 and #35 reported none of them. Fixed in #41 along
+with `fontSubstitutions`, which meant a typeface was being swapped in silence.
+
+**Every table claimed a width its grid had lost.** Word wrote `w:tblW` as
+`11504.0`; the schema allows a decimal and `int()` does not, so the width
+measured as nothing and survived a narrowing that moved every column under it.
+All twelve tables declared themselves three quarters of an inch wider than the
+paper. #41.
+
+**Where the pictures actually were.** Of 136 anchored pictures, 83 were already
+inside a cell and #34 had inlined them. The other 45 were anchored to the
+*paragraph above* the table they belonged to. #57 and #63 place all 45: the
+column is exact from the grid, the row comes from the order the pictures are
+stacked in, and a page-relative offset is resolved against the margin. The
+worksheet now has nothing floating at all -- 128 inline pictures, all in cells.
+
+**Two fixes can collide.** #42's blank lines and #34's inlining both supply the
+same vertical space: 32 cells carried 9.7in of blank lines on top of 63.8in of
+picture. #60 lifts the protection only in a cell that has just gained a picture.
+This is the kind of defect that only appears when two correct changes meet, and
+only on a real document.
+
+**What the reference document does not prove.** The hand-repaired worksheet
+keeps 128 floating anchors and zero inline pictures. It was judged correct as a
+**PDF**, where absolute positioning renders exactly. That says nothing about the
+Google Docs importer, which is where the problem is. Do not copy its approach.
+
+Still true, and the thing most worth fixing next: **nobody has looked at the
+converted output**. Every quality judgement so far has come from the human's
+eyes. #53 is the structural answer and is blocked on a live scope spike --
+whether `drive.file` reaches `documents.get` and `files.export` on a file this
+app created. Nothing has been verified there yet.
+
+
 ## Coordination
 
 SilentMountain coordinated until 23 September 2026 and has run out of budget.
@@ -104,7 +188,7 @@ permissions problem** -- that session signs in as Scrappy995, which already hold
 write, and Codex pushes fine as the same account. See BACKLOG item 2.
 
 #12 has now been built and tested on Linux CI, and all five checks are green.
-The container build passes and runs the 92 C++ unit tests on a clean Ubuntu
+The container build passes and runs the C++ unit tests on a clean Ubuntu
 base during the image build. Two CI failures were found and fixed on the way,
 both in platform-owned files that the Publisher session could not have reached:
 `.dockerignore` excluded `**` and re-included only the platform image's files,
@@ -118,15 +202,27 @@ and the parser reproduced every expected count with zero diagnostics: 4 pages at
 text insertions, 12 image placements over 11 deduplicated assets, one 1x3 table,
 two paths, one rendering layer and three fonts. It runs locally only -- the
 document is a real school booklet and must never be committed -- so the CI job
-reports NOT RUN ON CI rather than claiming a pass. 92 C++ tests and 55 Python
-tests pass with the fixture supplied; 22 skip without it.
+reports NOT RUN ON CI rather than claiming a pass. 55 Python tests pass with
+the fixture supplied; 22 skip without it. The C++ suite is now 107 tests.
+The Publisher font audit (`docs/publisher-font-audit.md`) found that a `.pub`
+yields font names only, except for embedded EOT fonts, and that PUB-001's
+Sassoon names miss the shared service's keys -- a miss that currently also
+prevents an automatic handwriting-font substitution.
 
-What remains unverified for Publisher is breadth, not depth: only one real
-document has been parsed. PUB-001 contains no authored group, no
-`drawGraphicObject`, no master page, no metafile image, no embedded font, no
-list, no link and no rotated object. Those paths have synthetic callback tests
-only. PUB-002 onwards are the next real dependency, and #12 stays draft until
-then.
+#12 has merged. What remains unverified for Publisher is breadth, not depth:
+only one real document has been parsed.
+
+**Reading libmspub 0.1.4's source changed the picture (2026-09-23).** It never
+calls `openGroup`, `startMasterPage`, the list callbacks, `openLink` or
+`insertField`. It emits authored groups as layers, folds rotation and flips of
+everything but text into the outline, paints master content into every page, and
+calls `drawGraphicObject` only for BorderArt tiles. The parser now models all of
+that (layers classified at close, rotation recovered from outlines, flips and
+border art flagged), and the "a layer is never a group" decision is superseded.
+See DECISIONS.md and `docs/publisher-parser.md`. **PUB-001 acceptance must be
+re-run locally**, because its one layer is asserted to be a wrapper.
+Lists, links and fields are not recoverable from a `.pub` at all through this
+library.
 
 Live OAuth, real Google conversion and visual fidelity remain unverified for
 both PPTX and DOCX. Every Google interaction is covered by test doubles only.

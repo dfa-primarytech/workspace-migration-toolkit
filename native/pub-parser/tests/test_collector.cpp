@@ -80,6 +80,8 @@ TEST(collector_preserves_callback_order_and_counts) {
   CHECK(doc.pages[0].endEventIndex > doc.elements[2].eventIndex);
 }
 
+// The openGroup half is not reachable from a .pub: libmspub 0.1.4 emits authored
+// groups as layers (see test_libmspub_shapes.cpp).
 TEST(collector_distinguishes_wrappers_from_authored_groups) {
   IrCollector collector;
   collector.startDocument(RVNGPropertyList());
@@ -106,6 +108,8 @@ TEST(collector_distinguishes_wrappers_from_authored_groups) {
   CHECK_EQ(std::string(compatibilityName(groups[0]->compatibility)), std::string("NATIVE"));
 }
 
+// Not reachable from a .pub: libmspub 0.1.4 never emits this callback (see
+// test_libmspub_shapes.cpp). Kept because the IR is source-independent.
 TEST(collector_records_parent_references) {
   IrCollector collector;
   collector.startDocument(RVNGPropertyList());
@@ -167,6 +171,8 @@ TEST(collector_reports_mismatched_container_nesting) {
   CHECK(hasDiagnostic(doc, "unbalanced-nesting"));
 }
 
+// Not reachable from a .pub: libmspub 0.1.4 never emits this callback (see
+// test_libmspub_shapes.cpp). Kept because the IR is source-independent.
 TEST(collector_records_master_pages_separately) {
   IrCollector collector;
   collector.startDocument(RVNGPropertyList());

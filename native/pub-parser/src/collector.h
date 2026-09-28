@@ -129,6 +129,10 @@ private:
   void drawShape(const char *callback, const std::string &shapeKind,
                  const librevenge::RVNGPropertyList &props, long long eventIndex);
   void readGeometry(Element &element, const librevenge::RVNGPropertyList &props);
+  void readRectangleOrientation(Element &element, const std::vector<Point2> &pts);
+  // Decides, when a layer closes, whether it is one shape painted in
+  // several passes or an authored group; libmspub uses startLayer for both.
+  void classifyLayer(Element &layer);
   bool boundsFromProps(const librevenge::RVNGPropertyList &props, Bounds &out);
   Bounds boundsFromPoints(const std::vector<Point2> &points);
   void recordAssetUse(Element &element, const std::string &assetId);

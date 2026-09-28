@@ -16,13 +16,19 @@
    Then validate a controlled real PPTX and a real DOCX end to end locally, before any
    Cloud Run deployment.
 5. Enrich missing media where verified mapping is possible; report every unresolved item.
-6. Collect PUB-002 onwards. PUB-001 acceptance passes, but it is one clean
-   document: it has no authored group, no `drawGraphicObject`, no master page,
-   no metafile image, no embedded font, no list, no link and no rotation, so
-   those adapter paths have synthetic tests only.
+6. Collect PUB-002 onwards, and re-run PUB-001 locally after the layer
+   classification change. The constructs libmspub really emits (groups as
+   layers, rotated, flipped and cropped pictures, BorderArt, master content
+   repeated per page) are now tested against its source, but not yet against a
+   real file. Documents with each of those are the evidence most worth having.
 7. Publisher → Google Slides renderer, only after that breadth exists
    (PROJECT.md section 38 stop point).
 8. XLSX preflight and import.
+8a. Shared font service (owner's decision, see `docs/publisher-font-audit.md`):
+   decide how handwriting and early-reading families are treated before widening
+   name matching to run-together names such as `SassoonPrimaryInfant`. Publisher:
+   an optional EOT header reader for embedded-font metadata, and a symbol-font
+   signal once a real file shows how libmspub decodes symbol text.
 9. Resolve DOCX fonts properly before wiring the shared substitution service.
    `docx.fonts()` reads literal `w:rFonts` values only, so a document using
    Word's **default theme fonts reports no fonts at all**, as does one whose

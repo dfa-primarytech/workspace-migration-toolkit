@@ -186,6 +186,12 @@ struct Element {
   std::string shapeKind; // rectangle, ellipse, polygon, polyline, connector, path
   bool hasGeometry = false;
   bool polygonIsRectangular = false;
+  // Internal to classification; not serialised. libmspub folds a shape's
+  // rotation and flips into its outline instead of reporting them, so a
+  // rotated picture arrives as a rotated rectangle and a flipped one as a
+  // rectangle wound the other way. See readGeometry.
+  bool outlineIsRotatedRectangle = false;
+  bool outlineIsMirrored = false;
   std::vector<Point2> points;
   std::vector<PathCommand> path;
 

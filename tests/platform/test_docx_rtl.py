@@ -211,14 +211,15 @@ def test_a_box_that_says_nothing_follows_its_anchor(tmp_path):
     )
 
 
-def test_an_empty_box_takes_its_direction_from_where_it_is_anchored(tmp_path):
-    """OOXML requires a paragraph in every cell, so we supply one.
+def test_an_empty_box_is_not_converted_at_all(tmp_path):
+    """Nothing to make editable, so nothing to build.
 
-    It is ours, not the author's, so nothing gives it a direction -- and an
-    empty text box carries no paragraph to read one from either. The anchoring
-    paragraph is then the only evidence available. Left bare in a
-    right-to-left document the cell reads left to right, putting the paragraph
-    mark and the caret on the wrong side.
+    This used to check that the filler paragraph of an empty box's cell took
+    its direction from the anchor. That case cannot arise now: a real
+    worksheet turned out to carry four empty boxes of a quarter-inch square,
+    left behind by editing, and converting them produced four floating tables
+    holding nothing. An empty box is skipped, so there is no cell and no
+    filler to give a direction to.
     """
     empty = TEXTBOX.replace("<w:p><w:r><w:t>Card text</w:t></w:r></w:p>", "")
     body = (
@@ -227,14 +228,8 @@ def test_an_empty_box_takes_its_direction_from_where_it_is_anchored(tmp_path):
         + final_section()
     )
     root, report = transform_body(tmp_path, body)
-    assert report["textboxes"] == 1
-
-    cell = root.find(".//" + q("w", "tc"))
-    paragraphs = cell.findall(q("w", "p"))
-    assert paragraphs, "the cell has no paragraph at all, which is invalid"
-    assert any(p.find(f"{q('w', 'pPr')}/{q('w', 'bidi')}") is not None for p in paragraphs), (
-        "the cell's own filler paragraph reads left to right inside a right-to-left document"
-    )
+    assert report["textboxes"] == 0, "an empty box was reported as converted"
+    assert root.find(".//" + q("w", "tbl")) is None, "an empty box produced a table"
 
 
 def test_a_table_separator_reads_the_same_way_as_its_neighbours(tmp_path):

@@ -11,6 +11,13 @@ class Settings:
     max_expanded_bytes: int = 200 * 1024 * 1024
     max_entry_bytes: int = 50 * 1024 * 1024
     max_xml_bytes: int = 8 * 1024 * 1024
+    # Elements in one XML part, counted while it is parsed. Word writes about
+    # 38 bytes of XML per element, so an 8 MiB part holds about 220,000 and
+    # max_xml_bytes is the limit a real document meets first. This one only
+    # catches markup far denser than any Office application writes -- which
+    # would otherwise cost about 350 bytes of memory per element. Raise the
+    # two together (issues #36 and #46).
+    max_xml_elements: int = 500_000
     max_entries: int = 5000
     max_compression_ratio: int = 200
     parser_timeout: int = 30

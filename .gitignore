@@ -7,6 +7,19 @@
 *.xls
 *.pub
 *.pdf
+# OpenDocument: a LibreOffice round-trip produces these, and a school
+# migrating away from one suite often has both.
+*.odt
+*.ods
+*.odp
+# Still common in older school documents.
+*.rtf
+# The highest risk of the lot. A management-information export is a CSV, and
+# the ones a school holds are pupil records.
+*.csv
+# Saved mail carries names and addresses in the headers alone.
+*.eml
+*.msg
 samples/
 
 # clasp

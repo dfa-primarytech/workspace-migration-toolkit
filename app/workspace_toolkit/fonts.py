@@ -33,6 +33,48 @@ class Substitution:
     manual_review: bool = False
 
 
+# Families Google Docs ships itself. Measured on 2026-09-23 by converting a
+# document naming each one, exporting the result as PDF and reading which
+# fonts the renderer actually used: a family that came back under its own name
+# is present, one replaced by something we never asked for is not.
+#
+# This matters more than it sounds. The substitution table below was built on
+# the assumption that Microsoft's families are absent from Google Docs, and for
+# most of them that assumption is simply false. Replacing a font Docs already
+# has costs the author's choice and buys nothing -- the document arrives in a
+# typeface nobody picked.
+#
+# Measured in one tenant. Availability can differ by Workspace edition, so this
+# is evidence rather than a guarantee; a family wrongly listed here is left
+# alone, which is the safe direction to be wrong in.
+DOCS_NATIVE = frozenset(
+    {
+        "Arial",
+        "Arial MT",
+        "Book Antiqua",
+        "Calibri",
+        "Calibri Light",
+        "Cambria",
+        "Cambria Math",
+        "Century Gothic",
+        "Comic Sans MS",
+        "Consolas",
+        "Courier New",
+        "Franklin Gothic",
+        "Franklin Gothic Medium",
+        "Garamond",
+        "Georgia",
+        "Impact",
+        "Palatino Linotype",
+        "Tahoma",
+        "Times New Roman",
+        "Times New Roman PS MT",
+        "Trebuchet MS",
+        "Verdana",
+    }
+)
+
+
 # This is intentionally a compact, reviewed catalogue rather than a stale copy
 # of every Google Font.  Families are added when a source mapping or fixture
 # needs them.  Availability in Docs/Slides still needs live verification.
@@ -71,32 +113,6 @@ GOOGLE_FONT_CANDIDATES = frozenset(
 # Exact metric-compatible families come first.  The remaining entries preserve
 # broad proportions and teaching intent, but are explicitly reviewable.
 SUBSTITUTIONS: dict[str, Substitution] = {
-    "arial": Substitution("Arimo", Confidence.HIGH, "metric-compatible Arial alternative", True),
-    "arial mt": Substitution("Arimo", Confidence.HIGH, "metric-compatible Arial alternative", True),
-    "times new roman": Substitution(
-        "Tinos", Confidence.HIGH, "metric-compatible Times New Roman alternative", True
-    ),
-    "times new roman ps mt": Substitution(
-        "Tinos", Confidence.HIGH, "metric-compatible Times New Roman alternative", True
-    ),
-    "courier new": Substitution(
-        "Cousine", Confidence.HIGH, "metric-compatible Courier New alternative", True
-    ),
-    "calibri": Substitution(
-        "Carlito", Confidence.HIGH, "metric-compatible Calibri alternative", True
-    ),
-    "calibri light": Substitution(
-        "Carlito", Confidence.HIGH, "metric-compatible Calibri family alternative", True
-    ),
-    "cambria": Substitution(
-        "Caladea", Confidence.HIGH, "metric-compatible Cambria alternative", True
-    ),
-    "cambria math": Substitution(
-        "Caladea",
-        Confidence.LOW,
-        "Cambria text alternative; mathematical glyphs require review",
-        manual_review=True,
-    ),
     "aptos": Substitution("Carlito", Confidence.MEDIUM, "similar humanist Office sans serif"),
     "aptos display": Substitution(
         "Carlito", Confidence.MEDIUM, "similar humanist Office sans serif"
@@ -105,36 +121,10 @@ SUBSTITUTIONS: dict[str, Substitution] = {
         "Roboto", Confidence.LOW, "portable sans serif; width requires review", manual_review=True
     ),
     "segoe ui": Substitution("Inter", Confidence.MEDIUM, "similar screen-oriented sans serif"),
-    "verdana": Substitution("Open Sans", Confidence.MEDIUM, "wide, readable screen sans serif"),
-    "tahoma": Substitution("Noto Sans", Confidence.MEDIUM, "compact screen sans serif"),
-    "trebuchet ms": Substitution("Lato", Confidence.MEDIUM, "humanist sans serif"),
-    "century gothic": Substitution(
-        "Montserrat", Confidence.MEDIUM, "geometric sans serif often used in school resources"
-    ),
-    "franklin gothic": Substitution(
-        "Libre Franklin", Confidence.MEDIUM, "related grotesque sans serif"
-    ),
-    "franklin gothic medium": Substitution(
-        "Libre Franklin", Confidence.MEDIUM, "related grotesque sans serif"
-    ),
-    "georgia": Substitution("Merriweather", Confidence.MEDIUM, "screen-readable serif"),
-    "garamond": Substitution("EB Garamond", Confidence.HIGH, "same historical type family"),
     "baskerville": Substitution(
         "Libre Baskerville", Confidence.HIGH, "same historical type family"
     ),
-    "book antiqua": Substitution("Libre Baskerville", Confidence.MEDIUM, "traditional text serif"),
-    "palatino linotype": Substitution(
-        "Libre Baskerville", Confidence.MEDIUM, "traditional text serif"
-    ),
     "rockwell": Substitution("Roboto Slab", Confidence.MEDIUM, "slab serif"),
-    "impact": Substitution("Anton", Confidence.MEDIUM, "condensed display sans serif"),
-    "consolas": Substitution("Roboto Mono", Confidence.MEDIUM, "screen-oriented monospace"),
-    "comic sans ms": Substitution(
-        "Comic Neue", Confidence.HIGH, "open comic-style family designed as an alternative"
-    ),
-    "comic sans": Substitution(
-        "Comic Neue", Confidence.HIGH, "open comic-style family designed as an alternative"
-    ),
     "bradley hand itc": Substitution(
         "Patrick Hand", Confidence.MEDIUM, "informal classroom handwriting"
     ),
@@ -180,12 +170,25 @@ def normalise_family(family: str) -> str:
 
 
 _GOOGLE_BY_KEY = {normalise_family(name): name for name in GOOGLE_FONT_CANDIDATES}
+_NATIVE_BY_KEY = {normalise_family(name): name for name in DOCS_NATIVE}
 
 
 def compatibility(family: str) -> dict[str, object]:
     """Return a deterministic recommendation without silently inventing one."""
     original = " ".join(family.strip().strip("'\"").split())
     key = normalise_family(family)
+    # Checked before any substitution: a family Docs already has must never be
+    # replaced, whatever mapping might once have existed for it.
+    if key in _NATIVE_BY_KEY:
+        return {
+            "name": original,
+            "status": FontStatus.AVAILABLE,
+            "replacement": None,
+            "confidence": Confidence.HIGH,
+            "basis": "measured-present-in-google-docs",
+            "workspaceAvailability": "measured-2026-09-23",
+            "manualReview": False,
+        }
     if key in _GOOGLE_BY_KEY:
         return {
             "name": original,

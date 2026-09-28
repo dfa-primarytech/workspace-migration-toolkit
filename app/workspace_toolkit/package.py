@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import posixpath
 import stat
 import zipfile
@@ -170,6 +171,7 @@ class Package:
             ):
                 raise ToolkitError("zip_limits", "The expanded file exceeds processing limits.")
             self.names.add(name)
+        self._by_casefold = {name.casefold(): name for name in self.names}
         fmt = self.format
         if "[Content_Types].xml" not in self.names or fmt.main_part not in self.names:
             raise ToolkitError("invalid_package", f"The file is not a valid {fmt.key} package.")
@@ -220,15 +222,29 @@ class Package:
         return data
 
     def xml(self, name: str) -> Element:
+        data = self.read(name, self.settings.max_xml_bytes)
+        limit = self.settings.max_xml_elements
+        root: Element | None = None
         try:
-            root = SafeET.fromstring(self.read(name, self.settings.max_xml_bytes), forbid_dtd=True)
-            if sum(1 for _ in root.iter()) > 100000:
-                raise ToolkitError("xml_limit", "A file component is too complex.")
-            return root
+            # Counted as the parser goes, so an over-limit part is refused
+            # before its whole tree is in memory rather than after.
+            events = SafeET.iterparse(io.BytesIO(data), events=("start",), forbid_dtd=True)
+            for count, (_, element) in enumerate(events, start=1):
+                if root is None:
+                    root = element
+                if count > limit:
+                    raise ToolkitError(
+                        "xml_limit",
+                        f"A part of this file has more than {limit:,} elements, the most "
+                        "the converter processes. Very long documents can reach this.",
+                    )
         except (SafeET.ParseError, DefusedXmlException) as exc:
             raise ToolkitError(
                 "invalid_xml", "The file contains unsafe or damaged markup."
             ) from exc
+        if root is None:  # an empty part is a parse error, so this is defensive
+            raise ToolkitError("invalid_xml", "The file contains unsafe or damaged markup.")
+        return root
 
     def relationships(self, part: str) -> list[dict]:
         name = (
@@ -253,6 +269,7 @@ class Package:
             target = rel.get("Target", "")
             external = rel.get("TargetMode") == "External"
             resolved = None
+            missing = False
             if not external:
                 decoded = unquote(target)
                 if "\\" in decoded or "\x00" in decoded or urlsplit(decoded).scheme:
@@ -265,11 +282,18 @@ class Package:
                     if decoded.startswith("/")
                     else posixpath.join(posixpath.dirname(part), decoded)
                 )
-                if resolved.startswith("../") or resolved == ".." or resolved not in self.names:
+                if resolved.startswith("../") or resolved == "..":
                     raise ToolkitError(
-                        "missing_relationship",
-                        "The file contains a missing or unsafe component link.",
+                        "unsafe_relationship", "The file contains an unsafe component link."
                     )
+                # OPC part names are case-insensitive, so Word and PowerPoint
+                # follow "Styles.xml" to word/styles.xml; so do we.
+                resolved = self._by_casefold.get(resolved.casefold())
+                # A link to a part that is not there is a defect, not a threat:
+                # some generators write Target="../NULL" for a removed picture,
+                # and Office opens those files. Record it for the caller to
+                # report rather than refusing the whole file (issue #47).
+                missing = resolved is None
             result.append(
                 {
                     "id": rid,
@@ -277,6 +301,7 @@ class Package:
                     "target": target,
                     "external": external,
                     "resolved": resolved,
+                    "missing": missing,
                 }
             )
         return result

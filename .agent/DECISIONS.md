@@ -146,3 +146,27 @@ catalogue membership is not treated as proof of availability in every Workspace
 tenant. Accessibility-oriented choices require human review even when a reading
 font candidate exists. PPTX applies safe mappings to a copy before native import;
 DOCX and Publisher consume the same API when their owners complete integration.
+
+## 2026-09-23: A layer can be an authored group (supersedes part of "Publisher parser boundary")
+The 2026-09-22 entry said to record `startLayer` as a rendering wrapper, never as an
+authored group. Reading libmspub 0.1.4's own source shows that is only half true.
+libmspub never calls `openGroup`. It uses `startLayer` for two things: an authored
+group (any shape with children opens a layer with no properties, paints each child,
+then closes it), and one shape painted in several passes (border art, or any two of
+stroke, fill and text), which carries `svg:clip-path` when the shape is cropped.
+Under the old rule every real Publisher group was reported as an ignored wrapper.
+Children were never lost, but the grouping was.
+
+The parser now classifies each layer when it closes. A layer with a clip path stays
+a wrapper. A layer with no properties becomes a probable authored group
+(`type: "group"`, `container: {kind: "layer", isAuthoredGroup: true}`, with a
+`probable-authored-group` warning stating the evidence) if it contains a nested
+layer, which libmspub only produces inside a group, or if its children are not all
+within the largest child's box plus a small tolerance. Everything else stays a
+wrapper. The rule is conservative on purpose: a group whose largest child contains
+the others stays a wrapper, losing the grouping but no content.
+
+This was verified against library source, not against a real grouped document.
+PUB-001's acceptance test asserts its one layer is a wrapper, and it must be re-run
+locally. If that layer reclassifies, it is a finding to record deliberately, not a
+number to edit.

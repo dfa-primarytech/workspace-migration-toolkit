@@ -6,7 +6,7 @@ from collections import Counter
 import pytest
 from workspace_toolkit.config import Settings
 from workspace_toolkit.docs import Ids, render, send_behind_text, transform
-from workspace_toolkit.docx import NS, parse, q
+from workspace_toolkit.docx import NS, local, parse, q
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.package import CONTENT_NS, DOCX, DOCX_MAIN_MIME, REL_NS, Package
 
@@ -28,8 +28,8 @@ def run(body, *, h=None, v=None, cx=3000000, cy=1000000, dist="", behind="0"):
         f'<w:r><w:drawing><wp:anchor behindDoc="{behind}" {dist}>'
         f"{position}"
         f'<wp:extent cx="{cx}" cy="{cy}"/>'
-        f"{body}"
         f"<wp:docPr/>"
+        f"{body}"
         f"</wp:anchor></w:drawing></w:r>"
     )
 
@@ -57,7 +57,17 @@ TEXTBOX = (
     "<wps:txbx><w:txbxContent><w:p><w:r><w:t>Card text</w:t></w:r></w:p></w:txbxContent>"
     "</wps:txbx></wps:wsp></a:graphicData></a:graphic>"
 )
-PICTURE = '<a:graphic><a:graphicData uri="pic"><a:blip r:embed="rId1"/></a:graphicData></a:graphic>'
+# A picture as Word actually writes one. The short form this used to carry --
+# uri="pic" wrapping a bare <a:blip> -- is not renderable DrawingML, so every
+# picture test passed against a shape no reader would draw.
+PICTURE = (
+    '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+    '<pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Picture"/><pic:cNvPicPr/></pic:nvPicPr>'
+    '<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+    '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="3000000" cy="1000000"/></a:xfrm>'
+    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>'
+    "</a:graphicData></a:graphic>"
+)
 INK = "<w14:contentPart/>"
 
 
@@ -72,14 +82,22 @@ def document(body):
 SECTION = '<w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr></w:p>'
 
 
-def docx_parts(body):
+MEDIA_TYPES = {"png": "image/png", "emf": "image/x-emf", "wav": "audio/wav"}
+
+
+def docx_parts(body, media=None):
+    media = {"image1.png": b"\x89PNG\r\n\x1a\nfixture", **(media or {})}
+    defaults = "".join(
+        f'<Default Extension="{extension}" ContentType="{MEDIA_TYPES[extension]}"/>'
+        for extension in sorted({name.rsplit(".", 1)[1] for name in media})
+    )
     return {
         "[Content_Types].xml": (
             f'<Types xmlns="{CONTENT_NS}">'
             '<Default Extension="xml" ContentType="application/xml"/>'
             '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.'
             'relationships+xml"/>'
-            '<Default Extension="png" ContentType="image/png"/>'
+            f"{defaults}"
             f'<Override PartName="/word/document.xml" ContentType="{DOCX_MAIN_MIME}"/>'
             "</Types>"
         ),
@@ -88,13 +106,13 @@ def docx_parts(body):
             f'Type="{NS["r"]}/officeDocument" Target="word/document.xml"/></Relationships>'
         ),
         "word/document.xml": document(body),
-        "word/media/image1.png": b"\x89PNG\r\n\x1a\nfixture",
+        **{"word/media/" + name: data for name, data in media.items()},
     }
 
 
-def write_docx(path, body):
+def write_docx(path, body, media=None):
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name, content in docx_parts(body).items():
+        for name, content in docx_parts(body, media).items():
             archive.writestr(name, content)
     return path
 
@@ -432,9 +450,10 @@ def test_media_is_extracted_for_recovery(tmp_path):
 class FakeGoogle:
     """Stands in for Drive. Records what would have been sent."""
 
-    def __init__(self, exported="Card text", importable=True):
+    def __init__(self, exported="Card text", importable=True, refuse_assets=False):
         self.exported = exported
         self.importable = importable
+        self.refuse_assets = refuse_assets
         self.uploads = []
 
     async def request(self, method, url, **kwargs):
@@ -443,10 +462,15 @@ class FakeGoogle:
 
         return {"importFormats": {DOCX_MIME: [DOCS_MIME]} if self.importable else {}}
 
-    async def folder(self):
+    async def folder(self, job_name="Conversion"):
         return "folder-id"
 
-    async def upload(self, path, name, mime, parent, convert=False, target=None):
+    async def upload(self, path, name, mime, parent, convert=False, target=None, retry=False):
+        if retry and self.refuse_assets:
+            # `retry=True` marks the private asset copies, never the document.
+            from workspace_toolkit.errors import ToolkitError
+
+            raise ToolkitError("upload_uncertain", "refused", 502, detail="http_429")
         self.uploads.append(
             {"path": path, "name": name, "mime": mime, "convert": convert, "target": target}
         )
@@ -456,15 +480,15 @@ class FakeGoogle:
         return self.exported
 
 
-def converted_job(tmp_path, body, **kwargs):
+def converted_job(tmp_path, body, media=None, **kwargs):
     root = tmp_path / "job"
     root.mkdir()
-    write_docx(root / "source.docx", body)
+    write_docx(root / "source.docx", body, media)
     manifest = asyncio.run(preflight_manifest(root))
     google = FakeGoogle(**kwargs)
     from workspace_toolkit.docs import convert
 
-    report = asyncio.run(convert(root, manifest, google, output_name="Worksheet – converted"))
+    report = asyncio.run(convert(root, manifest, google, original_name="Worksheet"))
     return report, google
 
 
@@ -516,12 +540,34 @@ def test_an_account_without_word_import_fails_before_uploading(tmp_path):
     assert [w for w in report["warnings"] if w["code"] == "conversion_unavailable"]
 
 
-def test_recovered_media_is_saved_alongside_the_document(tmp_path):
+def test_a_picture_the_importer_keeps_is_not_copied_out_beside_the_document(tmp_path):
+    """The copies are for what the import drops, not for what it carries.
+
+    A worksheet of 65 photographs produced 65 uploads, 65 files to scroll past
+    and 65 chances to be throttled -- all for pictures that had already arrived
+    inside the document safely.
+    """
     body = anchor(PICTURE) + SECTION
     report, google = converted_job(tmp_path, body)
-    assert [u["name"] for u in google.uploads[1:-1]], "assets should be uploaded"
-    assert report["assetOutputs"][0]["kind"] == "image"
+
+    assert report["assetOutputs"] == [], "an ordinary PNG needs no second copy"
+    assert report["assetsNotCopied"] == 1, "and the report should say one was skipped"
     assert google.uploads[-1]["name"] == "Conversion report.json"
+
+
+def test_media_the_importer_drops_is_copied_out_and_named(tmp_path):
+    """Sound on a slide, an OLE object, a picture format no browser draws."""
+    body = anchor(PICTURE) + SECTION
+    report, google = converted_job(tmp_path, body, media={"clip.wav": b"RIFF\x00\x00\x00\x00WAVE"})
+
+    saved = [u["name"] for u in google.uploads[1:-1]]
+    # Named after the document, with a suffix, rather than left as a digest. A
+    # document gets no page number: nothing in its manifest links a picture to
+    # one, and its "pages" are section breaks rather than printed pages.
+    assert saved == ["Worksheet – audio 1.wav"], saved
+    assert report["assetOutputs"][0]["kind"] == "audio"
+    assert report["assetOutputs"][0]["name"] == "Worksheet – audio 1.wav"
+    assert report["assetsNotCopied"] == 1, "the PNG beside it is still skipped"
 
 
 def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
@@ -548,6 +594,12 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
     assert report == {
         "textboxes": 1,
         "pictures": 0,
+        "picturesInlined": 0,
+        "blankLinesReclaimed": 0,
+        "picturesPlaced": 0,
+        "picturesUnplaced": 0,
+        "tablesNarrowed": 0,
+        "picturesShrunk": 0,
         "ink": 0,
         "legacyPictures": 0,
         "unsupported": {},
@@ -709,3 +761,823 @@ def test_every_other_part_survives_the_multi_part_rewrite(tmp_path):
     with zipfile.ZipFile(tmp_path / "out.docx") as archive:
         assert set(archive.namelist()) == original
         assert archive.read("word/media/image1.png").startswith(b"\x89PNG")
+
+
+def test_an_empty_text_box_produces_no_table(tmp_path):
+    """Found in a real worksheet: four boxes of a quarter-inch square, empty.
+
+    Word leaves these behind while a document is edited. Converting one gives
+    a floating table wrapping an empty cell, plus the empty paragraphs that
+    keep tables apart -- clutter that takes up space on the page and can
+    displace what is around it, in exchange for nothing, because there is no
+    text to make editable.
+    """
+    empty = TEXTBOX.replace("<w:p><w:r><w:t>Card text</w:t></w:r></w:p>", "")
+    root, report = transform_body(
+        tmp_path, anchor(empty, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION
+    )
+    assert report["textboxes"] == 0
+    assert root.find(".//" + q("w", "tbl")) is None
+
+
+def test_a_box_holding_only_a_picture_is_still_converted(tmp_path):
+    """The emptiness test must not discard content that simply is not text."""
+    with_picture = TEXTBOX.replace(
+        "<w:p><w:r><w:t>Card text</w:t></w:r></w:p>",
+        '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="100" cy="100"/>'
+        '<a:graphic><a:graphicData uri="pic"><a:blip r:embed="rId1"/>'
+        "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>",
+    )
+    root, report = transform_body(
+        tmp_path,
+        anchor(with_picture, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION,
+    )
+    assert report["textboxes"] == 1, "a box holding a picture was treated as empty"
+    assert root.find(".//" + q("w", "tbl")) is not None
+
+
+def test_a_refused_asset_copy_still_leaves_the_document_verified(tmp_path):
+    """The private asset copies are a fallback, not the deliverable.
+
+    Measured on a real worksheet: 27 of 65 copies uploaded, the 28th was
+    refused, and that one refusal abandoned the other 37 *and* skipped the
+    document's own verification -- reporting a good conversion as failed.
+    """
+    body = anchor(PICTURE) + SECTION
+    report, google = converted_job(
+        tmp_path, body, media={"clip.wav": b"RIFF\x00\x00\x00\x00WAVE"}, refuse_assets=True
+    )
+
+    assert report["status"] == "completed_with_warnings", "the document itself uploaded fine"
+    assert report["verification"] == "text_checked", "verification must not be skipped"
+    assert report["documentId"], "the document is still the deliverable"
+
+    incomplete = [w for w in report["warnings"] if w["code"] == "asset_copies_incomplete"]
+    assert incomplete, "a person should still be told the copies are missing"
+    assert incomplete[0]["saved"] == 0
+    assert incomplete[0]["attempted"] >= 1
+    assert incomplete[0]["reasons"] == ["http_429"], "the report should say which way it failed"
+    assert google.uploads[-1]["name"] == "Conversion report.json", "the report is still saved"
+
+
+def in_cell(inner):
+    """One table with a single cell holding `inner`."""
+    return (
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='5000'/></w:tblGrid>"
+        f"<w:tr><w:tc><w:tcPr/>{inner}</w:tc></w:tr></w:tbl>"
+    )
+
+
+def transformed(tmp_path, body):
+    root = parse_xml(document(body))
+    report = transform(root)
+    return root, report
+
+
+# A4 is 11906 twips wide. With 1440 twip margins, 9026 are printable.
+A4_SECTION = (
+    "<w:p><w:pPr><w:sectPr>"
+    '<w:pgSz w:w="11906" w:h="16838"/>'
+    '<w:pgMar w:left="1440" w:right="1440" w:top="1440" w:bottom="1440"/>'
+    "</w:sectPr></w:pPr></w:p>"
+)
+
+
+def wide_table(inner="", columns=(6000, 6000)):
+    grid = "".join(f"<w:gridCol w:w='{w}'/>" for w in columns)
+    # `inner` goes in the first cell only, so counts are not silently doubled.
+    cells = "".join(
+        f"<w:tc><w:tcPr><w:tcW w:w='{w}' w:type='dxa'/></w:tcPr>{inner if n == 0 else ''}</w:tc>"
+        for n, w in enumerate(columns)
+    )
+    return f"<w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid><w:tr>{cells}</w:tr></w:tbl>"
+
+
+def parse_xml(text):
+    from defusedxml.ElementTree import fromstring
+
+    return fromstring(text)
+
+
+def test_a_picture_floating_inside_a_cell_becomes_cell_content(tmp_path):
+    """A floating picture is positioned against the page, never its cell.
+
+    So the row stays as short as its text and the picture is drawn across the
+    borders. Inline content contributes to the cell's height instead.
+    """
+    body = in_cell(anchor(PICTURE, h=("column", offset(0)), v=("paragraph", offset(0)))) + SECTION
+    root, report = transformed(tmp_path, body)
+
+    assert root.find(".//" + q("wp", "anchor")) is None, "it must stop floating"
+    inline = root.find(".//" + q("wp", "inline"))
+    assert inline is not None, "it should become inline cell content"
+    assert report["picturesInlined"] == 1
+
+    # The picture itself must survive intact, not be rebuilt from guesses.
+    assert inline.find(".//" + q("a", "blip")).get(q("r", "embed")) == "rId1"
+    assert inline.find(q("wp", "extent")).get("cx") == "3000000"
+
+    names = [local(child.tag) for child in inline]
+    assert names == sorted(names, key=["extent", "effectExtent", "docPr", "graphic"].index), names
+
+
+def test_a_picture_floating_outside_any_cell_is_left_alone(tmp_path):
+    """A logo in a letterhead belongs where its author put it.
+
+    Recovering which cell an image *visually* sits in, when the anchor says
+    otherwise, needs geometry. Guessing is worse than leaving it.
+    """
+    body = anchor(PICTURE, h=("page", offset(0)), v=("page", offset(0))) + SECTION
+    root, report = transformed(tmp_path, body)
+
+    assert root.find(".//" + q("wp", "anchor")) is not None, "it should still float"
+    assert root.find(".//" + q("wp", "inline")) is None
+    assert report["picturesInlined"] == 0
+
+
+def test_a_picture_sent_behind_the_text_stays_floating(tmp_path):
+    """A backdrop is deliberate. Inlining it would push the text down a page."""
+    body = in_cell(anchor(PICTURE, behind="1", h=("page", offset(0)))) + SECTION
+    root, report = transformed(tmp_path, body)
+
+    assert root.find(".//" + q("wp", "anchor")) is not None
+    assert report["picturesInlined"] == 0
+
+
+def widths(root):
+    return [int(c.get(q("w", "w"))) for c in root.iter(q("w", "gridCol"))]
+
+
+def test_a_table_wider_than_the_paper_is_brought_within_the_margins():
+    """Word lets a table state more columns than the page can hold.
+
+    Measured on a real worksheet: about 575pt of columns in about 523pt of
+    printable width, so every row crossed the right margin whatever the
+    images did.
+    """
+    root = parse_xml(document(wide_table() + A4_SECTION))
+    report = transform(root)
+
+    assert sum(widths(root)) <= 9026, "the table must fit between the margins"
+    assert widths(root) == [4513, 4513], "columns keep their proportions"
+    assert report["tablesNarrowed"] == 1
+
+    stated = [int(c.get(q("w", "w"))) for c in root.iter(q("w", "tcW"))]
+    assert stated == [4513, 4513], "the cells must agree with the grid they sit in"
+
+
+def test_a_table_that_already_fits_is_left_exactly_as_it_was():
+    root = parse_xml(document(wide_table(columns=(4000, 4000)) + A4_SECTION))
+    report = transform(root)
+
+    assert widths(root) == [4000, 4000], "nothing to fix means nothing to change"
+    assert report["tablesNarrowed"] == 0
+
+
+def test_a_picture_comes_down_with_the_column_that_holds_it():
+    """A picture sized for the old column would overflow the narrowed one."""
+    # Built here rather than from PICTURE: this needs the <a:ext> geometry a
+    # real picture carries, so the outer frame and inner shape can be compared.
+    picture = (
+        "<w:p><w:r><w:drawing><wp:inline>"
+        "<wp:extent cx='3810000' cy='1905000'/><wp:docPr/>"
+        '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        "<pic:pic><pic:blipFill><a:blip r:embed='rId1'/></pic:blipFill>"
+        "<pic:spPr><a:xfrm><a:ext cx='3810000' cy='1905000'/></a:xfrm></pic:spPr></pic:pic>"
+        "</a:graphicData></a:graphic>"
+        "</wp:inline></w:drawing></w:r></w:p>"
+    )
+    root = parse_xml(document(wide_table(picture) + A4_SECTION))
+    report = transform(root)
+
+    extent = root.find(".//" + q("wp", "extent"))
+    column = widths(root)[0]
+    limit = (column - 216) * 635  # both default cell margins
+    assert int(extent.get("cx")) <= limit, "the picture must fit its cell"
+    assert report["picturesShrunk"] == 1
+
+    # Shape is preserved: the inner geometry moves with the outer frame.
+    assert int(extent.get("cy")) < 1905000
+    inner = root.find(".//" + q("a", "ext"))
+    assert int(inner.get("cx")) == int(extent.get("cx")), "frame and geometry must agree"
+
+
+def test_a_nested_table_is_measured_against_its_cell_not_the_page():
+    """A nested table is bounded by its cell. Shrinking it against the page
+    would compound with the shrink its parent already took."""
+    inner = wide_table(columns=(6000, 6000))
+    root = parse_xml(document(wide_table(inner) + A4_SECTION))
+    report = transform(root)
+
+    assert report["tablesNarrowed"] == 1, "only the outer table is measured"
+    assert widths(root)[2:] == [6000, 6000], "the nested grid is left alone"
+
+
+def inline_picture(cx, cy):
+    return (
+        "<w:p><w:r><w:drawing><wp:inline>"
+        f"<wp:extent cx='{cx}' cy='{cy}'/><wp:docPr/>"
+        '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        f"<pic:pic><pic:spPr><a:xfrm><a:ext cx='{cx}' cy='{cy}'/></a:xfrm></pic:spPr></pic:pic>"
+        "</a:graphicData></a:graphic>"
+        "</wp:inline></w:drawing></w:r></w:p>"
+    )
+
+
+def test_a_tracked_page_setup_change_is_measured_by_the_current_page():
+    """w:sectPrChange keeps the previous properties inside the current ones,
+    after them in document order. Measuring those would use the old page."""
+    body_section = (
+        "<w:sectPr><w:pgSz w:w='11906' w:h='16838'/>"
+        "<w:pgMar w:left='1440' w:right='1440' w:top='1440' w:bottom='1440'/>"
+        "<w:sectPrChange w:id='1' w:author='a'><w:sectPr>"
+        "<w:pgSz w:w='16838' w:h='11906'/>"
+        "<w:pgMar w:left='720' w:right='720' w:top='720' w:bottom='720'/>"
+        "</w:sectPr></w:sectPrChange></w:sectPr>"
+    )
+    root = parse_xml(document(wide_table() + body_section))
+    report = transform(root)
+
+    assert report["tablesNarrowed"] == 1
+    assert sum(widths(root)) <= 9026, "measured against the current A4 page, not the old one"
+
+
+def test_the_tables_own_stated_width_is_narrowed_with_its_grid():
+    table = wide_table().replace(
+        "<w:tblPr/>", "<w:tblPr><w:tblW w:w='12000' w:type='dxa'/></w:tblPr>"
+    )
+    root = parse_xml(document(table + A4_SECTION))
+    transform(root)
+
+    stated = int(root.find(".//" + q("w", "tblW")).get(q("w", "w")))
+    assert stated == sum(widths(root)), "the table must not claim a width its grid no longer has"
+
+
+def test_a_nested_tables_cells_keep_the_widths_its_grid_still_has():
+    inner = wide_table(columns=(6000, 6000))
+    root = parse_xml(document(wide_table(inner) + A4_SECTION))
+    transform(root)
+
+    nested = root.findall(".//" + q("w", "tbl"))[1]
+    cells = [int(w.get(q("w", "w"))) for w in nested.iter(q("w", "tcW"))]
+    assert cells == [6000, 6000], "nested cells must still agree with their untouched grid"
+
+
+def test_a_picture_in_a_merged_cell_is_measured_by_every_column_it_spans():
+    # The picture fits the two narrowed columns together, so it must not shrink.
+    table = (
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='6000'/><w:gridCol w:w='6000'/></w:tblGrid>"
+        f"<w:tr><w:tc><w:tcPr><w:gridSpan w:val='2'/></w:tcPr>{inline_picture(4500000, 2250000)}"
+        "</w:tc></w:tr>"
+        "<w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>"
+    )
+    root = parse_xml(document(table + A4_SECTION))
+    report = transform(root)
+
+    assert report["tablesNarrowed"] == 1
+    assert int(root.find(".//" + q("wp", "extent")).get("cx")) == 4500000
+    assert report["picturesShrunk"] == 0
+
+
+def test_a_cell_that_cannot_be_placed_on_the_grid_keeps_its_picture():
+    # Three cells over a two-column grid: the third has no column to measure.
+    # Big enough that shrinking it against a guessed width would show.
+    table = (
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='6000'/><w:gridCol w:w='6000'/></w:tblGrid>"
+        "<w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc>"
+        f"<w:tc>{inline_picture(5000000, 2500000)}</w:tc></w:tr></w:tbl>"
+    )
+    root = parse_xml(document(table + A4_SECTION))
+    report = transform(root)
+
+    assert int(root.find(".//" + q("wp", "extent")).get("cx")) == 5000000
+    assert report["picturesShrunk"] == 0
+
+
+def test_a_width_word_wrote_as_a_decimal_is_still_a_width():
+    """Word writes `w:w="11504.0"`, and the schema allows it.
+
+    Read as an integer it measured as nothing at all, so the table's own width
+    survived a narrowing that moved every column under it. A real worksheet
+    came out declaring itself three quarters of an inch wider than the paper
+    while its grid said otherwise, and the two then disagreed for the importer
+    to settle however it liked.
+    """
+    table = wide_table().replace(
+        "<w:tblPr/>", "<w:tblPr><w:tblW w:w='12000.0' w:type='dxa'/></w:tblPr>"
+    )
+    root = parse_xml(document(table + A4_SECTION))
+    report = transform(root)
+
+    assert report["tablesNarrowed"] == 1
+    stated = root.find(".//" + q("w", "tblW")).get(q("w", "w"))
+    assert stated == str(sum(widths(root))), "the table must not claim a width its grid lost"
+    assert "." not in stated, "a width is written back as a whole number of twips"
+
+
+def test_the_layout_passes_say_what_they_did_in_the_report(tmp_path):
+    """Counters that never reach the report cannot measure anything.
+
+    `picturesInlined`, `tablesNarrowed` and `picturesShrunk` were added to
+    diagnose a real document and were dropped twice on the way out -- once by
+    the per-part aggregation and once by the report's own whitelist. A
+    conversion run made to measure them reported none of them.
+    """
+    body = in_cell(anchor(PICTURE)) + SECTION
+    report, _ = converted_job(tmp_path, body)
+    for key in ("picturesInlined", "tablesNarrowed", "picturesShrunk"):
+        assert key in report["conversion"], f"{key} never reaches the report"
+    assert report["conversion"]["picturesInlined"] == 1
+
+
+def test_a_replaced_typeface_is_named_in_the_report(tmp_path):
+    """PROJECT.md: every change is reported.
+
+    A family swapped under #27 was applied silently on the Docs path, though
+    the Slides path had always shown it. "Baskerville became Libre
+    Baskerville" is exactly the kind of thing a person can check; a document
+    that quietly changed typeface is not.
+    """
+    body = para("<w:r><w:rPr><w:rFonts w:ascii='Baskerville'/></w:rPr><w:t>Hello</w:t></w:r>")
+    report, _ = converted_job(tmp_path, body + SECTION)
+
+    substitutions = report["conversion"]["fontSubstitutions"]
+    assert substitutions == {"Baskerville -> Libre Baskerville": 1}, substitutions
+
+
+# ------------------------------------------- pictures anchored above a table
+
+
+def question_table(rows=2, columns=(5752, 5752), heading="Can I count to ten?"):
+    """A worksheet table: a heading row, then numbered rows with empty cells."""
+    grid = "".join(f"<w:gridCol w:w='{w}'/>" for w in columns)
+    head = "".join(f"<w:tc><w:p><w:r><w:t>{heading}</w:t></w:r></w:p></w:tc>" for _ in columns)
+    body = "".join(
+        "<w:tr>"
+        + "".join(f"<w:tc><w:p><w:r><w:t>{n + 1}.</w:t></w:r></w:p></w:tc>" for _ in columns)
+        + "</w:tr>"
+        for n in range(rows)
+    )
+    return f"<w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid><w:tr>{head}</w:tr>{body}</w:tbl>"
+
+
+def floating(across, down, cx=2000000, frame_h="column", frame_v="paragraph"):
+    return run(PICTURE, h=(frame_h, offset(across)), v=(frame_v, offset(down)), cx=cx, cy=1000000)
+
+
+def placed_pictures(body):
+    root = parse_xml(document(body + A4_SECTION))
+    report = transform(root)
+    cells = [
+        [
+            "".join(t.text or "" for t in cell.iter(q("w", "t"))).strip(),
+            len(list(cell.iter(q("wp", "inline")))),
+        ]
+        for cell in root.iter(q("w", "tc"))
+    ]
+    return report, cells
+
+
+def test_a_picture_floating_above_a_table_lands_in_the_cell_it_was_drawn_over():
+    """Measured on a real worksheet: 45 question pictures were anchored to the
+    paragraph above their table, positioned so they appeared over its cells.
+    Google places those against the page, so they land across the borders."""
+    body = para(
+        floating(200000, 100000),  # left column, first row
+        floating(4000000, 100000),  # right column, first row
+        floating(200000, 2000000),  # left column, second row
+        floating(4000000, 2000000),  # right column, second row
+    ) + question_table(rows=2)
+    report, cells = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 4
+    assert report["picturesUnplaced"] == 0
+    # The heading row is untouched; each numbered cell gains exactly one picture.
+    assert cells == [
+        ["Can I count to ten?", 0],
+        ["Can I count to ten?", 0],
+        ["1.", 1],
+        ["1.", 1],
+        ["2.", 1],
+        ["2.", 1],
+    ], cells
+
+
+def test_a_placed_picture_is_centred_rather_than_given_a_recovered_offset():
+    # The offset described a position on the page. Inside a cell it would mean
+    # something else entirely, so it is deliberately not carried across.
+    body = para(floating(200000, 100000), floating(4000000, 100000)) + question_table(rows=1)
+    root = parse_xml(document(body + A4_SECTION))
+    transform(root)
+
+    holder = next(p for p in root.iter(q("w", "p")) if list(p.iter(q("wp", "inline"))))
+    assert holder.find(q("w", "pPr") + "/" + q("w", "jc")).get(q("w", "val")) == "center"
+    assert not list(root.iter(q("wp", "anchor"))), "nothing should still be floating"
+
+
+def test_more_pictures_than_rows_is_reported_rather_than_guessed():
+    """The stack says how the pictures are ordered, not which row is which."""
+    body = para(
+        floating(200000, 100000), floating(200000, 2000000), floating(200000, 4000000)
+    ) + question_table(rows=2)
+    report, cells = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 0
+    assert report["picturesUnplaced"] == 3
+    assert all(count == 0 for _, count in cells), "every cell is left as it was"
+
+
+def test_two_vertical_origins_are_not_ranked_against_each_other():
+    """Offsets from different origins differ by a constant, and sorting them
+    together orders the pictures arbitrarily.
+
+    A page origin can be resolved against a paragraph one when the paragraph
+    starts the text area, because the constant is then the top margin exactly.
+    Nothing else can: a margin origin moves with the section's own geometry.
+    """
+    body = para(
+        floating(200000, 100000),
+        floating(200000, 2000000, frame_v="margin"),
+    ) + question_table(rows=2, columns=(5752,))
+    report, _ = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 0
+    assert report["picturesUnplaced"] == 2
+
+
+def test_a_page_relative_offset_is_measured_from_the_margin_not_the_paper():
+    # Exact arithmetic rather than a guess, so it is worth recovering: the A4
+    # section's left margin comes off before the offset means anything.
+    margin = 457200
+    body = para(
+        floating(200000 + margin, 100000, frame_h="page"),
+        floating(4000000 + margin, 100000, frame_h="page"),
+    ) + question_table(rows=1)
+    report, cells = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 2, report
+    assert cells == [["Can I count to ten?", 0], ["Can I count to ten?", 0], ["1.", 1], ["1.", 1]]
+
+
+def test_a_cell_that_already_holds_content_is_not_treated_as_free():
+    body = para(floating(200000, 100000)) + question_table(rows=1, columns=(5752,)).replace(
+        "<w:tc><w:p><w:r><w:t>1.</w:t></w:r></w:p></w:tc>",
+        "<w:tc><w:p><w:r><w:t>Write your answer here</w:t></w:r></w:p></w:tc>",
+    )
+    report, _ = placed_pictures(body)
+
+    assert report["picturesPlaced"] == 0
+    assert report["picturesUnplaced"] == 1
+
+
+def inline_in_cell(cx=1500000):
+    return (
+        f'<w:p><w:r><w:drawing><wp:inline><wp:extent cx="{cx}" cy="500000"/>'
+        f"<wp:docPr/>{PICTURE}</wp:inline></w:drawing></w:r></w:p>"
+    )
+
+
+def paired_table(rows=2, columns=(5752, 5752)):
+    """A table whose every question cell already holds one picture."""
+    grid = "".join(f"<w:gridCol w:w='{w}'/>" for w in columns)
+    head = "".join("<w:tc><w:p><w:r><w:t>Can I count?</w:t></w:r></w:p></w:tc>" for _ in columns)
+    body = "".join(
+        "<w:tr>"
+        + "".join(
+            f"<w:tc><w:p><w:r><w:t>{n + 1}.</w:t></w:r></w:p>{inline_in_cell()}</w:tc>"
+            for _ in columns
+        )
+        + "</w:tr>"
+        for n in range(rows)
+    )
+    return f"<w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid><w:tr>{head}</w:tr>{body}</w:tbl>"
+
+
+def test_a_second_picture_is_appended_when_every_cell_already_holds_one():
+    """A worksheet often gives each question two pictures -- one in the cell
+    and one floating over it. Once #34 has inlined the first, every cell is
+    full, and appending is the only reading that places anything at all."""
+    body = para(
+        floating(200000, 100000),
+        floating(4000000, 100000),
+        floating(200000, 2000000),
+        floating(4000000, 2000000),
+    ) + paired_table(rows=2)
+    root = parse_xml(document(body + A4_SECTION))
+    report = transform(root)
+
+    assert report["picturesPlaced"] == 4
+    assert report["picturesUnplaced"] == 0
+    per_cell = [len(list(tc.iter(q("wp", "inline")))) for tc in root.iter(q("w", "tc"))]
+    assert per_cell == [0, 0, 2, 2, 2, 2], per_cell
+
+
+def test_a_page_offset_is_ranked_with_a_paragraph_offset_when_the_top_is_known():
+    """The constant between the two is the top margin, exactly -- but only
+    when the paragraph starts the text area."""
+    top = 914400  # the A4 fixture's 1440 dxa top margin
+    body = para(
+        floating(200000, top + 100000, frame_v="page"),
+        floating(200000, 2000000),
+    ) + question_table(rows=2, columns=(5752,))
+    root = parse_xml(document(body + A4_SECTION))
+    report = transform(root)
+
+    assert report["picturesPlaced"] == 2, report
+    assert report["picturesUnplaced"] == 0
+    per_cell = [len(list(tc.iter(q("wp", "inline")))) for tc in root.iter(q("w", "tc"))]
+    assert per_cell == [0, 1, 1]
+
+
+def test_a_page_offset_is_still_refused_when_the_paragraph_is_not_at_the_top():
+    # Anything above it moves the paragraph down by an unknown amount, so the
+    # two origins cannot be ranked against each other.
+    body = (
+        para("<w:r><w:t>A heading</w:t></w:r>")
+        + para(
+            floating(200000, 1014400, frame_v="page"),
+            floating(200000, 2000000),
+        )
+        + question_table(rows=2, columns=(5752,))
+    )
+    root = parse_xml(document(body + A4_SECTION))
+    report = transform(root)
+
+    assert report["picturesPlaced"] == 0
+    assert report["picturesUnplaced"] == 2
+
+
+# ------------------------------- blank lines that were holding a place (#42 x #34)
+
+BLANK = "<w:p/>"
+
+
+def cell_paragraphs(root):
+    cell = root.find(".//" + q("w", "tc"))
+    return [
+        "picture"
+        if list(p.iter(q("wp", "inline")))
+        else ("".join(t.text or "" for t in p.iter(q("w", "t"))) or "blank")
+        for p in cell.findall(q("w", "p"))
+    ]
+
+
+def test_blank_lines_that_were_holding_a_pictures_place_are_reclaimed():
+    """A worksheet reserves room for a picture floating over a cell by typing
+    blank lines inside it. Since #34 the picture is inside the cell and brings
+    its own height, so keeping both counts the same space twice -- measured at
+    9.7in of blank on top of 63.8in of picture across 32 cells."""
+    body = in_cell(para("<w:r><w:t>1.</w:t></w:r>") + BLANK * 3 + anchor(PICTURE)) + A4_SECTION
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    assert report["picturesInlined"] == 1
+    assert report["blankLinesReclaimed"] == 3
+    assert cell_paragraphs(root) == ["1.", "picture"], cell_paragraphs(root)
+
+
+def test_a_cell_that_gains_no_picture_keeps_every_blank_line():
+    """#42's rule is untouched wherever there is no picture to account for."""
+    body = in_cell(para("<w:r><w:t>Name</w:t></w:r>") + BLANK * 3) + A4_SECTION
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    assert report["blankLinesReclaimed"] == 0
+    assert cell_paragraphs(root) == ["Name", "blank", "blank", "blank"]
+
+
+def test_a_cell_that_already_held_a_picture_keeps_its_blank_lines():
+    # Nothing moved into this cell, so nothing in it was reserving space.
+    inline = '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="900000" cy="900000"/>'
+    inline += f"<wp:docPr/>{PICTURE}</wp:inline></w:drawing></w:r></w:p>"
+    body = in_cell(inline + BLANK * 2) + A4_SECTION
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    assert report["blankLinesReclaimed"] == 0
+    assert cell_paragraphs(root) == ["picture", "blank", "blank"]
+
+
+def test_reclaiming_never_empties_a_cell():
+    # OOXML requires a cell to end with a paragraph; the picture's own
+    # paragraph is what satisfies that here.
+    body = in_cell(BLANK * 2 + anchor(PICTURE)) + A4_SECTION
+    root = parse_xml(document(body))
+    transform(root)
+
+    cell = root.find(".//" + q("w", "tc"))
+    assert cell.findall(q("w", "p")), "a cell must still hold a paragraph"
+    assert local(list(cell)[-1].tag) == "p", "and must end with one"
+
+
+# --------------------------------------------------- legacy VML (issue #48)
+
+
+def wrapped_pict(inner):
+    """A <w:pict> holding whatever VML the test wants, unlike `pict` above
+    which always builds a single bare shape."""
+    return f"<w:p><w:r><w:pict>{inner}</w:pict></w:r></w:p>"
+
+
+def vml_shape(style="width:100pt;height:50pt", inner=""):
+    return f"<v:shape style='{style}'><v:imagedata r:id='rId1'/>{inner}</v:shape>"
+
+
+def test_a_captioned_legacy_photo_keeps_its_caption():
+    """A v:group holding a picture and a text box is what a document that
+    began life as a .doc is full of. The old rule took the picture and threw
+    the caption away, then counted it as a successful conversion."""
+    caption = "<v:textbox><w:txbxContent><w:p><w:r><w:t>Fig 1</w:t></w:r></w:p></w:txbxContent></v:textbox>"
+    body = (
+        wrapped_pict(f"<v:group>{vml_shape()}<v:shape>{caption}</v:shape></v:group>") + A4_SECTION
+    )
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    text = "".join(t.text or "" for t in root.iter(q("w", "t")))
+    assert "Fig 1" in text, "the caption must survive"
+    assert report["legacyPictures"] == 0, "nothing was safely converted"
+    assert report["unsupported"] == {"grouped legacy shape": 1}, report["unsupported"]
+
+
+def test_a_picture_watermark_is_not_turned_into_inline_content():
+    """Word's watermark is an absolutely positioned shape with a negative
+    z-index. Inline it stops being a backdrop and pushes the page down."""
+    style = "position:absolute;width:451pt;height:600pt;z-index:-251658752"
+    root = parse_xml(document(wrapped_pict(vml_shape(style)) + A4_SECTION))
+    report = transform(root)
+
+    assert not list(root.iter(q("wp", "inline"))), "a watermark must stay where it is"
+    assert root.find(".//" + q("v", "shape")) is not None, "and must not be deleted"
+    assert report["unsupported"] == {"legacy watermark or background": 1}
+
+
+def test_a_plain_legacy_picture_is_still_converted():
+    root = parse_xml(document(wrapped_pict(vml_shape()) + A4_SECTION))
+    report = transform(root)
+
+    assert report["legacyPictures"] == 1
+    assert report["unsupported"] == {}
+    extent = root.find(".//" + q("wp", "extent"))
+    assert int(extent.get("cx")) == 1270000, "100pt"
+
+
+def test_a_size_is_read_from_the_right_property():
+    # Unanchored, "width" also matches inside mso-width-percent, and the
+    # picture is rebuilt at whatever number happened to come first.
+    style = "mso-wrap-width:900pt;width:100pt;mso-wrap-height:9pt;height:50pt"
+    root = parse_xml(document(wrapped_pict(vml_shape(style)) + A4_SECTION))
+    transform(root)
+
+    extent = root.find(".//" + q("wp", "extent"))
+    assert (int(extent.get("cx")), int(extent.get("cy"))) == (1270000, 635000)
+
+
+# ------------------------------------------------ schema validity (issue #44)
+
+
+def declared_prefixes(data: bytes) -> set[str]:
+    """The xmlns prefixes the serialised root actually declares."""
+    import re as _re
+
+    head = data.decode("utf-8")[: data.decode("utf-8").index(">") + 1]
+    return set(_re.findall(r"xmlns:([A-Za-z0-9_.-]+)=", head))
+
+
+def test_ignorable_never_names_a_prefix_the_output_does_not_declare():
+    """Markup Compatibility requires an Ignorable prefix to be declared.
+
+    ElementTree declares only the namespaces something in the tree uses, so a
+    root carrying mc:Ignorable="w14 w15 wp14 w16se" came out still naming
+    prefixes whose xmlns declaration had gone -- and the CLI hands that file to
+    people to open in Word.
+    """
+    from workspace_toolkit.docs import serialise
+
+    body = "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>" + SECTION
+    root = parse_xml(
+        f'<w:document {XMLNS} mc:Ignorable="w14 w15 wp14 w16se w16cid">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    data = serialise(root)
+    text = data.decode("utf-8")
+    stated = (
+        text[text.index("mc:Ignorable=") + 14 :].split('"')[0].split()
+        if "mc:Ignorable=" in text
+        else []
+    )
+
+    assert set(stated) <= declared_prefixes(data), f"{stated} vs {declared_prefixes(data)}"
+
+
+def test_a_prefix_that_is_still_used_keeps_its_name_and_its_declaration():
+    # w14 is used by the ink marker, so it must survive both the pruning and
+    # the prefix mapping -- ns0 would break the Ignorable text just as badly.
+    from workspace_toolkit.docs import serialise
+
+    body = f"<w:p><w:r>{INK}</w:r></w:p>" + SECTION
+    root = parse_xml(
+        f'<w:document {XMLNS} mc:Ignorable="w14 w15"><w:body>{body}</w:body></w:document>'
+    )
+    data = serialise(root)
+    text = data.decode("utf-8")
+
+    assert 'mc:Ignorable="w14"' in text, text[:400]
+    assert "xmlns:w14=" in text
+    assert "ns0" not in text
+
+
+def test_a_converted_text_box_never_leaves_a_cell_ending_in_a_table():
+    """Word requires a cell's last block to be a paragraph. A text box whose
+    last block is a table left the cell ending in w:tbl."""
+    inner = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='2000'/></w:tblGrid>"
+    inner += "<w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+    textbox = (
+        '<a:graphic><a:graphicData uri="x"><wps:wsp><wps:spPr/>'
+        f"<wps:txbx><w:txbxContent><w:p><w:r><w:t>Lead</w:t></w:r></w:p>{inner}"
+        "</w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic>"
+    )
+    body = anchor(textbox, h=("column", offset(0)), v=("paragraph", offset(0))) + A4_SECTION
+    root = parse_xml(document(body))
+    report = transform(root)
+
+    assert report["textboxes"] == 1
+    outer = root.find(".//" + q("w", "tc"))
+    assert local(list(outer)[-1].tag) == "p", [local(c.tag) for c in outer]
+
+
+# ------------------------------------------------- a stretched flat image
+
+
+def png(width, height):
+    """A valid PNG header at a stated pixel size; the pixels never get read."""
+    import struct
+
+    ihdr = struct.pack(">II", width, height) + b"\x08\x06\x00\x00\x00"
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + b"\x00" * 4
+
+
+def picture_rels():
+    return (
+        f'<Relationships xmlns="{REL_NS}">'
+        f'<Relationship Id="rId1" Type="{NS["r"]}/image" Target="media/image1.png"/>'
+        "</Relationships>"
+    )
+
+
+def analysed(tmp_path, body, media, name="flat.docx"):
+    from workspace_toolkit.docx import analyse
+
+    path = tmp_path / name
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for part, content in docx_parts(body, media).items():
+            archive.writestr(part, content)
+        archive.writestr("word/_rels/document.xml.rels", picture_rels())
+    return analyse(path, tmp_path / "out", Settings())
+
+
+def test_one_pixel_stretched_across_a_page_is_reported(tmp_path):
+    """A concern form arrived as a single 1x1 PNG drawn at 7.5 x 11.2 inches,
+    with the form's own tables and text gone. Word showed an empty document and
+    we reported nothing at all."""
+    body = anchor(PICTURE, cx=6858000, cy=10248265) + SECTION
+    manifest = analysed(tmp_path, body, {"image1.png": png(1, 1)})
+
+    flat = [w for w in manifest["warnings"] if w["code"] == "flat_image"]
+    assert len(flat) == 1, [w["code"] for w in manifest["warnings"]]
+    assert flat[0]["storedPixels"] == [1, 1]
+    # Nothing is lost by the conversion; what is in the file is what converts.
+    # Whether that is what the author put there is a question for a person.
+    assert flat[0]["classification"] == "IGNORED"
+
+
+def test_a_real_picture_is_not_reported(tmp_path):
+    body = anchor(PICTURE, cx=6858000, cy=10248265) + SECTION
+    manifest = analysed(tmp_path, body, {"image1.png": png(1200, 1600)})
+    assert not [w for w in manifest["warnings"] if w["code"] == "flat_image"]
+
+
+def test_a_small_image_drawn_small_is_ordinary(tmp_path):
+    # A few pixels drawn at a few pixels is a spacer or a rule, not a loss.
+    body = anchor(PICTURE, cx=90000, cy=90000) + SECTION
+    manifest = analysed(tmp_path, body, {"image1.png": png(1, 1)})
+    assert not [w for w in manifest["warnings"] if w["code"] == "flat_image"]
+
+
+def test_an_unreadable_image_format_says_nothing_either_way(tmp_path):
+    body = anchor(PICTURE, cx=6858000, cy=10248265) + SECTION
+    manifest = analysed(tmp_path, body, {"image1.png": b"not an image at all"})
+    assert not [w for w in manifest["warnings"] if w["code"] == "flat_image"]
+
+
+def test_every_image_header_word_writes_is_measured():
+    import struct
+
+    from workspace_toolkit.docx import pixel_size
+
+    assert pixel_size(png(7, 9)) == (7, 9)
+    assert pixel_size(b"GIF89a" + struct.pack("<HH", 11, 13)) == (11, 13)
+    assert pixel_size(b"BM" + b"\x00" * 16 + struct.pack("<ii", 17, 19)) == (17, 19)
+    jpeg = b"\xff\xd8" + b"\xff\xc0" + struct.pack(">H", 17) + b"\x08" + struct.pack(">HH", 23, 21)
+    assert pixel_size(jpeg + b"\x00" * 10) == (21, 23), "JPEG states height before width"
+    assert pixel_size(b"nonsense") is None

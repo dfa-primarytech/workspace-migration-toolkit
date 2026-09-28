@@ -133,6 +133,39 @@ What the service already covers well is exactly this trust's estate: Century
 Gothic, Comic Sans and Sassoon Primary/Infant all have reviewed mappings, and
 the accessibility-sensitive ones are marked `manualReview`.
 
+## Measured: Google Docs already has most of them
+
+On 2026-09-23 a document naming 46 families was converted through Drive's
+native import, exported as PDF, and its font table read: a family that came
+back under its own name is present; one replaced by something nobody asked for
+is not.
+
+**Google Docs ships 18 of the 28 Microsoft families tested**, including Arial,
+Times New Roman, Calibri, Cambria, Comic Sans MS, Courier New, Garamond,
+Century Gothic, Georgia, Impact, Verdana, Tahoma, Trebuchet MS, Consolas,
+Franklin Gothic, Book Antiqua and Palatino Linotype.
+
+The catalogue had been built on the opposite assumption, and was replacing
+every one of them. That is pure loss: the author's chosen font is discarded and
+the document arrives in a typeface nobody picked. Eleven of the twelve
+substitutions applied automatically were of this kind; only Baskerville was
+justified.
+
+Two further things the measurement showed:
+
+* **Google substitutes sensibly on its own.** The genuinely absent families
+  came back rendered in Dancing Script, Architects Daughter, Quattrocento Sans
+  and Short Stack -- none of which the document named. So substitution earns
+  its place only where a curated choice beats Google's automatic one. Sassoon
+  Primary to Andika does; Arial to Arimo never did.
+* **The replacements themselves all render.** Andika, Carlito, Caladea, Inter,
+  Lexend and the rest came back under their own names, so recommending them is
+  sound.
+
+This was one tenant on one date. Availability can differ by Workspace edition,
+so it is evidence rather than a guarantee -- and a family wrongly listed as
+present is simply left alone, which is the safe direction to be wrong in.
+
 ## Matching metadata for a large catalogue
 
 Matching against a full Google Fonts catalogue rather than a short alias table

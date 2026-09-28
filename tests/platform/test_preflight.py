@@ -30,13 +30,14 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
     assert manifest["fonts"] == [
         {
             "name": "Calibri",
-            "status": "SUBSTITUTED",
-            "replacement": "Carlito",
+            # Measured as present in Google Docs on 2026-09-23, so it is left
+            # alone. This entry previously claimed Calibri had to become
+            # Carlito, which cost the author's choice for no gain.
+            "status": "AVAILABLE",
+            "replacement": None,
             "confidence": "high",
-            "reason": "metric-compatible Calibri alternative",
-            "metricCompatible": True,
-            "basis": "curated-substitution",
-            "workspaceAvailability": "unverified",
+            "basis": "measured-present-in-google-docs",
+            "workspaceAvailability": "measured-2026-09-23",
             "manualReview": False,
         }
     ]
@@ -44,9 +45,14 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
     assert manifest["declaredFonts"] == ["Aptos"]
     assert {font["name"] for font in manifest["fontRequirements"]} == {"Aptos", "Calibri"}
     assert text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontFamily"] == "Calibri"
+    # Calibri needs no replacement: Google Docs has it. The run keeps the font
+    # the author chose, and the report says so rather than proposing a swap.
     assert (
-        text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontCompatibility"]["replacement"]
-        == "Carlito"
+        text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontCompatibility"]["replacement"] is None
+    )
+    assert (
+        text["paragraphs"][0]["runs"][0]["sourceStyle"]["fontCompatibility"]["status"]
+        == "AVAILABLE"
     )
     assert "" not in manifest["relationships"]
     assert "_package" in manifest["relationships"]
@@ -61,7 +67,7 @@ def test_manifest_order_geometry_media_and_risks(pptx, tmp_path):
         warning["font"]
         for warning in manifest["warnings"]
         if warning["code"] == "font_substitution"
-    } == {"Aptos", "Calibri"}
+    } == {"Aptos"}  # Calibri is present in Docs, so there is nothing to warn about
     unknown = manifest["pages"][0]["elements"][-1]
     assert unknown["type"] == "unknown" and unknown["classification"] == "UNSUPPORTED"
     assert pptx.read_bytes() == before
@@ -114,6 +120,7 @@ def test_duplicate_paths_rejected(pptx):
         ({"max_expanded_bytes": 50}, "zip_limits"),
         ({"max_compression_ratio": 1}, "zip_limits"),
         ({"max_xml_bytes": 20}, "part_limit"),
+        ({"max_xml_elements": 2}, "xml_limit"),
         ({"max_upload_bytes": 2}, "upload_too_large"),
     ],
 )
@@ -147,6 +154,46 @@ def test_relationship_escape_rejected(tmp_path):
     )
     with pytest.raises(ToolkitError, match="unsafe component"):
         analyse(write_pptx(tmp_path / "bad.pptx", parts), tmp_path / "out")
+
+
+def test_a_link_to_a_missing_part_is_reported_not_fatal(tmp_path):
+    """Issue #47: some generators write Target="../NULL" for a removed picture.
+
+    PowerPoint opens those files, so refusing the whole presentation over one
+    dead link is worse than useless. It is read, and the link is reported.
+    """
+    parts = fixture_parts()
+    rels = "ppt/slides/_rels/slide2.xml.rels"
+    parts[rels] = parts[rels].replace(
+        "</Relationships>",
+        f'<Relationship Id="dead" Type="{NS["r"]}/image" Target="../NULL"/></Relationships>',
+    )
+    manifest = analyse(write_pptx(tmp_path / "null.pptx", parts), tmp_path / "out")
+    missing = [w for w in manifest["warnings"] if w["code"] == "relationship_target_missing"]
+    assert [(w["part"], w["relationshipId"]) for w in missing] == [
+        ("ppt/slides/slide2.xml", "dead")
+    ]
+    assert len(manifest["pages"]) == 2
+
+
+def test_a_missing_slide_is_still_refused(tmp_path):
+    # A dead picture link loses a picture; a dead slide link loses the order
+    # of the whole deck, so that one stays fatal.
+    parts = fixture_parts()
+    del parts["ppt/slides/slide1.xml"]
+    with pytest.raises(ToolkitError) as error:
+        analyse(write_pptx(tmp_path / "noslide.pptx", parts), tmp_path / "out")
+    assert error.value.code == "invalid_slide_order"
+
+
+def test_links_resolve_case_insensitively(tmp_path):
+    # OPC part names are case-insensitive; Office follows "Slide1.XML".
+    parts = fixture_parts()
+    rels = "ppt/_rels/presentation.xml.rels"
+    parts[rels] = parts[rels].replace("slides/slide1.xml", "Slides/Slide1.XML")
+    manifest = analyse(write_pptx(tmp_path / "case.pptx", parts), tmp_path / "out")
+    assert manifest["pages"][1]["sourcePart"] == "ppt/slides/slide1.xml"
+    assert not [w for w in manifest["warnings"] if w["code"] == "relationship_target_missing"]
 
 
 @pytest.mark.parametrize(
