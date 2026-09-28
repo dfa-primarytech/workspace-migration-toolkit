@@ -4,6 +4,10 @@ The review package that `PROJECT.md` §38 requires before any Google Slides
 rendering begins. **No renderer code exists, and none should be written until
 this has been reviewed and approved.**
 
+> **Since approved** (DECISIONS.md, 2026-09-28). The renderer now exists; see
+> [publisher-renderer.md](publisher-renderer.md). This review is kept as the
+> record of what was known beforehand.
+
 - Date: 2026-09-23
 - Basis: `main` at `46a7648`, libmspub 0.1.4 and librevenge 0.0.5
 - Evidence: one real document (PUB-001), the libmspub-0.1.4 source, and the
