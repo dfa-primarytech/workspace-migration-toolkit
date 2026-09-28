@@ -1306,6 +1306,157 @@ def _move_into_cell(
     report["picturesPlaced"] += 1
 
 
+# The rest of #55: a picture anchored *anywhere* in the document, not just
+# the paragraph immediately above its table -- assigned by rectangle
+# geometry rather than document order. That needs a page-absolute rectangle
+# for both the picture and every candidate cell, which is only ever exact
+# when the table itself states its own page position (w:tblpPr) and every
+# row an exact height. Most real worksheets have neither: a table is
+# usually left to normal flow, and w:trHeight is a minimum, not a height
+# (see place_orphan_pictures above). So this pass is deliberately narrow --
+# it only ever touches a table it can measure exactly, and only a picture
+# that overlaps one -- and leaves everything else for the order-based pass.
+TABLE_ABSOLUTE_H = {"page", "margin"}
+TABLE_ABSOLUTE_V = {"page", "margin"}
+# A picture's own relativeFrom carries more values than a table's tblpPr
+# does (ST_RelFromH/V vs the much smaller CT_TblPPr enum). Only the ones
+# whose edge is unambiguous without knowing mirroring or RTL are safe here.
+PICTURE_ABSOLUTE_H = {"page", "margin", "leftMargin", "insideMargin"}
+PICTURE_ABSOLUTE_V = {"page", "margin", "topMargin"}
+
+
+def _page_offset(frame: str, value: int, margin: int | None, safe: set[str]) -> int | None:
+    """A frame-relative offset translated to one absolute origin: the page's
+    own top-left corner. `value` and `margin` must already be in the same
+    unit -- this does no conversion of its own. None if the frame isn't one
+    this can convert without guessing (`text`/`paragraph`, or a margin we
+    don't have)."""
+    if frame == "page":
+        return value
+    if frame in safe and margin is not None:
+        return value + margin
+    return None
+
+
+def _table_geometry(
+    table: Element, left_margin: int | None, top_margin: int | None
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]] | None:
+    """This table's column and row edges, in EMU, absolute from the page's
+    top-left corner. None unless both are exact: a stated `w:tblpPr`
+    position on the page or margin, a full numeric grid, and every row an
+    exact `w:trHeight`.
+    """
+    properties = table.find(q("w", "tblPr"))
+    position = properties.find(q("w", "tblpPr")) if properties is not None else None
+    if position is None:
+        return None
+    x = _measure(position, "tblpX")
+    y = _measure(position, "tblpY")
+    if x is None or y is None:
+        return None
+    # left_margin/top_margin are already EMU (see _margin), so tblpX/Y are
+    # converted to EMU here too, before anything is added to them.
+    horz = position.get(q("w", "horzAnchor")) or ""
+    vert = position.get(q("w", "vertAnchor")) or ""
+    origin_x = _page_offset(horz, x * EMU_PER_DXA, left_margin, TABLE_ABSOLUTE_H)
+    origin_y = _page_offset(vert, y * EMU_PER_DXA, top_margin, TABLE_ABSOLUTE_V)
+    if origin_x is None or origin_y is None:
+        return None
+
+    grid = table.find(q("w", "tblGrid"))
+    stated = [_measure(c, "w") for c in grid.findall(q("w", "gridCol"))] if grid is not None else []
+    columns = [w for w in stated if w is not None]
+    if not columns or len(columns) != len(stated):
+        return None
+    col_edges, running = [], origin_x
+    for width in columns:
+        col_edges.append((running, running + width * EMU_PER_DXA))
+        running += width * EMU_PER_DXA
+
+    row_edges, running = [], origin_y
+    for row in table.findall(q("w", "tr")):
+        height = row.find(q("w", "trPr") + "/" + q("w", "trHeight"))
+        if height is None or height.get(q("w", "hRule")) != "exact":
+            return None
+        stated_height = _measure(height, "val")
+        if stated_height is None:
+            return None
+        row_edges.append((running, running + stated_height * EMU_PER_DXA))
+        running += stated_height * EMU_PER_DXA
+
+    return col_edges, row_edges
+
+
+def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
+    """Assigns a still-floating picture to the cell its rectangle sits
+    inside, wherever in the document it was anchored -- unlike
+    place_orphan_pictures, this doesn't depend on document order at all.
+
+    Deliberately conservative: only a table whose page position and every
+    row height are stated exactly is measured (see _table_geometry), and
+    only a picture whose rectangle overlaps one of those tables is this
+    pass's business at all. A picture nowhere near a measurable table --
+    a letterhead logo, say -- is never even considered, let alone reported.
+    """
+    parent_of = parents(root)
+    left_margin, top_margin = _margin(root, "left"), _margin(root, "top")
+    report = {"picturesPlaced": 0, "picturesUnplaced": 0, "picturesGeometryUncertain": 0}
+
+    tables = []
+    for table in root.iter(q("w", "tbl")):
+        if _enclosing(parent_of, parent_of.get(table), "tbl") is not None:
+            continue  # a nested table is bounded by its cell, not the page
+        geometry = _table_geometry(table, left_margin, top_margin)
+        if geometry is not None:
+            tables.append((table, *geometry))
+    if not tables:
+        return report
+
+    for anchor in list(root.iter(q("wp", "anchor"))):
+        if classify(anchor)[0] != "picture" or anchor.get("behindDoc") not in (None, *OFF_VALUES):
+            continue
+        across, down = _offset(anchor, "H"), _offset(anchor, "V")
+        width, height = _measure_emu(anchor), _measure_emu_height(anchor)
+        if across is None or down is None or width is None or height is None:
+            continue
+        # A picture's own offset (wp:posOffset) is already EMU, same as
+        # left_margin/top_margin (see _margin) -- no conversion needed here.
+        x0 = _page_offset(across[0], across[1], left_margin, PICTURE_ABSOLUTE_H)
+        y0 = _page_offset(down[0], down[1], top_margin, PICTURE_ABSOLUTE_V)
+        if x0 is None or y0 is None:
+            continue
+        x1, y1 = x0 + width, y0 + height
+
+        for table, col_edges, row_edges in tables:
+            if (
+                x1 <= col_edges[0][0]
+                or x0 >= col_edges[-1][1]
+                or y1 <= row_edges[0][0]
+                or y0 >= row_edges[-1][1]
+            ):
+                continue  # no overlap with this table -- not this pass's business
+            column = next(
+                (n for n, (left, right) in enumerate(col_edges) if left <= x0 and x1 <= right), None
+            )
+            row = next(
+                (n for n, (top, bottom) in enumerate(row_edges) if top <= y0 and y1 <= bottom), None
+            )
+            if column is None or row is None:
+                report["picturesGeometryUncertain"] += 1
+                break
+            cells = [
+                cell
+                for cell in table.findall(q("w", "tr"))[row].findall(q("w", "tc"))
+                if _enclosing(parent_of, parent_of.get(cell), "tbl") is table
+            ]
+            if column >= len(cells):
+                report["picturesGeometryUncertain"] += 1
+                break
+            _move_into_cell(cells[column], anchor, parent_of, ids, report)
+            break
+    return report
+
+
 def _cell_pictures(cell: Element) -> bool:
     """Whether this cell's own paragraphs hold an inline picture."""
     return any(list(p.iter(q("wp", "inline"))) for p in cell.findall(q("w", "p")))
@@ -1445,6 +1596,14 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     # Before the tables are measured: a picture that lands in a cell changes
     # how wide that table needs to be.
     report.update(place_orphan_pictures(root, ids))
+    # A different reach than the pass above: by rectangle geometry rather
+    # than document order, so it also catches a picture anchored nowhere
+    # near its table in the XML -- but only for a table exact enough to
+    # measure at all. Picture counts are summed, not replaced.
+    geometry = place_pictures_by_table_geometry(root, ids)
+    report["picturesPlaced"] += geometry["picturesPlaced"]
+    report["picturesUnplaced"] += geometry["picturesUnplaced"]
+    report["picturesGeometryUncertain"] = geometry["picturesGeometryUncertain"]
     report.update(fit_tables_to_page(root))
     # After fitting: a picture #34 or #55 moved into a row may have just been
     # shrunk to the column, which changes whether the row still fits a page.

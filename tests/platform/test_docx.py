@@ -626,6 +626,7 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
         "blankLinesReclaimed": 0,
         "picturesPlaced": 0,
         "picturesUnplaced": 0,
+        "picturesGeometryUncertain": 0,
         "tablesNarrowed": 0,
         "picturesShrunk": 0,
         "rowsProtected": 0,
@@ -1317,6 +1318,89 @@ def test_text_between_stacked_pictures_stops_the_walk():
     assert report["picturesPlaced"] == 1
     assert report["picturesUnplaced"] == 0
     assert [c for c in cells if c[1]] == [["1.", 1]]
+
+
+def positioned_table(x, y, row_heights, columns=(3000, 3000), horz="page", vert="page"):
+    """A table pinned to an exact page position, every row an exact height --
+    the only shape #55's geometry pass can measure without guessing."""
+    grid = "".join(f"<w:gridCol w:w='{w}'/>" for w in columns)
+    rows = "".join(
+        f"<w:tr><w:trPr><w:trHeight w:val='{h}' w:hRule='exact'/></w:trPr>"
+        + "".join("<w:tc><w:p/></w:tc>" for _ in columns)
+        + "</w:tr>"
+        for h in row_heights
+    )
+    return (
+        f"<w:tbl><w:tblPr><w:tblpPr w:horzAnchor='{horz}' w:vertAnchor='{vert}' "
+        f"w:tblpX='{x}' w:tblpY='{y}'/></w:tblPr><w:tblGrid>{grid}</w:tblGrid>{rows}</w:tbl>"
+    )
+
+
+# Keeps every geometry test out of reach of the order-based pass above --
+# that pass claims any picture anchored in the paragraph immediately before
+# a table, which would leave these tests unable to tell which pass actually
+# placed anything. A real paragraph of text in between stops it (see
+# test_text_between_stacked_pictures_stops_the_walk) without affecting
+# geometry, which doesn't care about document order at all.
+NOT_ADJACENT_TO_TABLE = "<w:p><w:r><w:t>Something unrelated in between.</w:t></w:r></w:p>"
+
+
+def test_a_picture_anchored_anywhere_is_placed_by_table_geometry():
+    """#55's second half: geometry reaches a picture the order-based pass
+    never would, because nothing connects it to the table in the XML."""
+    table = positioned_table(1000, 1000, [2000], columns=(3000, 3000))
+    body = (
+        anchor(
+            PICTURE, h=("page", offset(800000)), v=("page", offset(700000)), cx=500000, cy=500000
+        )
+        + NOT_ADJACENT_TO_TABLE
+        + table
+        + A4_SECTION
+    )
+    root = parse_xml(document(body))
+    report = transform(root)
+    assert report["picturesPlaced"] == 1
+    assert report["picturesGeometryUncertain"] == 0
+    cell = root.find(".//" + q("w", "tc"))
+    assert list(cell.iter(q("wp", "inline"))), "the picture should have landed in the first cell"
+    assert not list(root.iter(q("wp", "anchor"))), "nothing should still be floating"
+
+
+def test_a_picture_straddling_two_cells_is_left_alone_and_reported():
+    """Ambiguous is reported, never guessed -- even with exact geometry."""
+    table = positioned_table(1000, 1000, [2000], columns=(3000, 3000))
+    body = (
+        anchor(
+            PICTURE, h=("page", offset(2300000)), v=("page", offset(700000)), cx=600000, cy=500000
+        )
+        + NOT_ADJACENT_TO_TABLE
+        + table
+        + A4_SECTION
+    )
+    root = parse_xml(document(body))
+    report = transform(root)
+    assert report["picturesPlaced"] == 0
+    assert report["picturesGeometryUncertain"] == 1
+    assert list(root.iter(q("wp", "anchor"))), "the picture must still be floating, untouched"
+
+
+def test_a_picture_nowhere_near_a_measurable_table_is_left_unreported():
+    """Out of this pass's reach entirely -- a letterhead logo, say -- is
+    simply not its business, not a defect to report."""
+    table = positioned_table(1000, 1000, [2000], columns=(3000, 3000))
+    body = (
+        anchor(
+            PICTURE, h=("page", offset(9000000)), v=("page", offset(9000000)), cx=500000, cy=500000
+        )
+        + NOT_ADJACENT_TO_TABLE
+        + table
+        + A4_SECTION
+    )
+    root = parse_xml(document(body))
+    report = transform(root)
+    assert report["picturesPlaced"] == 0
+    assert report["picturesGeometryUncertain"] == 0
+    assert list(root.iter(q("wp", "anchor")))
 
 
 def test_a_placed_picture_is_centred_rather_than_given_a_recovered_offset():
