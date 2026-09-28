@@ -216,6 +216,39 @@ def test_elements_are_assigned_to_their_section(tmp_path):
     assert [len(p["elements"]) for p in manifest["pages"]] == [1, 1]
 
 
+def test_a_section_break_inside_a_content_control_is_counted(tmp_path):
+    """A block-level w:sdt can wrap the paragraph that ends a section.
+
+    page_sizes used to walk body.iter(sectPr), which found this one, but
+    section_index only looked at direct body children, so a picture after
+    the break was attributed to the wrong (earlier) section's page size.
+    """
+    wrapped_break = f"<w:sdt><w:sdtContent>{SECTION}</w:sdtContent></w:sdt>"
+    body = anchor(PICTURE) + wrapped_break + anchor(PICTURE) + SECTION
+    manifest = parse_body(tmp_path, body)
+    assert manifest["document"]["pageCount"] == 2
+    assert [len(p["elements"]) for p in manifest["pages"]] == [1, 1]
+
+
+def test_a_tracked_change_s_previous_section_properties_are_not_counted(tmp_path):
+    """w:sectPrChange keeps the *previous* page setup, not a live break.
+
+    page_sizes used to walk body.iter(sectPr), which finds this nested copy
+    too, over-counting sections and measuring later anchors against the
+    wrong page size.
+    """
+    tracked = (
+        "<w:p><w:pPr><w:sectPr>"
+        '<w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:sectPrChange w:id="1"><w:sectPr><w:pgSz w:w="16838" w:h="11906"/></w:sectPr>'
+        "</w:sectPrChange>"
+        "</w:sectPr></w:pPr></w:p>"
+    )
+    body = anchor(PICTURE) + tracked
+    manifest = parse_body(tmp_path, body)
+    assert manifest["document"]["pageCount"] == 1
+
+
 # ---------------------------------------------------------------- renderer
 
 
