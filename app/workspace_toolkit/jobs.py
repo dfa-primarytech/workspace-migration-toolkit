@@ -22,7 +22,9 @@ def workspace(settings: Settings):
         yield uuid4().hex, root
 
 
-async def preflight(root: Path, settings: Settings, fmt: Format = PPTX) -> dict:
+async def preflight(
+    root: Path, settings: Settings, fmt: Format = PPTX, *, compress_pictures: bool = False
+) -> dict:
     output = root / "result"
     output.mkdir()
     # Worker receives limits only, never OAuth credentials or session keys.
@@ -31,6 +33,8 @@ async def preflight(root: Path, settings: Settings, fmt: Format = PPTX) -> dict:
     # A larger file gets proportionally longer; the worker's own CPU limit is
     # set from the same figure, so the two cannot disagree.
     timeout = settings.parser_timeout_for(source.stat().st_size if source.exists() else 0)
+    if compress_pictures:
+        timeout *= 2  # decoding and re-encoding photographs roughly doubles the work
     limits = {
         k: v
         for k, v in asdict(settings).items()
@@ -46,6 +50,7 @@ async def preflight(root: Path, settings: Settings, fmt: Format = PPTX) -> dict:
         str(output),
         str(config),
         fmt.key,
+        *(["compress-pictures"] if compress_pictures else []),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         env={

@@ -46,12 +46,44 @@ def import_limit_warning(key: str, size: int) -> list[dict]:
             "beyond_import_limit",
             f"The file sent to Google would be {size / 1_000_000:,.0f} MB. Google's published limit for "
             f"converting a file to {product} is {limit // 1_000_000} MB, so Google is "
-            "likely to refuse it.",
+            'likely to refuse it. If it holds photographs, converting with "Make '
+            'pictures smaller" may bring it under.',
             classification=C.UNSUPPORTED,
             sizeBytes=size,
             limitBytes=limit,
         )
     ]
+
+
+def pictures_report(path: Path) -> tuple[dict, dict] | None:
+    """What "Make pictures smaller" did: the details, and a note for a person."""
+    if not path.exists():
+        return None
+    result = json.loads(path.read_text(encoding="utf-8"))
+    done = result.get("picturesCompressed") or []
+    if result.get("failed"):
+        note = warning(
+            "pictures_not_compressed",
+            "The pictures could not be made smaller, so they were converted at full size.",
+            classification=C.IGNORED,
+        )
+    elif not done:
+        note = warning(
+            "pictures_already_small",
+            "No pictures needed making smaller: none was larger than the size it is shown at.",
+            classification=C.IGNORED,
+        )
+    else:
+        before, after = result["bytesBefore"], result["bytesAfter"]
+        note = warning(
+            "pictures_compressed",
+            f"{len(done)} picture{'s' if len(done) != 1 else ''} made smaller for Google, "
+            f"reducing the file from {before / 1_000_000:,.1f} MB to {after / 1_000_000:,.1f} MB. "
+            "Your original file is unchanged.",
+            classification=C.SUBSTITUTED,
+            count=len(done),
+        )
+    return result, note
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -218,6 +250,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # arrives by id instead of a request body -- everything from here on
         # is shared between the two sources.
         drive_file_id = request.headers.get("x-drive-file-id") or None
+        # Opt-in, and only for a conversion: checking a file never changes it.
+        smaller = do_convert and request.headers.get("x-compress-pictures") == "1"
         if drive_file_id and not settings.picker_ready:
             raise ToolkitError(
                 "picker_unavailable", "Adding a file from Drive is not available.", 503
@@ -280,7 +314,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     "empty_upload", "Please choose a file that is not empty."
                                 )
 
-                            manifest = await preflight(root, settings, pipeline.fmt)
+                            manifest = await preflight(
+                                root, settings, pipeline.fmt, compress_pictures=smaller
+                            )
                             # What Google receives: for a deck, without its video.
                             sent = root / "result" / ("converted" + pipeline.fmt.suffix)
                             beyond = import_limit_warning(
@@ -309,6 +345,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             # Added here rather than in each pipeline, so every
                             # format reports what happened in Drive the same way.
                             report.setdefault("warnings", []).extend(beyond + google.warnings)
+                            outcome = pictures_report(root / "result" / "pictures.json")
+                            if smaller and outcome:
+                                report["pictures"], note = outcome
+                                report["warnings"].append(note)
                             return report
                 except TimeoutError:
                     if progress.get("folderUrl"):

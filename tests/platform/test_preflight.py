@@ -372,3 +372,39 @@ def test_max_upload_size_is_optional(monkeypatch):
     monkeypatch.setenv("MAX_UPLOAD_SIZE", "0")
     with pytest.raises(ValueError):
         Settings.from_env()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="OS resource limits are Linux-only")
+def test_a_worker_under_a_stricter_inherited_limit_still_runs(pptx, tmp_path):
+    # A process cannot raise a hard limit it inherited. The worker's memory cap
+    # grows with the file, so it must settle for the stricter cap, not fail.
+    import resource
+    import subprocess
+
+    output = tmp_path / "result"
+    output.mkdir()
+    config = tmp_path / "limits.json"
+    config.write_text("{}", encoding="utf-8")
+    ceiling = 700 * 1024 * 1024  # below the worker's own 768 MiB
+
+    def tighter():
+        resource.setrlimit(resource.RLIMIT_AS, (ceiling, ceiling))
+
+    run = subprocess.run(  # noqa: S603 -- fixed argv
+        [
+            sys.executable,
+            "-m",
+            "workspace_toolkit.worker",
+            str(pptx),
+            str(output),
+            str(config),
+            "pptx",
+        ],
+        preexec_fn=tighter,  # noqa: PLW1509 -- test-only, no threads
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    assert run.returncode == 0, (
+        (output / "error.json").read_text() if (output / "error.json").exists() else run.stderr
+    )

@@ -11,12 +11,14 @@ on:
     paths:
       - 'app/workspace_toolkit/pptx.py'
       - 'app/workspace_toolkit/package.py'
+      - 'app/workspace_toolkit/pictures.py'
       - 'tests/platform/test_pptx_*.py'
       - '.github/workflows/pptx-validity.yml'
   pull_request:
     paths:
       - 'app/workspace_toolkit/pptx.py'
       - 'app/workspace_toolkit/package.py'
+      - 'app/workspace_toolkit/pictures.py'
       - 'tests/platform/test_pptx_*.py'
       - '.github/workflows/pptx-validity.yml'
   workflow_dispatch:

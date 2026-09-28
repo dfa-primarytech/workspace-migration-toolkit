@@ -252,7 +252,7 @@ def test_what_happened_in_drive_reaches_the_report(monkeypatch, pptx):
     from workspace_toolkit import web
     from workspace_toolkit.pipelines import resolve
 
-    async def analysed(root, settings, fmt):
+    async def analysed(root, settings, fmt, **options):
         return {"source": {"sha256": "abc"}}
 
     async def converted(root, manifest, google, progress, original_name=""):
@@ -364,7 +364,7 @@ def test_convert_downloads_a_drive_picked_file_instead_of_the_request_body(monke
         destination.write_bytes(pptx.read_bytes())
         return destination.stat().st_size
 
-    async def analysed(root, settings, fmt):
+    async def analysed(root, settings, fmt, **options):
         return {"source": {"sha256": "abc"}}
 
     async def converted(root, manifest, google, progress, original_name=""):
@@ -465,7 +465,7 @@ def _drive_convert(monkeypatch, reported_size, expires_in):
         destination.write_bytes(b"x")
         return reported_size
 
-    async def analysed(root, settings, fmt):
+    async def analysed(root, settings, fmt, **options):
         return {"source": {"sha256": "abc"}}
 
     async def converted(root, manifest, google, progress, original_name=""):
