@@ -298,3 +298,26 @@ decisions:
 Build order: (1) accept `.pub` in the app with a working "Check file";
 (2) the renderer, as pure IR → Slides requests, tested offline; (3) image
 delivery and conversion; (4) a live run by the human with PUB-001.
+
+## 2026-09-28: Publisher renderer defaults (step 2)
+Judgement calls made while mapping the IR to Slides requests. Each one is
+reported per element, and none is verified against Google until step 4.
+
+- **Straight strokes with no filled area become editable lines**, one per
+  segment, grouped. Pictures are kept for filled or curved drawings.
+  PUB-001's only drawings are two ruled lines, and staff can edit a line;
+  they can't edit a picture of one.
+- **Pictures are stretched to their frames**, which is what Publisher's
+  bitmap fill (`style:repeat: stretch`) and LibreOffice both do. The reader
+  drops crops, so a heavily stretched picture is reported rather than
+  guessed at.
+- **A picture that can't be read leaves a dashed box saying so**, in its
+  place on the slide, as well as the report line (§16). A gap in the layout
+  would be missed.
+- **Empty trailing paragraphs are dropped**; an empty paragraph in the
+  middle keeps its font size so the spacing stays.
+- **The first page's size is the presentation's**, and differing page sizes
+  are reported, because Slides has one size per presentation.
+- **Requests are grouped per page** so step 3 can sign picture links a page
+  at a time within their 15-minute life.
+
