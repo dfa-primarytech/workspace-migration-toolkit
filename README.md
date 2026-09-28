@@ -4,14 +4,24 @@ Tools for migrating Microsoft Office documents to Google Workspace without the
 formatting falling apart.
 
 Built during a UK multi-academy trust's M365 → Google Workspace migration.
-Currently one working tool, with research and plans for the rest:
+There are now two things in this repo:
+
+- **docx-fixer** (below): the original, frozen Google Apps Script web app —
+  working, in production use.
+- **[workspace-migration-toolkit platform](docs/platform.md)**
+  (`app/workspace_toolkit/`): a newer Python/FastAPI app that converts both
+  `.docx` and `.pptx` via native Google Drive/Slides import, with its own
+  web UI, browser sign-in and optional "Add from Drive" picker. See
+  [docs/platform.md](docs/platform.md) for setup, configuration and
+  branding.
 
 | Tool | Format | Status |
 |---|---|---|
-| **docx-fixer** (below) | Word → Docs | **Working**, in production use |
-| pptx media extractor | PowerPoint → Slides | Planned — [design](docs/research.md#powerpoint--google-slides) |
-| xlsx estate analyser | Excel → Sheets | Planned — [design](docs/research.md#excel--google-sheets) |
-| pub triage | Publisher → Slides/PDF | Planned — [⚠️ time-critical](docs/research.md#-time-critical-microsoft-publisher-retires-1-october-2026) |
+| **docx-fixer** (below) | Word → Docs | **Working**, in production use (Apps Script, `src/`) |
+| [platform DOCX](docs/platform.md) | Word → Docs | **Working** (Python, `app/workspace_toolkit/`) |
+| [platform PPTX](docs/platform.md) | PowerPoint → Slides | **Working** (Python, `app/workspace_toolkit/`) — [design](docs/research.md#powerpoint--google-slides) |
+| xlsx estate analyser | Excel → Sheets | In progress — draft PR #72 |
+| pub triage | Publisher → Slides/PDF | In progress — native parser merged, no Slides renderer yet — [⚠️ time-critical](docs/research.md#-time-critical-microsoft-publisher-retires-1-october-2026) |
 
 ---
 
@@ -136,8 +146,10 @@ Constants near the top of the anchor section in `src/Code.gs`:
 
 ## Roadmap
 
-Expanding to the rest of the migration: PowerPoint, Excel and Publisher.
-See [`docs/research.md`](docs/research.md) — including a **time-critical note on
+This `docx-fixer` tool is frozen; further DOCX/PPTX work happens in the
+[platform app](docs/platform.md) instead, which now handles both Word and
+PowerPoint. Excel and Publisher are still in progress there. See
+[`docs/research.md`](docs/research.md) — including a **time-critical note on
 Microsoft Publisher's retirement on 1 October 2026**.
 
 ## Contributing
