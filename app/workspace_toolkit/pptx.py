@@ -41,6 +41,20 @@ def local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def shape_name(node: Element) -> str:
+    """The object's own name, as PowerPoint's selection pane shows it.
+
+    For inserted audio and video PowerPoint uses the file's name, which is the
+    closest thing a package keeps to the name the teacher gave the file.
+    """
+    for child in node:
+        if local(child.tag).startswith("nv"):
+            properties = child.find("p:cNvPr", NS)
+            if properties is not None:
+                return properties.get("name", "")
+    return ""
+
+
 def paragraphs(root: Element) -> list[dict]:
     result = []
     for p in root.findall(".//a:p", NS):
@@ -326,6 +340,7 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                     kind = "text"
                 obj = {
                     "id": oid,
+                    "name": shape_name(node),
                     "type": kind,
                     "zIndex": len(elements),
                     "parentId": parent_id,

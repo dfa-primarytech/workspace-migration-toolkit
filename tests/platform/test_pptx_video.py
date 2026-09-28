@@ -25,10 +25,11 @@ MEDIA = "http://schemas.microsoft.com/office/2007/relationships/media"
 VIDEO_BYTES = b"\x00\x00\x00\x18ftypmp42" + bytes(range(256)) * 400
 
 
-def media_pic(shape_id, play_rid, media_rid, kind="video", poster="rId3"):
+def media_pic(shape_id, play_rid, media_rid, kind="video", poster="rId3", name=None):
     element = "videoFile" if kind == "video" else "audioFile"
+    name = name or f"{kind} {shape_id}"
     return (
-        f'<p:pic><p:nvPicPr><p:cNvPr id="{shape_id}" name="{kind} {shape_id}">'
+        f'<p:pic><p:nvPicPr><p:cNvPr id="{shape_id}" name="{name}">'
         '<a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr>'
         '<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>'
         f'<p:nvPr><a:{element} r:link="{play_rid}"/><p:extLst>'
@@ -72,7 +73,7 @@ def video_deck(tmp_path, *, extra_rels="", name="video.pptx"):
     parts["ppt/slides/slide1.xml"] = (
         f'<p:sld xmlns:p="{NS["p"]}" xmlns:a="{NS["a"]}" xmlns:r="{NS["r"]}"><p:cSld><p:spTree>'
         "<p:nvGrpSpPr/><p:grpSpPr/>"
-        + media_pic(4, "rId2", "rId1")
+        + media_pic(4, "rId2", "rId1", name="Volcano eruption")
         + media_pic(5, "rId5", "rId4", kind="audio")
         + f"</p:spTree></p:cSld>{TIMING}</p:sld>"
     )
@@ -222,3 +223,15 @@ def test_the_stripped_deck_is_still_a_valid_package(tmp_path):
     path.write_bytes(data.getvalue())
     Package(path, Settings()).close()  # our own reader accepts it
     analyse(path, tmp_path / "again", Settings())
+
+
+def test_the_saved_video_is_named_after_its_file_and_slide(tmp_path):
+    from workspace_toolkit.google import asset_names
+
+    manifest = analyse(video_deck(tmp_path), tmp_path / "out", Settings())
+    names = asset_names(manifest, "Science")
+    video = next(a["id"] for a in manifest["assets"].values() if a["kind"] == "video")
+    audio = next(a["id"] for a in manifest["assets"].values() if a["kind"] == "audio")
+    # presentation.xml lists slide2.xml first, so the video's slide is number 2.
+    assert names[video] == "Science – slide 2 – Volcano eruption.mp4"
+    assert names[audio] == "Science – slide 2 – audio 1.wav", "a default name falls back"

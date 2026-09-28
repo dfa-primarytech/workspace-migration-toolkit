@@ -202,6 +202,10 @@ re-parsing, is kept. The report lists what was removed (`videosRemoved`), warns
 `videos_removed`, and warns `removed_video_not_saved` if a removed video's Drive
 copy failed -- its original file then still has it. The import-limit warning
 judges the file Google receives, not the upload.
+Saved copies are named `<deck> – slide NN – <name>`, where `<name>` is the
+object's own name when PowerPoint gave it a meaningful one (it names an
+inserted video or sound after its file) and `video 1`, `audio 2` and so on
+otherwise. PowerPoint's defaults such as "Picture 3" count as no name.
 The server is Hypercorn, which speaks HTTP/2 without TLS: Cloud Run refuses an
 HTTP/1 request body over 32 MiB, so deploy with end-to-end HTTP/2 (the `h2c`
 port name in `deploy/cloud-run.example.yaml`). The subprocess inherits only a small runtime environment,

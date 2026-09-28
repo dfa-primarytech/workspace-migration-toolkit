@@ -10,8 +10,9 @@
   - **What stays.** The picture element and its poster frame, so the slide shows a still image.
   - **How it's edited.** As bytes, like the font rewrite. Each edited part is re-parsed and checked: every picture must survive and no removed id may remain referenced. A part that fails the check keeps its video.
   - **Audio is untouched,** because transition sounds share the same relationships.
+  - **Media copies keep their own name,** at the human's request: `<deck> – slide NN – <object name>.ext`. The analysis now records each object's `name` (`cNvPr`). PowerPoint names inserted media after its file, so a copy reads "Volcano eruption.mp4" rather than "video 3". Default names ("Picture 3", "Recorded Sound") fall back to the number. On a media object, the video or sound takes the name, not its poster image.
 - Checks:
-  - Platform 346 passed, 9 skipped (main: 334 and 8). The extra skip is the LibreOffice check, which runs in CI.
+  - Platform 352 passed, 9 skipped (main: 334 and 8). The extra skip is the LibreOffice check, which runs in CI.
   - Ruff clean; mypy reports no issues in 17 files.
   - A reference-integrity test checks that every `r:*` attribute resolves and every internal target exists after stripping.
   - The import-limit test was confirmed to depend on stripping: without it, the converted deck is exactly the source size.

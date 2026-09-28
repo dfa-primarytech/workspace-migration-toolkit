@@ -512,6 +512,42 @@ def _placements(manifest: dict) -> dict[str, list[int]]:
     return placed
 
 
+# Names PowerPoint gives an object by default, which say nothing about it.
+DEFAULT_SHAPE_NAME = re.compile(
+    r"(?:picture|image|video|audio|media|movie|sound|online media|recorded sound|"
+    r"screen recording|content placeholder|placeholder|object|graphic)?\s*\d*",
+    re.IGNORECASE,
+)
+MEDIA_SUFFIX = re.compile(
+    r"\.(?:mp4|m4v|mov|wmv|avi|mpe?g|mp3|m4a|wav|wma|aac|ogg|png|jpe?g|gif|bmp|emf|wmf|tiff?)$",
+    re.IGNORECASE,
+)
+
+
+def _own_names(manifest: dict) -> dict[str, str]:
+    """Each asset's own name, from the first object on a slide that uses it.
+
+    Only a meaningful name counts: "Picture 3" or "Video 2" is PowerPoint's
+    default and would only repeat what the numbered name already says.
+    """
+    if manifest.get("source", {}).get("type") != "pptx":
+        return {}
+    kinds = {a["id"]: a.get("kind") for a in manifest.get("assets", {}).values()}
+    names: dict[str, str] = {}
+    for page in manifest.get("pages") or []:
+        for element in page.get("elements") or []:
+            own = clean_name(MEDIA_SUFFIX.sub("", (element.get("name") or "").strip()))
+            if not own or DEFAULT_SHAPE_NAME.fullmatch(own):
+                continue
+            ids = element.get("assetIds") or []
+            # A video or sound object also carries its still image; the name
+            # describes the media, so the still image does not take it.
+            media = [i for i in ids if kinds.get(i) in {"audio", "video"}]
+            for asset_id in media or ids:
+                names.setdefault(asset_id, own)
+    return names
+
+
 def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     """A name for every asset that says where it came from, keyed by asset id.
 
@@ -519,8 +555,14 @@ def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     follows the deck rather than the order the archive happened to store them
     in. An asset nothing placed -- one used only by a layout or a master --
     keeps a name without a slide rather than being given a misleading one.
+
+    Where the object carrying it has a name of its own -- PowerPoint names an
+    inserted video or sound after its file -- that name replaces the number,
+    so a teacher putting it back finds "Volcano eruption", not "video 3".
     """
     placed = _placements(manifest)
+    own = _own_names(manifest)
+    used: Counter[str] = Counter()
     width = len(str(max((slides[-1] for slides in placed.values()), default=0)))
     deck = clean_name(original_name)
     assets = list(manifest.get("assets", {}).values())
@@ -534,12 +576,16 @@ def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     for _, asset in ranked:
         kind = asset.get("kind") or "file"
         counts[kind] += 1
+        label = own.get(asset["id"]) or f"{kind} {counts[kind]}"
+        used[label.casefold()] += 1
+        if used[label.casefold()] > 1:  # two different files, one name
+            label = f"{label} ({used[label.casefold()]})"
         parts = [
             part
             for part in (
                 deck,
                 _slide_phrase(placed.get(asset["id"], []), width),
-                f"{kind} {counts[kind]}",
+                label,
             )
             if part
         ]
