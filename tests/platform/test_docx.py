@@ -6,7 +6,7 @@ from collections import Counter
 import pytest
 from workspace_toolkit.config import Settings
 from workspace_toolkit.docs import Ids, render, send_behind_text, transform
-from workspace_toolkit.docx import NS, local, parse, q
+from workspace_toolkit.docx import NS, analysis_report, local, parse, q
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.package import CONTENT_NS, DOCX, DOCX_MAIN_MIME, REL_NS, Package
 
@@ -743,6 +743,47 @@ def render_with_header(tmp_path, body, header, footer=None):
     with zipfile.ZipFile(tmp_path / "out.docx") as archive:
         parts = {n: archive.read(n).decode() for n in archive.namelist() if n.endswith(".xml")}
     return report, parts
+
+
+def parse_with_header(tmp_path, body, header, footer=None):
+    source = docx_with_header(tmp_path / "sample.docx", body, header, footer)
+    package = Package(source, Settings(), DOCX)
+    try:
+        return parse(package, "sample.docx", "sha")
+    finally:
+        package.close()
+
+
+def test_the_preflight_manifest_counts_header_and_footer_elements_too(tmp_path):
+    """render() transforms every header and footer; parse() must not skip them.
+
+    Otherwise a picture or text box living only in a letterhead or title block
+    is converted but never appears in the report a reviewer sees beforehand.
+    """
+    header = anchor(TEXTBOX, h=("margin", offset(0)), v=("paragraph", offset(0)))
+    footer = anchor(PICTURE, h=("margin", offset(0)), v=("paragraph", offset(0)))
+    manifest = parse_with_header(tmp_path, SECTION, header, footer)
+    found = {(e["part"], e["kind"]) for e in manifest["headerFooterElements"]}
+    assert found == {("word/header1.xml", "textbox"), ("word/footer1.xml", "picture")}
+    # Not attributed to any numbered page: a header or footer's own page
+    # range is not something this model computes.
+    assert all(len(page["elements"]) == 0 for page in manifest["pages"])
+
+
+def test_the_reviewer_facing_report_counts_header_and_footer_elements(tmp_path):
+    """analysis_report is what a reviewer actually sees before converting.
+
+    Counting them in the manifest but not here would still under-report --
+    the person deciding whether to convert never sees the letterhead's own
+    text box or its warnings.
+    """
+    header = anchor(TEXTBOX)  # unpositioned, so it carries its own warning
+    manifest = parse_with_header(tmp_path, SECTION, header)
+    report = analysis_report(manifest)
+    assert report["elementCounts"]["text"] == 1
+    matches = [w for w in report["warnings"] if w["code"] == "textbox_unpositioned"]
+    assert len(matches) == 1
+    assert matches[0]["part"] == "word/header1.xml"
 
 
 def test_headers_get_the_same_structural_passes_as_the_body(tmp_path):
