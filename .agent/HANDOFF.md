@@ -31,6 +31,22 @@
 
 ## Previous handoff
 
+- Agent: Claude Code, working the DOCX issue queue at the human's request
+- Date: 2026-09-28
+- Branches: `fix/docx-font-and-section-resolution` (PR #71, fixes #49), `feat/docx-cantsplit-picture-rows` (PR #74, part of #55). Both based on main `9f58568` (after PR #69 merged).
+- Objective: work the DOCX-owned issues left in CURRENT.md/BACKLOG.md after #69 merged.
+- Completed: #44 closed with no code change -- checked against main and found already fixed by PR #67 (`mc:Ignorable` pruning, cell-ending-in-table) and the earlier #42 blank-lines work (empty header/footer); verified with the issue's own named regression tests before closing. #49: `_slot_fonts` now lets a `*Theme` w:rFonts attribute win over a stale literal one (ECMA-376 SS17.3.2.26 says the literal must be ignored, not just deprioritised); `theme_fonts` now also resolves `majorAscii`/`minorAscii`. `page_sizes`/`section_index` now share one `_section_breaks` walk that descends into `w:sdt/w:sdtContent` and never into `w:sectPrChange`, matching how `docs.py:printable_width` already read sections. #55 (first half only): `protect_picture_rows` adds `w:cantSplit` to a row that gained a picture from #34, skipped when the picture is already taller than the printable page; new `printable_height` alongside `printable_width`, sharing a new `_final_section` helper.
+- Checks: both branches pass the full platform suite locally (285 passed, 8 skipped, 12 pre-existing failures reproducible on main with no changes -- a subprocess-parser environment issue in this checkout, unrelated). Ruff, format, mypy and bandit clean on both.
+- Known failures: none caused by this work. The 12 pre-existing `test_docx.py`/`test_preflight.py`/`test_web.py` failures ("The file could not be analysed") are an environment issue in this checkout (a subprocess-based parser not finding something it needs), confirmed present on `main` before any of these changes -- not investigated further, out of scope for DOCX-owned issues.
+- Unresolved: #55's second half (geometry-based assignment of a picture anchored outside its table, `picture_placement_uncertain` reporting) is a larger follow-up, left open and commented on the issue. #53 and #54 are untouched, both left for whoever's next.
+- Decisions: none new.
+- Next task: #54 (post-import blank-page repair) or #53 (post-import Docs API/PDF read-back, still blocked on the live OAuth scope spike) are what's left DOCX-owned. Review PRs #71 and #74 before merging (no independent DOCX reviewer per CURRENT.md -- worth flagging to whoever picks this up next).
+- Warnings: do not assume a `test_docx.py` failure here is real without first checking it also fails on unmodified `main` -- the subprocess-parser environment issue produces the same 10-12 failures regardless of what's changed in this checkout.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron, working the issue queue at the human's request
 - Date: 2026-09-23
 - Branches: `fix/xml-element-limit` (#59, fixes #46), `fix/dangling-relationships` (#61, fixes #47, stacked on #59), `fix/pptx-font-rewrite-scope` (this branch, fixes #50). All based on main `6ae8dee`.
