@@ -118,6 +118,29 @@ Official API references:
 [Slides get/scopes](https://developers.google.com/workspace/slides/api/reference/rest/v1/presentations/get),
 [OAuth web flow](https://developers.google.com/identity/protocols/oauth2/web-server).
 
+## Branding
+
+The frontend (`app/workspace_toolkit/static/`) ships branded with PrimaryTech's
+own design system out of the box: `brand.css` holds the design tokens (colors,
+type scale, spacing, radii, shadows) as CSS custom properties, `style.css`
+consumes those tokens rather than hardcoded values, and `primarytech-logo.svg`
+is the wordmark referenced from `index.html`.
+
+To re-brand for another deployment:
+
+- Replace the `:root { ... }` token values in `brand.css` with the target
+  brand's own colors/type/spacing -- `style.css` picks up the change
+  automatically since it never hardcodes a value itself. Component rules
+  should not need to change unless the new brand's layout genuinely differs.
+- Swap `primarytech-logo.svg` for the new logo (or update the `src`/`alt` on
+  `#brand-logo` in `index.html` if the replacement has a different filename).
+- If the new brand's typeface isn't system/Google-Fonts-hosted the same way,
+  update the `@import` at the top of `brand.css` and the CSP's `style-src`/
+  `font-src` additions in `web.py` (`create_app`'s `safe_errors` middleware)
+  to match the new font host, or drop them if self-hosting fonts instead.
+- No other file depends on brand-specific values; `app.js` and the Python
+  backend are brand-agnostic.
+
 ## Container and Cloud Run
 
 ```bash
