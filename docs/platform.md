@@ -68,6 +68,17 @@ Register the exact redirect URI `PUBLIC_BASE_URL/auth/callback`. Configure:
   `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
 - Optional `MAX_UPLOAD_SIZE` in bytes (default 25 MiB, configured maximum 100 MiB),
   `TEMP_DIR` (existing writable directory), `PORT`, `LOG_LEVEL`.
+- Optional `GOOGLE_PICKER_API_KEY`: a Cloud Console API key restricted by HTTP
+  referrer to this app's own origin, with the Google Picker API enabled. Adds an
+  "Add from Drive" option beside the local file chooser. Unlike the OAuth client
+  secret, this key is designed to be used from browser JavaScript -- the referrer
+  restriction is what keeps it safe to expose, not secrecy. Left unset, the
+  feature is hidden and the app behaves exactly as before. **Not verified against
+  a live deployment**: no GCP project exists in the environment this was built
+  in. The Picker also needs its own Content-Security-Policy allowance
+  (`script-src https://apis.google.com`, `frame-src https://docs.google.com`),
+  applied automatically only when this key is set -- see web.py's CSP comment if
+  it fails to load once tested for real.
 
 Environment values are read directly; `.env` is an example format, not automatically
 loaded. Keep secrets outside Git. For Cloud Run, bind Secret Manager versions to

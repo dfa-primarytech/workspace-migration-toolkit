@@ -61,6 +61,11 @@ def resolve(filename: str) -> Pipeline:
 def describe() -> list[dict[str, Any]]:
     """What the browser needs to know about the formats on offer."""
     return [
-        {"extension": suffix, "destination": pipeline.destination, "kind": pipeline.kind}
+        {
+            "extension": suffix,
+            "destination": pipeline.destination,
+            "kind": pipeline.kind,
+            "mime": pipeline.fmt.mime,
+        }
         for suffix, pipeline in PIPELINES.items()
     ]

@@ -275,3 +275,109 @@ def test_what_happened_in_drive_reaches_the_report(monkeypatch, pptx):
     )
     assert response.status_code == 200, response.text
     assert [w["code"] for w in response.json()["warnings"]] == ["own", "library_duplicated"]
+
+
+def test_session_advertises_picker_availability():
+    signed_in = signed_client(configured(picker_api_key="test-picker-key"))
+    body = signed_in.get("/api/session").json()
+    assert body["pickerEnabled"] is True
+    assert body["pickerApiKey"] == "test-picker-key"
+    not_configured = signed_client(configured())
+    body = not_configured.get("/api/session").json()
+    assert body["pickerEnabled"] is False
+    assert body["pickerApiKey"] == ""
+
+
+def test_picker_token_route_is_unavailable_without_configuration():
+    client = signed_client(configured())
+    response = client.get("/api/picker-token")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "picker_unavailable"
+
+
+def test_picker_token_route_returns_the_session_access_token():
+    client = signed_client(configured(picker_api_key="test-picker-key"))
+    response = client.get("/api/picker-token")
+    assert response.status_code == 200
+    assert response.json() == {"accessToken": "not-a-real-token"}
+
+
+def test_a_drive_file_id_is_refused_when_picker_is_not_configured():
+    client = signed_client(configured())
+    response = client.post(
+        "/api/analyse",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "picker_unavailable"
+
+
+def test_convert_downloads_a_drive_picked_file_instead_of_the_request_body(monkeypatch, pptx):
+    """A Drive pick sends no body at all -- the server fetches the bytes
+    itself by id (see Google.download), so nothing about the source ever
+    passes through the browser twice."""
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    seen = {}
+
+    async def fake_download(self, file_id, destination, max_bytes):
+        seen["file_id"] = file_id
+        seen["max_bytes"] = max_bytes
+        destination.write_bytes(pptx.read_bytes())
+        return destination.stat().st_size
+
+    async def analysed(root, settings, fmt):
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        return {"status": "completed"}
+
+    pipeline = replace(resolve("x.pptx"), convert=converted)
+    monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: pipeline)
+    client = signed_client(configured(picker_api_key="test-picker-key"))
+    response = client.post(
+        "/api/convert",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+            "X-Source-SHA256": "abc",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert seen["file_id"] == "drive123"
+
+
+def test_an_empty_drive_file_is_refused_the_same_way_as_an_empty_upload(monkeypatch):
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    async def fake_download(self, file_id, destination, max_bytes):
+        destination.touch()
+        return 0
+
+    monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web, "resolve", lambda name: resolve("x.pptx"))
+    client = signed_client(configured(picker_api_key="test-picker-key"))
+    response = client.post(
+        "/api/analyse",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "empty_upload"

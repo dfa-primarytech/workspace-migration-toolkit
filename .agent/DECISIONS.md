@@ -170,3 +170,38 @@ This was verified against library source, not against a real grouped document.
 PUB-001's acceptance test asserts its one layer is a wrapper, and it must be re-run
 locally. If that layer reclassifies, it is a finding to record deliberately, not a
 number to edit.
+
+## 2026-09-28: Add-from-Drive uses Google Picker, briefly exposing the OAuth
+## access token to browser JS
+
+The user asked for the tool to accept a file already in Drive, not only a
+local upload. Google Picker is the standard way to do that, and Picker's own
+integration model requires an OAuth access token in client-side JavaScript
+to authenticate the picker iframe -- there is no server-side-only way to
+drive it.
+
+This is a real change from the existing posture (the OAuth access token has
+never left this process before now, sealed in an encrypted HttpOnly cookie
+-- see the 2026-09-22 "First shared application" decision). The scope is
+kept as narrow as the tradeoff allows:
+
+- The token is fetched fresh, on demand, only when "Add from Drive" is
+  clicked (`GET /api/picker-token`), rather than embedded in the page on
+  load. It sits in browser memory for as short a time as possible.
+- It is still the same `drive.file`-scoped token the server already holds;
+  Picker grants nothing broader, and picking a file grants per-file access
+  under the same scope. No refresh token exists to leak (per the original
+  decision) and nothing new is stored anywhere.
+- The feature is opt-in per deployment via `GOOGLE_PICKER_API_KEY`
+  (`config.py`'s `picker_ready`). Left unset -- true for every deployment
+  today, since none has been created -- nothing about this is reachable:
+  the button is hidden, the CSP stays maximally strict, and
+  `/api/picker-token` refuses with `picker_unavailable`.
+- The Content-Security-Policy only loosens (`script-src`, `frame-src`,
+  `connect-src`) when the feature is actually configured, for the reason
+  above.
+
+**Not verified against a live deployment.** No GCP project exists in this
+environment to test Picker against; the exact CSP origins Picker needs are
+reasoned from Google's own documented integration, not observed. See the
+warning in `docs/platform.md`.
