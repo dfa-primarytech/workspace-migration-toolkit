@@ -206,6 +206,15 @@ Saved copies are named `<deck> – slide NN – <name>`, where `<name>` is the
 object's own name when PowerPoint gave it a meaningful one (it names an
 inserted video or sound after its file) and `video 1`, `audio 2` and so on
 otherwise. PowerPoint's defaults such as "Picture 3" count as no name.
+**Publisher `.pub` files can be checked, not yet converted** (DECISIONS.md,
+2026-09-28). The app image builds `native/pub-parser` in a Debian stage (its
+C++ tests run during the build) and ships it as `/usr/local/bin/publisher-parser`;
+elsewhere set `PUBLISHER_PARSER_BIN`. The worker runs it with a hard timeout --
+its own `--max-seconds` cannot stop a hang inside libmspub -- and limits scaled
+with the file, and `publisher.analysis_report` summarises the bundle. A
+conversion is refused before the upload (`not_convertible`, 501) until the
+Slides renderer lands.
+
 **"Make pictures smaller" is opt-in** (issue #36, step 3): a checkbox beside
 Convert, off by default, sent as `X-Compress-Pictures: 1` and honoured only on
 `/api/convert` -- checking a file never changes it. The worker then rewrites the

@@ -246,6 +246,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         filename = unquote(request.headers.get("x-upload-filename", ""))
         pipeline = resolve(filename)
         validate_upload_name(filename, request.headers.get("content-type", ""), pipeline.fmt)
+        if do_convert and not pipeline.convertible:
+            raise ToolkitError(
+                "not_convertible",
+                f"{pipeline.fmt.noun.capitalize()} files can be checked, but converting them "
+                f"to {pipeline.destination} is not available yet.",
+                501,
+            )
         # A file picked from Drive (see the picker-token route and app.js)
         # arrives by id instead of a request body -- everything from here on
         # is shared between the two sources.

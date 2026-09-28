@@ -53,6 +53,9 @@ class Settings:
     # to stay off the client -- unlike client_secret, which never leaves
     # this process. "Add from Drive" is hidden in the UI while this is unset.
     picker_api_key: str = ""
+    # The native Publisher reader (native/pub-parser). The app image builds it
+    # in; elsewhere, point PUBLISHER_PARSER_BIN at a local build.
+    publisher_parser: str = "/usr/local/bin/publisher-parser"
 
     def entry_limit(self, source_bytes: int) -> int:
         return max(self.max_entry_bytes, self.entry_scale * source_bytes)
@@ -126,4 +129,5 @@ class Settings:
             client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
             session_key=os.getenv("SESSION_ENCRYPTION_KEY", ""),
             picker_api_key=os.getenv("GOOGLE_PICKER_API_KEY", ""),
+            publisher_parser=os.getenv("PUBLISHER_PARSER_BIN", "/usr/local/bin/publisher-parser"),
         )

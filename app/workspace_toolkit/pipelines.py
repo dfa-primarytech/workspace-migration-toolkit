@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import docs, docx, google, pptx
+from . import docs, docx, google, pptx, publisher
 from .errors import ToolkitError
-from .package import DOCX, PPTX, Format
+from .package import DOCX, PPTX, PUB, Format
 
-SUPPORTED = ".pptx and .docx"
+SUPPORTED = ".pptx, .docx and .pub"
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,7 @@ class Pipeline:
     convert: Callable[..., Awaitable[dict]]
     kind: str  # what the output is, for the report
     destination: str  # where it ends up, for people
+    convertible: bool = True  # False while a format can be checked but not converted
 
     @property
     def source_name(self) -> str:
@@ -48,6 +49,14 @@ PIPELINES: dict[str, Pipeline] = {
         kind="document",
         destination="Google Docs",
     ),
+    ".pub": Pipeline(
+        fmt=PUB,
+        analysis_report=publisher.analysis_report,
+        convert=publisher.convert,
+        kind="presentation",
+        destination="Google Slides",
+        convertible=False,  # the Slides renderer is the next step (DECISIONS.md)
+    ),
 }
 
 
@@ -66,6 +75,7 @@ def describe() -> list[dict[str, Any]]:
             "destination": pipeline.destination,
             "kind": pipeline.kind,
             "mime": pipeline.fmt.mime,
+            "convertible": pipeline.convertible,
         }
         for suffix, pipeline in PIPELINES.items()
     ]

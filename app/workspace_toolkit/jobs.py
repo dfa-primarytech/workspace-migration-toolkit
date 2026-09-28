@@ -38,7 +38,8 @@ async def preflight(
     limits = {
         k: v
         for k, v in asdict(settings).items()
-        if k.startswith(("max_", "worker_memory_")) or k in {"entry_scale", "expanded_scale"}
+        if k.startswith(("max_", "worker_memory_"))
+        or k in {"entry_scale", "expanded_scale", "publisher_parser"}
     }
     limits["parser_timeout"] = timeout
     config.write_text(json.dumps(limits), encoding="utf-8")

@@ -102,19 +102,20 @@ async function perform(convert) {
   try {
     const report = await upload(convert);
     const parent = convert ? $('result') : $('summary'); parent.replaceChildren();
-    const unit = chosen && chosen.kind === 'document' ? 'sections' : 'slides';
+    const unit = chosen && chosen.kind === 'document' ? 'sections' : chosen && chosen.extension === '.pub' ? 'pages' : 'slides';
     const p = document.createElement('p'); p.textContent = `${report.pages} ${unit} · ${Object.values(report.assetCounts).reduce((a,b)=>a+b,0)} recovered files · ${report.warnings.length} items to review`; parent.append(p);
     const list = document.createElement('ul');
     for (const message of [...new Set(report.warnings.map(w=>w.message))]) { const li = document.createElement('li'); li.textContent = message; list.append(li); }
     parent.append(list);
-    if (!convert) { sourceHash = report.sourceSha256; selected = source; $('convert').hidden = false; $('smaller-choice').hidden = false; }
+    // A format that can only be checked so far (Publisher) offers no Convert.
+    if (!convert) { sourceHash = report.sourceSha256; selected = source; const canConvert = !chosen || chosen.convertible !== false; $('convert').hidden = !canConvert; $('smaller-choice').hidden = !canConvert; }
     else {
       if (report.url) link(report.url, 'Open in ' + ((chosen && chosen.destination) || 'Google Drive'), parent);
       if (report.folderUrl) link(report.folderUrl, 'Open recovered files in Drive', parent);
       $('convert').hidden = true; $('smaller-choice').hidden = true;
     }
     download(report, parent);
-    $('status').textContent = !convert ? 'Ready to convert. Review the findings above.' : report.status.startsWith('failed') ? 'Conversion did not finish. Check the report and any saved files before retrying.' : 'Conversion finished. Please review the result and report.';
+    $('status').textContent = !convert ? (chosen && chosen.convertible === false ? 'Checked. Converting this kind of file is not available yet.' : 'Ready to convert. Review the findings above.') : report.status.startsWith('failed') ? 'Conversion did not finish. Check the report and any saved files before retrying.' : 'Conversion finished. Please review the result and report.';
   } catch (error) { $('status').textContent = error.message; }
   finally { busy(false); }
 }

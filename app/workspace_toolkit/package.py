@@ -42,6 +42,7 @@ class Format:
     main_mime: str
     noun: str  # used in user-facing messages, e.g. "PowerPoint presentation"
     chooser: str  # e.g. "a PowerPoint .pptx file"
+    aliases: tuple[str, ...] = ()  # other MIME types browsers send for it
 
 
 PPTX = Format(
@@ -64,6 +65,19 @@ DOCX = Format(
     chooser="a Word .docx file",
 )
 
+# Not an OOXML package at all: an OLE compound file read by publisher-parser.
+# The zip-specific fields are empty; nothing opens a .pub as a Package.
+PUB = Format(
+    key="pub",
+    suffix=".pub",
+    mime="application/x-mspublisher",
+    main_part="",
+    main_mime="",
+    noun="publication",
+    chooser="a Publisher .pub file",
+    aliases=("application/vnd.ms-publisher",),
+)
+
 FORMATS = {fmt.suffix: fmt for fmt in (PPTX, DOCX)}
 
 
@@ -77,7 +91,7 @@ def validate_upload_name(filename: str, mime: str, fmt: Format = PPTX) -> None:
         raise ToolkitError("invalid_filename", f"Please choose {fmt.chooser}.")
     if not filename.lower().endswith(fmt.suffix):
         raise ToolkitError("unsupported_type", f"Only {fmt.chooser} files are supported here.")
-    if mime.split(";", 1)[0].lower() not in {fmt.mime, "application/octet-stream"}:
+    if mime.split(";", 1)[0].lower() not in {fmt.mime, *fmt.aliases, "application/octet-stream"}:
         raise ToolkitError("invalid_mime", f"This file does not have a supported {fmt.key} type.")
 
 
