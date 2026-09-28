@@ -11,7 +11,9 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from pathlib import Path
 
+import pytest
 from defusedxml import ElementTree
 from workspace_toolkit.config import Settings
 from workspace_toolkit.google import videos_removed_warnings
@@ -127,10 +129,17 @@ def test_audio_is_left_alone(tmp_path):
     assert "rId4" in rels and "rId5" in rels
 
 
-def test_every_reference_in_the_result_still_resolves(tmp_path):
+REAL_SHAPED = Path(__file__).parents[1] / "fixtures" / "pptx" / "video-deck.pptx"
+
+
+@pytest.mark.parametrize("which", ["hand-written", "python-pptx"])
+def test_every_reference_in_the_result_still_resolves(tmp_path, which):
     # The invariant Google's importer relies on: no part names a relationship
-    # that is gone, and no relationship names a part that is gone.
-    _, out = rendered(tmp_path, video_deck(tmp_path))
+    # that is gone, and no relationship names a part that is gone. Checked on
+    # the hand-written deck and on one built from a real PowerPoint template.
+    source = video_deck(tmp_path) if which == "hand-written" else REAL_SHAPED
+    report, out = rendered(tmp_path, source)
+    assert report["videosRemoved"]
     names = set(out.namelist())
     r = f"{{{NS['r']}}}"
     for rels_name in [n for n in names if n.endswith(".rels") and n != "_rels/.rels"]:
