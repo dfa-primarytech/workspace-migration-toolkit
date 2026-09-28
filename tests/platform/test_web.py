@@ -305,13 +305,15 @@ def test_the_csp_allows_what_picker_actually_needs():
     signed_in = signed_client(configured(picker_api_key="test-picker-key"))
     csp = signed_in.get("/api/session").headers["content-security-policy"]
     assert "script-src 'self' https://apis.google.com" in csp
-    assert "style-src 'self' 'unsafe-inline'" in csp
+    assert "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'" in csp
     assert "frame-src https://docs.google.com" in csp
     assert "connect-src 'self' https://www.googleapis.com" in csp
     not_configured = signed_client(configured())
     csp = not_configured.get("/api/session").headers["content-security-policy"]
     assert csp == (
-        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; "
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; img-src 'self'; "
         "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     )
 

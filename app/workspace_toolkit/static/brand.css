@@ -1,0 +1,138 @@
+/* ===========================================================================
+   PrimaryTech — Colors & Type
+   Derived from PrimaryTech Brand Guidelines v2.0 (June 2026)
+   Source Sans is the official typeface. We load Source Sans 3 from Google
+   Fonts — it is Adobe's actively-maintained successor to Source Sans Pro and
+   is metrically/visually equivalent. If exact "Source Sans Pro" font files
+   are required, drop the .woff2 files into /fonts and swap the @font-face
+   below.
+
+   v2.0 changes vs v1.5:
+   • Navy retuned to #0E3F54 (deeper, used for dark surfaces & mono-dark logo)
+   • New Off-White surface #EAF3F7 (cool, brand-tinted)
+   • Type-in-use scale updated: Header Light 40pt, Sub-head Regular 24pt,
+     Body Light 15pt, Highlight Bold 15pt
+
+   Pulled verbatim (token block only) from the WORK-account "PrimaryTech
+   Design System" project's own colors_and_type.css via DesignSync,
+   2026-09-28. An earlier pull in this same session came from a stale v1.5
+   copy of this project on a personal claude.ai account -- caught before
+   anything was committed. Do not hand-edit tokens here -- change them at
+   the source and re-pull.
+   =========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,200..900;1,200..900&display=swap');
+
+:root {
+  /* -------------------------------------------------------------------------
+     PRIMARY (Blue) — the signature PrimaryTech mark colour
+     ------------------------------------------------------------------------- */
+  --pt-primary:        #118ab2; /* Primary               — logo, links, CTAs   */
+  --pt-primary-light:  #5abae4; /* P - Light             — highlights, hovers  */
+  --pt-primary-dark:   #005d82; /* P - Dark              — pressed, headers    */
+
+  /* -------------------------------------------------------------------------
+     SECONDARY (Yellow) — energy / accent
+     ------------------------------------------------------------------------- */
+  --pt-secondary:       #fcc92e; /* Secondary            — accents, callouts  */
+  --pt-secondary-light: #fffc65; /* S - Light            — highlights         */
+  --pt-secondary-dark:  #c59900; /* S - Dark             — pressed, text on yellow */
+
+  /* -------------------------------------------------------------------------
+     NEUTRALS — built around the brand body-text grey #414144
+     ------------------------------------------------------------------------- */
+  --pt-ink:        #414144; /* Body text — official brand spec               */
+  --pt-ink-soft:   #6b6b6e; /* Secondary text                                 */
+  --pt-ink-muted:  #9a9a9d; /* Captions / disabled                            */
+  --pt-line:       #e3e3e5; /* Hairline borders                               */
+  --pt-line-soft:  #efeff1; /* Subtle dividers                                */
+  --pt-bg-soft:    #f7f7f8; /* Section backgrounds                            */
+  --pt-bg:         #ffffff; /* Page background                                */
+  --pt-dark:       #2f2f31; /* "Dark" surface from dark-on-yellow logo bg     */
+  --pt-navy:       #0e3f54; /* Navy — dark surfaces & mono-dark logo (v2.0)   */
+  --pt-off-white:  #eaf3f7; /* Off-White — cool brand-tinted surface (v2.0)   */
+
+  /* -------------------------------------------------------------------------
+     SEMANTIC — derived; brand spec does not call these out explicitly
+     ------------------------------------------------------------------------- */
+  --pt-info:    #4285f4;
+  --pt-success: #0f9d58;
+  --pt-warning: #f4b400;
+  --pt-danger:  #db4437;
+
+  /* -------------------------------------------------------------------------
+     SEMANTIC FOREGROUND / BACKGROUND
+     ------------------------------------------------------------------------- */
+  --fg-1: var(--pt-ink);
+  --fg-2: var(--pt-ink-soft);
+  --fg-3: var(--pt-ink-muted);
+  --fg-on-primary: #ffffff;
+  --fg-on-secondary: var(--pt-dark);
+  --fg-link: var(--pt-primary);
+  --fg-link-hover: var(--pt-primary-dark);
+
+  --bg-1: var(--pt-bg);
+  --bg-2: var(--pt-bg-soft);
+  --bg-3: #eef0f2;
+  --bg-tint: var(--pt-off-white);   /* cool brand-tinted surface (v2.0)     */
+  --bg-inverse: var(--pt-navy);     /* dark surfaces now use Navy (v2.0)    */
+
+  --border-1: var(--pt-line);
+  --border-2: var(--pt-line-soft);
+  --border-strong: var(--pt-ink);
+
+  /* -------------------------------------------------------------------------
+     TYPOGRAPHY
+     ------------------------------------------------------------------------- */
+  --font-sans: "Source Sans 3", "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --weight-light: 300;
+  --weight-regular: 400;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --fs-12: 12px;   /* captions / fine print                    */
+  --fs-14: 14px;   /* small body                               */
+  --fs-15: 15px;   /* body            (v2.0 body — Light 15pt) */
+  --fs-16: 16px;   /* base UI                                  */
+  --fs-18: 18px;   /* small sub-head                           */
+  --fs-22: 22px;   /* large body / lead                        */
+  --fs-24: 24px;   /* sub-header      (v2.0 — Regular 24pt)    */
+  --fs-30: 30px;   /* quote           (30pt)                   */
+  --fs-40: 40px;   /* header          (v2.0 — Light 40pt)      */
+  --fs-56: 56px;   /* display 2                                */
+  --fs-80: 80px;   /* display 1                                */
+
+  --lh-tight:  1.1;
+  --lh-snug:   1.25;
+  --lh-normal: 1.5;
+  --lh-loose:  1.7;
+
+  --tracking-tight:  -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide:    0.04em;
+  --tracking-caps:    0.08em;
+
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  24px;
+  --space-6:  32px;
+  --space-7:  48px;
+  --space-8:  64px;
+  --space-9:  96px;
+  --space-10: 128px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+  --radius-xl: 22px;
+  --radius-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(17, 138, 178, 0.06), 0 1px 1px rgba(31, 59, 77, 0.04);
+  --shadow-2: 0 4px 12px rgba(17, 138, 178, 0.08), 0 2px 4px rgba(31, 59, 77, 0.05);
+  --shadow-3: 0 12px 28px rgba(17, 138, 178, 0.12), 0 4px 10px rgba(31, 59, 77, 0.06);
+  --shadow-focus: 0 0 0 4px rgba(17, 138, 178, 0.25);
+}
