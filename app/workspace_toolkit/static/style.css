@@ -14,6 +14,10 @@ input{max-width:100%;padding:10px 0}
 a{color:var(--fg-link)}
 a:hover{color:var(--fg-link-hover)}
 .note,#limit,#picked{font-size:var(--fs-14);color:var(--fg-2)}
+details{margin-top:16px;font-size:var(--fs-14);color:var(--fg-2)}
+details summary{cursor:pointer;color:var(--fg-link);font-weight:var(--weight-semibold)}
+details summary:hover{color:var(--fg-link-hover)}
+details p{font-size:var(--fs-14);margin:8px 0}
 #status{font-weight:var(--weight-semibold)}
 li{margin-bottom:8px}
 [hidden]{display:none!important}

@@ -9,10 +9,18 @@ async function request(url, options = {}) {
   return body;
 }
 function busy(value) { for (const id of ['file','pick-drive','analyse','convert','logout']) $(id).disabled = value; }
+// The on-page summary above this is the report for a person; this is the
+// same data as raw JSON for IT/support to troubleshoot with. Tucked behind
+// <details> so a trial user isn't handed a JSON file as if it were the answer.
 function download(report, parent) {
   if (reportUrl) URL.revokeObjectURL(reportUrl);
   reportUrl = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], {type:'application/json'}));
-  const a = document.createElement('a'); a.href = reportUrl; a.download = 'conversion-report.json'; a.textContent = 'Download report'; parent.append(a);
+  const details = document.createElement('details');
+  const summary = document.createElement('summary'); summary.textContent = 'Advanced: full technical report';
+  const note = document.createElement('p'); note.textContent = 'For IT support or troubleshooting — not needed for everyday use.';
+  const a = document.createElement('a'); a.href = reportUrl; a.download = 'conversion-report.json'; a.textContent = 'Download full report (.json)';
+  details.append(summary, note, a);
+  parent.append(details);
 }
 function link(url, label, parent) {
   const parsed = new URL(url);
