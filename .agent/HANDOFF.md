@@ -1,5 +1,39 @@
 # Handoff
 
+- Agent: Claude Code / QuietHeron (platform)
+- Date: 2026-09-28
+- Branch: `feat/no-upload-size-limit`, based on main `b5a116d`
+- Objective: #36 step 1. The human wants no file size limit that staff can see: a "25 MB" line on the page made staff assume their files wouldn't convert.
+- Files changed: `app/workspace_toolkit/config.py`, `package.py`, `jobs.py`, `worker.py`, `web.py`, `google.py` (`download`), `cli.py`, `server.py` (Hypercorn), `static/app.js`; `pyproject.toml`, `requirements.lock`, `requirements-dev.lock`; `deploy/cloud-run.example.yaml`; `docs/platform.md`; `tests/platform/test_preflight.py`, `test_web.py`.
+- Completed:
+  - **No upload limit by default.** `MAX_UPLOAD_SIZE` is optional and unset. The page shows no limit and the browser doesn't check size.
+  - **Zip-bomb guards scale with the file.** One part may expand to 2x the file and the package to 3x, never below the old 50/200 MiB, which stay as floors.
+  - **Time and memory allowances scale with the file:**
+    - analysis: 30 s plus 1 s per 4 MiB;
+    - job: 240 s plus 1 s per 512 KiB, capped at 3,300 s;
+    - worker address space: 768 MiB plus 2x the file.
+
+    A Drive-picked file's job allowance and the sign-in expiry check are applied again once its size is known.
+  - **A file over Google's published import limit** (Docs 50 MB; Slides and Sheets 100 MB) gets a `beyond_import_limit` warning. It is not refused.
+  - **Uvicorn is replaced by Hypercorn**, which speaks HTTP/2 without TLS (h2c). The deploy template sets the `h2c` port name and a 3,600 s timeout.
+- Checks:
+  - Platform 334 passed, 8 skipped (main: 324 and 8).
+  - Ruff check and format clean; mypy reports no issues in 17 files; Bandit reports no issues; `pip-audit -r requirements.lock` finds no known vulnerabilities; `pip check` is clean for both lockfiles.
+  - The real server (Hypercorn) was run locally with synthetic 111 MB and 332 MB decks over h2c (negotiated HTTP/2) and HTTP/1.1. All four uploads returned 200 in 16–59 s, with the import-limit warning. h2c was about a third slower than HTTP/1.1 on this Windows machine; that isn't measured on Linux and wasn't tuned.
+- Known failures: none locally. The container build wasn't run here (no Docker on this machine); CI's container job is the check.
+- Unresolved:
+  - End-to-end HTTP/2 on Cloud Run is configured from Google's documentation and hasn't been observed live.
+  - Google's import limits are the published figures and haven't been observed live.
+  - The file is still uploaded twice (Check, then Convert). Keeping it between requests needs shared storage across instances.
+  - Memory: at about 4x the file per job, two ~250 MB jobs on one 2 GiB instance would not fit. A 1 GB video deck needs about 4 GB.
+- Decisions: size limits removed at the human's direction. Safety guards now scale with the file instead of being fixed.
+- Next task: #36 step 2 (strip audio and video before Slides import, so large decks fit Google's 100 MB) and the memory setting for large files (4 GiB, or one job per instance).
+- Warnings: PRs #72 (Excel) and #82 (branding) touch `web.py`, `jobs.py`, `package.py`, `worker.py` and `app.js`; expect small conflicts. `README.md`'s 25 MiB line describes the frozen Apps Script tool and was left alone.
+
+---
+
+## Previous handoff
+
 Kept here: the most recent entries only. Older ones are in
 `HANDOFF-archive.md` -- git log and merged PR descriptions already carry
 that detail in full, so this file no longer needs to. Append your own entry

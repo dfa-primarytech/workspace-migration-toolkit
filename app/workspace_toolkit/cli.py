@@ -41,7 +41,8 @@ def main() -> None:
         validate_upload_name(args.source.name, pipeline.fmt.mime, pipeline.fmt)
         if args.output.exists():
             raise ToolkitError("output_exists", "The output directory already exists.")
-        if args.source.stat().st_size > settings.max_upload_bytes:
+        limit = settings.max_upload_bytes
+        if limit is not None and args.source.stat().st_size > limit:
             raise ToolkitError("upload_too_large", "This file exceeds the upload size limit.")
 
         with workspace(settings) as (_, root):

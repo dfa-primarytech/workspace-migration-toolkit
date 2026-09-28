@@ -73,7 +73,8 @@ async function openPicker() {
 }
 async function upload(convert) {
   if (!source || !pipelineFor(source)) throw new Error('Please choose a ' + (session.formats || []).map(f => f.extension).join(' or ') + ' file.');
-  if (source.size && source.size > session.maxUploadBytes) throw new Error('This file exceeds the upload limit.');
+  // No limit unless the deployment sets one (maxUploadBytes is then a number, not null).
+  if (session.maxUploadBytes && source.size && source.size > session.maxUploadBytes) throw new Error('This file exceeds the upload limit.');
   if (convert && (source !== selected || !sourceHash)) throw new Error('Please check this file first.');
   const headers = {'X-Upload-Filename':encodeURIComponent(source.name),'X-CSRF-Token':session.csrfToken};
   if (convert) headers['X-Source-Sha256'] = sourceHash;
@@ -112,4 +113,4 @@ $('convert').addEventListener('click', ()=>perform(true));
 $('pick-drive').addEventListener('click', async ()=>{ try { await openPicker(); } catch (e) { $('status').textContent = e.message; } });
 $('file').addEventListener('change', ()=>{ const file = $('file').files[0]; source = file ? {name:file.name, size:file.size, file} : null; resetChoice(); });
 $('logout').addEventListener('click', async ()=>{try{await request('/auth/logout',{method:'POST',headers:{'X-CSRF-Token':session.csrfToken}});location.reload();}catch(e){$('status').textContent=e.message;}});
-request('/api/session').then(s=>{session=s;$('signin').hidden=s.signedIn;$('logout').hidden=!s.signedIn;$('workspace').hidden=!s.signedIn;$('pick-drive').hidden=!s.pickerEnabled;$('limit').textContent=`Upload limit: ${Math.round(s.maxUploadBytes/1024/1024)} MiB.`;if(!s.signedIn&&!s.configured)$('status').textContent='Google sign-in needs to be configured by the application owner.';}).catch(e=>{$('status').textContent=e.message;});
+request('/api/session').then(s=>{session=s;$('signin').hidden=s.signedIn;$('logout').hidden=!s.signedIn;$('workspace').hidden=!s.signedIn;$('pick-drive').hidden=!s.pickerEnabled;$('limit').textContent=s.maxUploadBytes?`Upload limit: ${Math.round(s.maxUploadBytes/1024/1024)} MiB.`:'';if(!s.signedIn&&!s.configured)$('status').textContent='Google sign-in needs to be configured by the application owner.';}).catch(e=>{$('status').textContent=e.message;});

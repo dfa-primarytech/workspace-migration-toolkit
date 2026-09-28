@@ -85,8 +85,12 @@ class Package:
     def __init__(self, path: Path, settings: Settings, fmt: Format = PPTX):
         self.settings = settings
         self.format = fmt
-        if path.stat().st_size > settings.max_upload_bytes:
+        size = path.stat().st_size
+        if settings.max_upload_bytes is not None and size > settings.max_upload_bytes:
             raise ToolkitError("upload_too_large", "This file exceeds the upload size limit.", 413)
+        # In proportion to this file, never below the configured floors.
+        self.entry_limit = settings.entry_limit(size)
+        self.expanded_limit = settings.expanded_limit(size)
         with path.open("rb") as stream:
             if stream.read(4) != b"PK\x03\x04":
                 raise ToolkitError("invalid_signature", f"This is not a valid {fmt.suffix} file.")
@@ -136,8 +140,8 @@ class Package:
                 )
             total += info.file_size
             if (
-                info.file_size > self.settings.max_entry_bytes
-                or total > self.settings.max_expanded_bytes
+                info.file_size > self.entry_limit
+                or total > self.expanded_limit
                 or info.file_size > max(info.compress_size, 1) * self.settings.max_compression_ratio
             ):
                 raise ToolkitError("zip_limits", "The expanded file exceeds processing limits.")
@@ -179,7 +183,7 @@ class Package:
     def read(self, name: str, limit: int | None = None) -> bytes:
         if name not in self.names:
             raise ToolkitError("missing_part", "The file is missing a required component.")
-        bound = limit or self.settings.max_entry_bytes
+        bound = limit or self.entry_limit
         if self.zip.getinfo(name).file_size > bound:
             raise ToolkitError("part_limit", "A file component exceeds processing limits.")
         try:

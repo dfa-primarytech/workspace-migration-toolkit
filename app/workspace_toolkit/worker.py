@@ -24,7 +24,8 @@ def main() -> None:
         if sys.platform != "win32":
             import resource
 
-            resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
+            memory = settings.worker_memory_for(source.stat().st_size)
+            resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
             resource.setrlimit(
                 resource.RLIMIT_CPU, (settings.parser_timeout + 2, settings.parser_timeout + 2)
             )

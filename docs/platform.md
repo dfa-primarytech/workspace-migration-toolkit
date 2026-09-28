@@ -66,8 +66,10 @@ Register the exact redirect URI `PUBLIC_BASE_URL/auth/callback`. Configure:
 - `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`: OAuth application credentials.
 - `SESSION_ENCRYPTION_KEY`: stable Fernet key shared by instances; generate with
   `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
-- Optional `MAX_UPLOAD_SIZE` in bytes (default 25 MiB, configured maximum 100 MiB),
-  `TEMP_DIR` (existing writable directory), `PORT`, `LOG_LEVEL`.
+- Optional `MAX_UPLOAD_SIZE` in bytes. **Unset by default: there is no upload
+  limit** (issue #36), and the page shows none. Set it only if a deployment
+  needs a cap. Also optional: `TEMP_DIR` (existing writable directory), `PORT`,
+  `LOG_LEVEL`.
 - Optional `GOOGLE_PICKER_API_KEY`: a Cloud Console API key, restricted to the
   Google Picker API, with the Picker API enabled. Adds an "Add from Drive"
   option beside the local file chooser. Unlike the OAuth client secret, this
@@ -145,14 +147,30 @@ Validate extension, transport MIME, ZIP signature and PowerPoint main content ty
 Reject macros, encrypted/unsupported compression, unsafe/duplicate paths, internal
 relationships that escape the package, and unsafe XML. A relationship to a part
 that is simply absent is reported (`relationship_target_missing`), not fatal,
-unless it is a slide; part names resolve case-insensitively. Default limits: 5,000 ZIP entries, 200 MiB
-expanded package, 50 MiB per entry, 8 MiB per XML part, compression ratio 200:1,
-and 500,000 elements per XML part, counted while it is parsed. For real
-documents the 8 MiB part limit binds first: Word writes about 38 bytes per
-element, so about 200 pages of text. The element limit only stops markup far
-denser than an Office application writes. Linux workers also have CPU and 768 MiB
-address-space limits. Windows workers enforce time and archive limits but have no
-OS address-space cap. The subprocess inherits only a small runtime environment,
+unless it is a slide; part names resolve case-insensitively. Default limits: 5,000 ZIP entries, 8 MiB
+per XML part, compression ratio 200:1, and 500,000 elements per XML part,
+counted while it is parsed. For real documents the 8 MiB part limit binds
+first: Word writes about 38 bytes per element, so about 200 pages of text. The
+element limit only stops markup far denser than an Office application writes.
+
+The zip-bomb guards scale with the file rather than being fixed: one part may
+expand to 2x the file and the whole package to 3x, never less than 50 MiB and
+200 MiB. Real media barely compresses, so a real file of any size stays inside
+them, while a small crafted file still meets the floor. The analysis time
+allowance is 30 s plus 1 s per 4 MiB, and the job allowance 240 s plus 1 s per
+512 KiB, capped at 3,300 s, under Cloud Run's 60-minute request limit. Linux
+workers also have a CPU limit from the same allowance, and an address-space
+limit of 768 MiB plus twice the file. Windows workers enforce time and archive
+limits but have no OS address-space cap.
+
+**Measured memory (issue #36)**: about 75 MiB plus 4x the file per job at peak,
+most of it the job folder, which on Cloud Run is RAM. Two 94 MiB jobs at once
+peaked at 751 MiB. **Size limits that remain are Google's**: its published
+conversion limits are 50 MB to Docs and 100 MB to Slides or Sheets. A larger
+file is warned about (`beyond_import_limit`) before converting, not refused.
+The server is Hypercorn, which speaks HTTP/2 without TLS: Cloud Run refuses an
+HTTP/1 request body over 32 MiB, so deploy with end-to-end HTTP/2 (the `h2c`
+port name in `deploy/cloud-run.example.yaml`). The subprocess inherits only a small runtime environment,
 not configured OAuth credentials. These controls are not a general-purpose native
 sandbox. Do not add external-resource fetching or executable/embedded-file execution.
 
