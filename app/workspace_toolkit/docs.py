@@ -806,12 +806,12 @@ def _measure(element: Element | None, name: str) -> int | None:
         return None
 
 
-def printable_width(root: Element) -> int | None:
-    """The usable width in dxa, from the section that ends the body.
+def _final_section(root: Element) -> Element | None:
+    """The section properties that measure the page, in dxa.
 
-    A document with several sections of differing width is measured by its
-    last one. That is the common case by a wide margin, and guessing per table
-    would need the layout we are trying to avoid depending on.
+    A document with several sections of differing size is measured by its
+    last one. That is the common case by a wide margin, and guessing per
+    table would need the layout we are trying to avoid depending on.
 
     The final section's properties are the body's own ``w:sectPr``. Searching
     the whole body instead would also find the *previous* properties that a
@@ -823,13 +823,19 @@ def printable_width(root: Element) -> int | None:
     if body is None:
         return None
     section = body.find(q("w", "sectPr"))
+    if section is not None:
+        return section
+    # No body-level properties: fall back to the last section break, still
+    # only from paragraphs directly in the body.
+    breaks = body.findall(q("w", "p") + "/" + q("w", "pPr") + "/" + q("w", "sectPr"))
+    return breaks[-1] if breaks else None
+
+
+def printable_width(root: Element) -> int | None:
+    """The usable width in dxa, from the section that ends the body."""
+    section = _final_section(root)
     if section is None:
-        # No body-level properties: fall back to the last section break,
-        # still only from paragraphs directly in the body.
-        breaks = body.findall(q("w", "p") + "/" + q("w", "pPr") + "/" + q("w", "sectPr"))
-        if not breaks:
-            return None
-        section = breaks[-1]
+        return None
     width = _measure(section.find(q("w", "pgSz")), "w")
     margins = section.find(q("w", "pgMar"))
     left = _measure(margins, "left") or 0
@@ -837,6 +843,25 @@ def printable_width(root: Element) -> int | None:
     if width is None or width <= 0:
         return None
     usable = width - left - right
+    return usable if usable > 0 else None
+
+
+def printable_height(root: Element) -> int | None:
+    """The usable height in dxa, from the section that ends the body.
+
+    Mirrors printable_width: same section, same "measured by the last one"
+    reasoning, top and bottom margins instead of left and right.
+    """
+    section = _final_section(root)
+    if section is None:
+        return None
+    height = _measure(section.find(q("w", "pgSz")), "h")
+    margins = section.find(q("w", "pgMar"))
+    top = _measure(margins, "top") or 0
+    bottom = _measure(margins, "bottom") or 0
+    if height is None or height <= 0:
+        return None
+    usable = height - top - bottom
     return usable if usable > 0 else None
 
 
@@ -945,6 +970,14 @@ def _measure_emu(inline: Element) -> int | None:
     extent = inline.find(q("wp", "extent"))
     try:
         return int(extent.get("cx", "")) if extent is not None else None
+    except ValueError:
+        return None
+
+
+def _measure_emu_height(inline: Element) -> int | None:
+    extent = inline.find(q("wp", "extent"))
+    try:
+        return int(extent.get("cy", "")) if extent is not None else None
     except ValueError:
         return None
 
@@ -1242,6 +1275,88 @@ def _cell_pictures(cell: Element) -> bool:
     return any(list(p.iter(q("wp", "inline"))) for p in cell.findall(q("w", "p")))
 
 
+# CT_TrPrBase's declared child order (ECMA-376 Part 1, SS17.4.83). w:cantSplit
+# has to land between w:wAfter and w:trHeight, or Word rejects the row.
+TR_PR_ORDER = [
+    "cnfStyle",
+    "divId",
+    "gridBefore",
+    "gridAfter",
+    "wBefore",
+    "wAfter",
+    "cantSplit",
+    "trHeight",
+    "tblHeader",
+    "tblCellSpacing",
+    "jc",
+    "hidden",
+]
+
+
+def _insert_in_schema_order(parent: Element, tag: str, order: list[str]) -> Element:
+    """Adds a child of `parent` at the position its schema requires."""
+    position = order.index(tag)
+    index = len(parent)
+    for i, child in enumerate(parent):
+        name = local(child.tag)
+        if name in order and order.index(name) > position:
+            index = i
+            break
+    element = Element(q("w", tag))
+    parent.insert(index, element)
+    return element
+
+
+def protect_picture_rows(root: Element, had_pictures: set[Element]) -> dict:
+    """Adds w:cantSplit to a table row that has just gained an inline picture.
+
+    A picture #34 moved into a cell makes the row grow to hold it, and an
+    unprotected row can still split across a page break -- the picture ends
+    up above the break and its question text below it, or the reverse. See
+    #55.
+
+    Skipped when the row's own picture is already taller than the printable
+    page: Word cannot honour w:cantSplit there, the row overflows onto the
+    next page regardless, and forcing the attempt only makes that overflow
+    less predictable.
+    """
+    usable = printable_height(root)
+    parent_of = parents(root)
+    rows: list[Element] = []
+    seen: set[Element] = set()
+    for cell in root.iter(q("w", "tc")):
+        if cell in had_pictures or not _cell_pictures(cell):
+            continue
+        row = _enclosing(parent_of, cell, "tr")
+        if row is None or row in seen:
+            continue
+        seen.add(row)
+        rows.append(row)
+
+    protected = 0
+    for row in rows:
+        if usable is not None:
+            heights = [
+                _measure_emu_height(inline)
+                for cell in row.iter(q("w", "tc"))
+                for inline in cell.iter(q("wp", "inline"))
+            ]
+            tallest = max((h for h in heights if h is not None), default=0)
+            if tallest and tallest / EMU_PER_DXA > usable:
+                continue
+        properties = row.find(q("w", "trPr"))
+        if properties is None:
+            # CT_Row: w:tblPrEx?, w:trPr?, then cell content -- w:trPr comes
+            # right after w:tblPrEx if the row has one, otherwise first.
+            properties = Element(q("w", "trPr"))
+            index = 1 if len(row) and local(row[0].tag) == "tblPrEx" else 0
+            row.insert(index, properties)
+        if properties.find(q("w", "cantSplit")) is None:
+            _insert_in_schema_order(properties, "cantSplit", TR_PR_ORDER)
+        protected += 1
+    return {"rowsProtected": protected}
+
+
 def _release_reserved_space(root: Element, before: set[Element], blank: set[Element]) -> int:
     """Stops protecting blank lines that were holding a picture's place.
 
@@ -1295,6 +1410,9 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     # how wide that table needs to be.
     report.update(place_orphan_pictures(root, ids))
     report.update(fit_tables_to_page(root))
+    # After fitting: a picture #34 or #55 moved into a row may have just been
+    # shrunk to the column, which changes whether the row still fits a page.
+    report.update(protect_picture_rows(root, had_pictures))
     report["blankLinesReclaimed"] = _release_reserved_space(root, had_pictures, already_empty)
     remove_empty_paragraphs(root, already_empty)
     return report

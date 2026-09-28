@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 import zipfile
 from dataclasses import replace
 
@@ -233,3 +234,89 @@ def test_cleanup_on_failure(tmp_path):
         (root / "source.pptx").write_bytes(b"bad")
         asyncio.run(preflight(root, settings))
     assert not root.exists()
+
+
+def test_a_cancelled_preflight_stops_the_worker_and_stays_cancelled(pptx, tmp_path, monkeypatch):
+    # Issue #52: cancellation was reported as "took too long to analyse", so
+    # the job timeout and a client disconnect both lost their real cause.
+    settings = replace(Settings(), temp_dir=str(tmp_path))
+    spawned = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def slow_worker(*args, **kwargs):
+        process = await real_exec(sys.executable, "-c", "import time; time.sleep(60)", **kwargs)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr("workspace_toolkit.jobs.asyncio.create_subprocess_exec", slow_worker)
+
+    async def cancel_it(root):
+        task = asyncio.create_task(preflight(root, settings))
+        while not spawned:
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    with workspace(settings) as (_, root):
+        (root / "source.pptx").write_bytes(pptx.read_bytes())
+        asyncio.run(cancel_it(root))
+    assert spawned[0].returncode is not None, "the worker was left running"
+
+
+def test_the_job_timeout_is_not_reported_as_a_parser_timeout(pptx, tmp_path, monkeypatch):
+    settings = replace(Settings(), temp_dir=str(tmp_path))
+    real_exec = asyncio.create_subprocess_exec
+
+    async def slow_worker(*args, **kwargs):
+        return await real_exec(sys.executable, "-c", "import time; time.sleep(60)", **kwargs)
+
+    monkeypatch.setattr("workspace_toolkit.jobs.asyncio.create_subprocess_exec", slow_worker)
+
+    async def run(root):
+        async with asyncio.timeout(0.5):
+            await preflight(root, settings)
+
+    with workspace(settings) as (_, root):
+        (root / "source.pptx").write_bytes(pptx.read_bytes())
+        with pytest.raises(TimeoutError):
+            asyncio.run(run(root))
+
+
+GROUPED = (
+    "<p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm>"
+    "<a:off x='1270000' y='2540000'/><a:ext cx='2540000' cy='1270000'/>"
+    "<a:chOff x='0' y='0'/><a:chExt cx='1270000' cy='1270000'/>"
+    "</a:xfrm></p:grpSpPr>"
+    "<p:sp><p:spPr><a:xfrm><a:off x='635000' y='0'/><a:ext cx='635000' cy='635000'/>"
+    "</a:xfrm></p:spPr></p:sp>"
+    "<p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm>"
+    "<a:off x='0' y='635000'/><a:ext cx='635000' cy='635000'/>"
+    "<a:chOff x='1270000' y='1270000'/><a:chExt cx='1270000' cy='1270000'/>"
+    "</a:xfrm></p:grpSpPr>"
+    "<p:sp><p:spPr><a:xfrm><a:off x='1270000' y='1270000'/><a:ext cx='1270000' cy='1270000'/>"
+    "</a:xfrm></p:spPr></p:sp>"
+    "</p:grpSp></p:grpSp>"
+)
+
+
+def test_group_children_are_placed_in_slide_coordinates(tmp_path):
+    # Issue #52: a child's a:off / a:ext are in its group's chOff / chExt
+    # space, and were reported as if they were slide points.
+    parts = fixture_parts()
+    parts["ppt/slides/slide1.xml"] = (
+        f'<p:sld xmlns:p="{NS["p"]}" xmlns:a="{NS["a"]}"><p:cSld><p:spTree>'
+        f"{GROUPED}</p:spTree></p:cSld></p:sld>"
+    )
+    source = write_pptx(tmp_path / "grouped.pptx", parts)
+    manifest = analyse(source, tmp_path / "out")
+    slide = next(p for p in manifest["pages"] if p["index"] == 1)
+    bounds = [e["bounds"] for e in slide["elements"]]
+    # Outer group: 200 x 100 pt at (100, 200), child space 100 x 100, so x
+    # doubles. Its shape: x 50 -> 200, width 50 -> 100.
+    assert bounds[0] == {"x": 100.0, "y": 200.0, "width": 200.0, "height": 100.0}
+    assert bounds[1] == {"x": 200.0, "y": 200.0, "width": 100.0, "height": 50.0}
+    # Inner group sits at (0, 50) in the outer space -> (100, 250) on the slide,
+    # 50 x 50 there -> 100 x 50; its child fills it.
+    assert bounds[2] == {"x": 100.0, "y": 250.0, "width": 100.0, "height": 50.0}
+    assert bounds[3] == {"x": 100.0, "y": 250.0, "width": 100.0, "height": 50.0}

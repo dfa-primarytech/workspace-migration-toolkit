@@ -233,6 +233,48 @@ COMPATIBILITY = {
 }
 
 
+HEADER_FOOTER = re.compile(r"^word/(header|footer)\d*\.xml$")
+
+
+def header_footer_parts(package: Package) -> list[str]:
+    """Every header and footer part, in a stable order."""
+    return sorted(name for name in package.names if HEADER_FOOTER.match(name))
+
+
+def _element_pairs(root: Element, id_prefix: str) -> list[tuple[Element, dict]]:
+    """Every anchor in `root`, paired with the manifest element built from it.
+
+    Anchors inside mc:Fallback are a legacy restatement of the shape in the
+    sibling mc:Choice, not extra content. Counting them would double every
+    shape Word wrote twice -- and make a text box's own fallback look like a
+    separate picture sitting exactly beneath it.
+    """
+    duplicates = {
+        anchor
+        for fallback in root.iter(q("mc", "Fallback"))
+        for anchor in fallback.iter(q("wp", "anchor"))
+    }
+    pairs = []
+    for index, anchor in enumerate(a for a in root.iter(q("wp", "anchor")) if a not in duplicates):
+        kind, label = classify(anchor)
+        position_h = anchor_position(anchor, "H")
+        position_v = anchor_position(anchor, "V")
+        element = {
+            "id": f"{id_prefix}_{index + 1:03d}",
+            "type": ELEMENT_TYPES[kind],
+            "kind": kind,
+            "label": label,
+            "bounds": bounds(position_h, position_v, anchor_extent(anchor)),
+            "rotation": 0,
+            "zIndex": index,
+            "visibility": anchor.get("behindDoc") != "1",
+            "compatibility": COMPATIBILITY[kind],
+            "warnings": element_warnings(kind, label, position_h, position_v),
+        }
+        pairs.append((anchor, element))
+    return pairs
+
+
 def parse(package: Package, filename: str, source_sha: str) -> dict:
     """Builds the intermediate model. Source-format knowledge stops here."""
     root = package.xml(DOCX.main_part)
@@ -244,32 +286,7 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
     buckets: list[list[dict]] = [[] for _ in sections]
     section_of = section_index(body, len(sections))
 
-    # Anchors inside mc:Fallback are a legacy restatement of the shape in the
-    # sibling mc:Choice, not extra content. Counting them would double every
-    # shape Word wrote twice -- and make a text box's own fallback look like a
-    # separate picture sitting exactly beneath it.
-    duplicates = {
-        anchor
-        for fallback in root.iter(q("mc", "Fallback"))
-        for anchor in fallback.iter(q("wp", "anchor"))
-    }
-
-    for index, anchor in enumerate(a for a in root.iter(q("wp", "anchor")) if a not in duplicates):
-        kind, label = classify(anchor)
-        position_h = anchor_position(anchor, "H")
-        position_v = anchor_position(anchor, "V")
-        element = {
-            "id": f"element_{index + 1:03d}",
-            "type": ELEMENT_TYPES[kind],
-            "kind": kind,
-            "label": label,
-            "bounds": bounds(position_h, position_v, anchor_extent(anchor)),
-            "rotation": 0,
-            "zIndex": index,
-            "visibility": anchor.get("behindDoc") != "1",
-            "compatibility": COMPATIBILITY[kind],
-            "warnings": element_warnings(kind, label, position_h, position_v),
-        }
+    for anchor, element in _element_pairs(root, "element"):
         buckets[section_of(anchor)].append(element)
 
     pages = [
@@ -283,11 +300,28 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
         }
         for i, (size, elements) in enumerate(zip(sections, buckets, strict=True))
     ]
+
+    # render() transforms every header and footer the same way it does the
+    # body (see docs.py:story_parts), so a picture or text box living only in
+    # a letterhead or title block still needs to be counted here -- otherwise
+    # the preflight report describes a smaller document than the one that
+    # actually gets converted. They cannot be placed on a numbered page: a
+    # header or footer repeats on however many pages its section spans, which
+    # this model does not compute, so guessing one page would misreport where
+    # to look. Listed separately instead, each naming the part it came from.
+    header_footer_elements = []
+    for part_name in header_footer_parts(package):
+        part_root = package.xml(part_name)
+        prefix = part_name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        for _anchor, element in _element_pairs(part_root, f"{prefix}_element"):
+            header_footer_elements.append({**element, "part": part_name})
+
     return {
         "schemaVersion": "1.0",
         "source": {"type": "docx", "filename": filename, "sha256": source_sha},
         "document": {"pageCount": len(pages)},
         "pages": pages,
+        "headerFooterElements": header_footer_elements,
         "assets": {},
         "fonts": sorted(fonts(root)),
         "fontRequirements": font_requirements(package),
@@ -324,6 +358,7 @@ def empty_manifest(filename: str, source_sha: str) -> dict:
         "source": {"type": "docx", "filename": filename, "sha256": source_sha},
         "document": {"pageCount": 0},
         "pages": [],
+        "headerFooterElements": [],
         "assets": {},
         "fonts": [],
         "fontRequirements": [],
@@ -342,8 +377,36 @@ def page_size(sect_pr: Element | None) -> dict:
     return {"widthPt": width / DXA_PER_POINT, "heightPt": height / DXA_PER_POINT}
 
 
+def _section_breaks(container: Element | list[Element]):
+    """Every mid-document <w:sectPr> that ends a section, in document order.
+
+    Descends into content controls (w:sdt/w:sdtContent), since a section
+    break can sit inside one. Never descends into w:sectPrChange, which
+    keeps a tracked change's *previous* properties rather than a live break
+    -- reached only by iterating the whole subtree, which this does not do.
+    """
+    for child in container:
+        tag = local(child.tag)
+        if tag == "p":
+            sect = child.find(q("w", "pPr") + "/" + q("w", "sectPr"))
+            if sect is not None:
+                yield sect
+        elif tag == "sdt":
+            content = child.find(q("w", "sdtContent"))
+            if content is not None:
+                yield from _section_breaks(content)
+
+
+def _ends_section(child: Element) -> bool:
+    return any(True for _ in _section_breaks([child]))
+
+
 def page_sizes(body: Element) -> list[dict]:
-    found = [page_size(sect) for sect in body.iter(q("w", "sectPr"))]
+    sections = list(_section_breaks(body))
+    body_level = body.find(q("w", "sectPr"))
+    if body_level is not None:
+        sections.append(body_level)
+    found = [page_size(sect) for sect in sections]
     return found or [page_size(None)]
 
 
@@ -351,14 +414,15 @@ def section_index(body: Element, count: int):
     """Maps an anchor to the section it falls in, by document order.
 
     A <w:sectPr> inside a paragraph's properties *ends* a section, so anchors
-    up to and including that paragraph belong to it.
+    up to and including that paragraph belong to it. That paragraph may sit
+    directly in the body or inside a content control's w:sdtContent.
     """
     order: dict[Element, int] = {}
     index = 0
     for child in body:
         for anchor in child.iter(q("wp", "anchor")):
             order[anchor] = index
-        if child.find(q("w", "pPr") + "/" + q("w", "sectPr")) is not None:
+        if _ends_section(child):
             index += 1
     last = count - 1
     return lambda anchor: min(order.get(anchor, last), last)
@@ -435,30 +499,42 @@ def theme_fonts(package: Package) -> dict[str, str]:
         entry = scheme.find(q("a", group))
         if entry is None:
             continue
-        for element, token in (("latin", "HAnsi"), ("cs", "Bidi"), ("ea", "EastAsia")):
+        for element, suffix in (("latin", "HAnsi"), ("cs", "Bidi"), ("ea", "EastAsia")):
             node = entry.find(q("a", element))
             typeface = node.get("typeface") if node is not None else None
             if typeface:
-                resolved[prefix + token] = typeface
+                resolved[prefix + suffix] = typeface
+                if suffix == "HAnsi":
+                    # ST_Theme names majorAscii/minorAscii as well as
+                    # majorHAnsi/minorHAnsi, but a:fontScheme has only one
+                    # <a:latin> per major/minor group -- both tokens resolve
+                    # to it.
+                    resolved[prefix + "Ascii"] = typeface
     return resolved
 
 
 def _slot_fonts(properties: Element | None) -> dict[str, str]:
-    """Families an rPr names, keyed by script. Literal names beat theme ones."""
+    """Families an rPr names, keyed by script. Theme names beat literal ones.
+
+    ECMA-376 SS17.3.2.26: when a *Theme attribute is present on w:rFonts, the
+    matching literal attribute (w:ascii etc.) is ignored, not merely a
+    fallback. Word writes both after a theme change or a paste, so reading
+    the literal first named a family the document no longer actually uses.
+    """
     if properties is None:
         return {}
     element = properties.find(q("w", "rFonts"))
     if element is None:
         return {}
     found: dict[str, str] = {}
-    for slot, script in SCRIPT_OF_SLOT.items():
-        value = element.get(q("w", slot))
-        if value:
-            found.setdefault(script, value)
     for slot, script in THEME_SLOT.items():
         token = element.get(q("w", slot))
         if token:
             found.setdefault(script, THEME_MARK + token)
+    for slot, script in SCRIPT_OF_SLOT.items():
+        value = element.get(q("w", slot))
+        if value:
+            found.setdefault(script, value)
     return found
 
 
@@ -844,7 +920,9 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
 
 
 def analysis_report(manifest: dict) -> dict:
+    header_footer = manifest.get("headerFooterElements", [])
     counts = Counter(e["type"] for page in manifest["pages"] for e in page["elements"])
+    counts.update(e["type"] for e in header_footer)
     warnings = list(manifest["warnings"])
     for page in manifest["pages"]:
         for element in page["elements"]:
@@ -852,6 +930,12 @@ def analysis_report(manifest: dict) -> dict:
                 {**w, "pageIndex": page["index"], "elementId": element["id"]}
                 for w in element["warnings"]
             )
+    # A header or footer isn't on a numbered page (see parse()), so its
+    # warnings are tagged with the part they came from instead of a page.
+    for element in header_footer:
+        warnings.extend(
+            {**w, "part": element["part"], "elementId": element["id"]} for w in element["warnings"]
+        )
     return {
         "schemaVersion": "1.0",
         "status": "analysed",

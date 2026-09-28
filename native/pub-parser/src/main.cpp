@@ -50,8 +50,10 @@ void usage() {
                "  --help                  print this message\n");
 }
 
+// Splits on both separators on every platform, so a Windows path such as
+// C:\Users\<name>\booklet.pub never reaches the bundle whole.
 std::string basename(const std::string &path) {
-  const std::size_t slash = path.find_last_of('/');
+  const std::size_t slash = path.find_last_of("/\\");
   return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 

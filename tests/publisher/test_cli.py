@@ -68,6 +68,18 @@ class CliTest(unittest.TestCase):
                 text = handle.read()
             self.assertNotIn(os.path.dirname(source), text)
 
+    def test_a_windows_path_is_cut_to_its_basename_too(self):
+        # Issue #52: only "/" was a separator, so a Windows path reached the
+        # bundle whole, name and all. Off Windows, a file literally named with
+        # backslashes stands in for one.
+        name = "junk.pub" if os.name == "nt" else r"C:\Users\A Person\junk.pub"
+        with harness.TempOutput() as out:
+            source = self._write(os.path.dirname(out), name, b"nope")
+            harness.run_parser(self.parser, source, out)
+            with open(os.path.join(out, "report.json"), encoding="utf-8") as handle:
+                report = json.load(handle)
+            self.assertEqual(report["source"]["filename"], "junk.pub")
+
     def test_an_ole_container_that_is_not_publisher_is_still_identified(self):
         ole = bytes([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) + b"\x00" * 512
         with harness.TempOutput() as out:

@@ -217,3 +217,29 @@ def test_plaintext_nonlocal_configuration_rejected(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "http://example.com")
     with pytest.raises(ValueError, match="HTTPS"):
         Settings.from_env()
+
+
+def test_convert_refuses_a_sign_in_that_would_expire_mid_job(pptx):
+    # Issue #52: a token with a few minutes left was accepted, and ran out
+    # partway through the uploads.
+    settings = configured()
+    app = create_app(settings)
+    client = TestClient(app, base_url=settings.base_url)
+    data = {
+        "access_token": "not-a-real-token",
+        "expires": time.time() + settings.job_timeout - 30,
+        "csrf": "test-csrf",
+    }
+    client.cookies.set(SESSION, app.state.auth.seal(data))
+    headers = {
+        "Content-Type": PPTX_MIME,
+        "X-Upload-Filename": "sample.pptx",
+        "X-CSRF-Token": "test-csrf",
+    }
+    response = client.post("/api/convert", content=pptx.read_bytes(), headers=headers)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "session_expiring"
+    # Checking a file needs no Google access, so it still works.
+    assert (
+        client.post("/api/analyse", content=pptx.read_bytes(), headers=headers).status_code == 200
+    )

@@ -47,3 +47,9 @@ workspace sweeper. Live Sheets import remains unverified.
 10. Empty `<w:drawing>` residue left by every converted anchor (issue #20).
    Recorded only: no cleanup until a before/after rendering case shows an
    effect.
+11. Library folder race (#70): two conversions at once can each create a
+   "Workspace conversions" folder. Option 1 in the issue (lock plus re-check)
+   is platform-only and writes nothing extra to Drive.
+12. DOCX analysis counts anchors in `document.xml` only, while `render` also
+   transforms headers and footers, so the pre-conversion report can
+   under-count. Split out of #52; SilverDog's (`docx.py`).

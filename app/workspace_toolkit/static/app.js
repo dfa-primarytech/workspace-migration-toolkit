@@ -3,8 +3,9 @@ const $ = id => document.getElementById(id);
 let session, sourceHash, selected, reportUrl;
 async function request(url, options = {}) {
   const response = await fetch(url, options);
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error?.message || 'The request failed. Please try again.');
+  // A proxy's 413 or a plain-text server error is not JSON; show our own words, not a parse error.
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body) throw new Error(body?.error?.message || 'The request failed. Please try again.');
   return body;
 }
 function busy(value) { for (const id of ['file','analyse','convert','logout']) $(id).disabled = value; }

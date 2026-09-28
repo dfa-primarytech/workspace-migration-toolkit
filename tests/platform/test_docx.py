@@ -6,7 +6,7 @@ from collections import Counter
 import pytest
 from workspace_toolkit.config import Settings
 from workspace_toolkit.docs import Ids, render, send_behind_text, transform
-from workspace_toolkit.docx import NS, local, parse, q
+from workspace_toolkit.docx import NS, analysis_report, local, parse, q
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.package import CONTENT_NS, DOCX, DOCX_MAIN_MIME, REL_NS, Package
 
@@ -214,6 +214,39 @@ def test_elements_are_assigned_to_their_section(tmp_path):
     manifest = parse_body(tmp_path, body)
     assert manifest["document"]["pageCount"] == 2
     assert [len(p["elements"]) for p in manifest["pages"]] == [1, 1]
+
+
+def test_a_section_break_inside_a_content_control_is_counted(tmp_path):
+    """A block-level w:sdt can wrap the paragraph that ends a section.
+
+    page_sizes used to walk body.iter(sectPr), which found this one, but
+    section_index only looked at direct body children, so a picture after
+    the break was attributed to the wrong (earlier) section's page size.
+    """
+    wrapped_break = f"<w:sdt><w:sdtContent>{SECTION}</w:sdtContent></w:sdt>"
+    body = anchor(PICTURE) + wrapped_break + anchor(PICTURE) + SECTION
+    manifest = parse_body(tmp_path, body)
+    assert manifest["document"]["pageCount"] == 2
+    assert [len(p["elements"]) for p in manifest["pages"]] == [1, 1]
+
+
+def test_a_tracked_change_s_previous_section_properties_are_not_counted(tmp_path):
+    """w:sectPrChange keeps the *previous* page setup, not a live break.
+
+    page_sizes used to walk body.iter(sectPr), which finds this nested copy
+    too, over-counting sections and measuring later anchors against the
+    wrong page size.
+    """
+    tracked = (
+        "<w:p><w:pPr><w:sectPr>"
+        '<w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:sectPrChange w:id="1"><w:sectPr><w:pgSz w:w="16838" w:h="11906"/></w:sectPr>'
+        "</w:sectPrChange>"
+        "</w:sectPr></w:pPr></w:p>"
+    )
+    body = anchor(PICTURE) + tracked
+    manifest = parse_body(tmp_path, body)
+    assert manifest["document"]["pageCount"] == 1
 
 
 # ---------------------------------------------------------------- renderer
@@ -600,6 +633,7 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
         "picturesUnplaced": 0,
         "tablesNarrowed": 0,
         "picturesShrunk": 0,
+        "rowsProtected": 0,
         "ink": 0,
         "legacyPictures": 0,
         "unsupported": {},
@@ -714,6 +748,47 @@ def render_with_header(tmp_path, body, header, footer=None):
     with zipfile.ZipFile(tmp_path / "out.docx") as archive:
         parts = {n: archive.read(n).decode() for n in archive.namelist() if n.endswith(".xml")}
     return report, parts
+
+
+def parse_with_header(tmp_path, body, header, footer=None):
+    source = docx_with_header(tmp_path / "sample.docx", body, header, footer)
+    package = Package(source, Settings(), DOCX)
+    try:
+        return parse(package, "sample.docx", "sha")
+    finally:
+        package.close()
+
+
+def test_the_preflight_manifest_counts_header_and_footer_elements_too(tmp_path):
+    """render() transforms every header and footer; parse() must not skip them.
+
+    Otherwise a picture or text box living only in a letterhead or title block
+    is converted but never appears in the report a reviewer sees beforehand.
+    """
+    header = anchor(TEXTBOX, h=("margin", offset(0)), v=("paragraph", offset(0)))
+    footer = anchor(PICTURE, h=("margin", offset(0)), v=("paragraph", offset(0)))
+    manifest = parse_with_header(tmp_path, SECTION, header, footer)
+    found = {(e["part"], e["kind"]) for e in manifest["headerFooterElements"]}
+    assert found == {("word/header1.xml", "textbox"), ("word/footer1.xml", "picture")}
+    # Not attributed to any numbered page: a header or footer's own page
+    # range is not something this model computes.
+    assert all(len(page["elements"]) == 0 for page in manifest["pages"])
+
+
+def test_the_reviewer_facing_report_counts_header_and_footer_elements(tmp_path):
+    """analysis_report is what a reviewer actually sees before converting.
+
+    Counting them in the manifest but not here would still under-report --
+    the person deciding whether to convert never sees the letterhead's own
+    text box or its warnings.
+    """
+    header = anchor(TEXTBOX)  # unpositioned, so it carries its own warning
+    manifest = parse_with_header(tmp_path, SECTION, header)
+    report = analysis_report(manifest)
+    assert report["elementCounts"]["text"] == 1
+    matches = [w for w in report["warnings"] if w["code"] == "textbox_unpositioned"]
+    assert len(matches) == 1
+    assert matches[0]["part"] == "word/header1.xml"
 
 
 def test_headers_get_the_same_structural_passes_as_the_body(tmp_path):
@@ -879,6 +954,34 @@ def test_a_picture_floating_inside_a_cell_becomes_cell_content(tmp_path):
 
     names = [local(child.tag) for child in inline]
     assert names == sorted(names, key=["extent", "effectExtent", "docPr", "graphic"].index), names
+
+
+def test_a_row_that_gains_an_inline_picture_is_protected_from_splitting(tmp_path):
+    """#55: a row #34 just made taller must not split across a page break."""
+    body = in_cell(anchor(PICTURE, h=("column", offset(0)), v=("paragraph", offset(0)))) + SECTION
+    root, report = transformed(tmp_path, body)
+    assert report["rowsProtected"] == 1
+    row = root.find(".//" + q("w", "tr"))
+    cant_split = row.find(q("w", "trPr") + "/" + q("w", "cantSplit"))
+    assert cant_split is not None
+
+
+TINY_PAGE = (
+    "<w:p><w:pPr><w:sectPr>"
+    '<w:pgSz w:w="11906" w:h="1000"/>'
+    '<w:pgMar w:left="0" w:right="0" w:top="0" w:bottom="0"/>'
+    "</w:sectPr></w:pPr></w:p>"
+)
+
+
+def test_a_picture_taller_than_the_page_leaves_its_row_unprotected(tmp_path):
+    """Word cannot honour w:cantSplit on a row already taller than a page."""
+    body = in_cell(anchor(PICTURE, h=("column", offset(0)), v=("paragraph", offset(0)))) + TINY_PAGE
+    root, report = transformed(tmp_path, body)
+    assert report["rowsProtected"] == 0
+    row = root.find(".//" + q("w", "tr"))
+    trPr = row.find(q("w", "trPr"))
+    assert trPr is None or trPr.find(q("w", "cantSplit")) is None
 
 
 def test_a_picture_floating_outside_any_cell_is_left_alone(tmp_path):
