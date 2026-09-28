@@ -49,11 +49,19 @@ async def preflight(root: Path, settings: Settings, fmt: Format = PPTX) -> dict:
     )
     try:
         await asyncio.wait_for(process.wait(), timeout=settings.parser_timeout)
-    except (TimeoutError, asyncio.CancelledError):
+    except TimeoutError:
         if process.returncode is None:
             process.kill()
         await process.wait()
         raise ToolkitError("parser_timeout", "This file took too long to analyse.", 422) from None
+    except asyncio.CancelledError:
+        # Not a slow file: the client went away, or the whole job ran out of
+        # time. Stop the worker and let the cancellation through, so the job
+        # timeout is reported as itself rather than as a parser timeout.
+        if process.returncode is None:
+            process.kill()
+        await asyncio.shield(process.wait())
+        raise
     if process.returncode:
         error = output / "error.json"
         if error.exists():

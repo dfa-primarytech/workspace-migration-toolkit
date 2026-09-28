@@ -17,6 +17,7 @@ integers. Those are the invariants a renderer will rely on.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -285,6 +286,14 @@ def load_bundle(directory: str) -> dict[str, Any]:
     return bundle
 
 
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 16), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def validate_bundle(directory: str, schema: dict[str, Any] | None = None) -> list[Problem]:
     """Validates a whole output bundle, including the asset files on disk."""
     schema = schema if schema is not None else load_schema()
@@ -312,5 +321,9 @@ def validate_bundle(directory: str, schema: dict[str, Any] | None = None) -> lis
             continue
         if os.path.getsize(path) != asset["byteLength"]:
             problems.append(Problem(f"assets[{index}].byteLength", "does not match the file"))
+            continue
+        # A payload of the right size can still be corrupt or substituted.
+        if _sha256_file(path) != asset.get("sha256"):
+            problems.append(Problem(f"assets[{index}].sha256", "does not match the file"))
 
     return problems

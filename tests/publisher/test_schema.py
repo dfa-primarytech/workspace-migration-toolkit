@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+import os
+import tempfile
 import unittest
 
 from harness import validation
@@ -232,3 +236,37 @@ class ReferenceValidationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BundlePayloadTest(unittest.TestCase):
+    """Issue #52: a payload of the right size but the wrong bytes passed."""
+
+    def _bundle(self, directory: str, stored: bytes, written: bytes) -> list:
+        digest = hashlib.sha256(stored).hexdigest()
+        asset = {"id": "asset_0001", "sha256": digest, "filename": f"assets/{digest}.png"}
+        asset.update(byteLength=len(stored), useCount=0, uses=[])
+        os.makedirs(os.path.join(directory, "assets"))
+        with open(os.path.join(directory, asset["filename"]), "wb") as handle:
+            handle.write(written)
+        parts = {
+            "document": minimal_document(),
+            "assets": {"schemaVersion": "1.0.0", "assets": [asset]},
+            "report": {"schemaVersion": "1.0.0"},
+        }
+        for name, content in parts.items():
+            with open(os.path.join(directory, f"{name}.json"), "w", encoding="utf-8") as handle:
+                json.dump(content, handle)
+        problems = validation.validate_bundle(directory)
+        return [p.path for p in problems if p.path.startswith("assets[0]")]
+
+    def test_an_intact_payload_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self._bundle(directory, b"picture", b"picture"), [])
+
+    def test_a_substituted_payload_of_the_same_size_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self._bundle(directory, b"picture", b"pikture"), ["assets[0].sha256"])
+
+    def test_a_wrong_size_is_reported_once_not_twice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self._bundle(directory, b"picture", b"pic"), ["assets[0].byteLength"])

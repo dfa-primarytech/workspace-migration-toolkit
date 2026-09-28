@@ -877,9 +877,15 @@ void IrCollector::classifyLayer(Element &layer) {
     return;
   }
 
+  // Elements are appended as they open, so a layer's children all follow it,
+  // and a layer is classified as it closes, so nothing after it yet belongs
+  // to anything else. Starting at the layer keeps each close proportional to
+  // its own contents rather than to the whole document.
   bool nestedLayer = false;
   std::vector<Bounds> boxes;
-  for (const Element &child : doc_.elements) {
+  const auto start = static_cast<std::size_t>(&layer - doc_.elements.data()) + 1;
+  for (std::size_t i = start; i < doc_.elements.size(); i++) {
+    const Element &child = doc_.elements[i];
     if (child.parentId != layer.id) continue;
     if (child.wrapperKind == "layer") nestedLayer = true;
     if (child.bounds.valid) boxes.push_back(child.bounds);

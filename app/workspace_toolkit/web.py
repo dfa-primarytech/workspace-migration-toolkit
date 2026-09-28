@@ -125,6 +125,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     async def run(request: Request, do_convert: bool):
         session = auth.session(request, csrf=True)
+        # Google's token lasts an hour and a conversion can take job_timeout.
+        # Refuse up front rather than lose the token halfway through the
+        # uploads and hand back a partial conversion.
+        if do_convert and float(session["expires"]) - time.time() < settings.job_timeout:
+            raise ToolkitError(
+                "session_expiring",
+                "Your Google sign-in expires before a conversion could finish. "
+                "Please sign out, sign in again, and convert.",
+                401,
+            )
         filename = unquote(request.headers.get("x-upload-filename", ""))
         pipeline = resolve(filename)
         validate_upload_name(filename, request.headers.get("content-type", ""), pipeline.fmt)
