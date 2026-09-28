@@ -512,6 +512,42 @@ def _placements(manifest: dict) -> dict[str, list[int]]:
     return placed
 
 
+# Names PowerPoint gives an object by default, which say nothing about it.
+DEFAULT_SHAPE_NAME = re.compile(
+    r"(?:picture|image|video|audio|media|movie|sound|online media|recorded sound|"
+    r"screen recording|content placeholder|placeholder|object|graphic)?\s*\d*",
+    re.IGNORECASE,
+)
+MEDIA_SUFFIX = re.compile(
+    r"\.(?:mp4|m4v|mov|wmv|avi|mpe?g|mp3|m4a|wav|wma|aac|ogg|png|jpe?g|gif|bmp|emf|wmf|tiff?)$",
+    re.IGNORECASE,
+)
+
+
+def _own_names(manifest: dict) -> dict[str, str]:
+    """Each asset's own name, from the first object on a slide that uses it.
+
+    Only a meaningful name counts: "Picture 3" or "Video 2" is PowerPoint's
+    default and would only repeat what the numbered name already says.
+    """
+    if manifest.get("source", {}).get("type") != "pptx":
+        return {}
+    kinds = {a["id"]: a.get("kind") for a in manifest.get("assets", {}).values()}
+    names: dict[str, str] = {}
+    for page in manifest.get("pages") or []:
+        for element in page.get("elements") or []:
+            own = clean_name(MEDIA_SUFFIX.sub("", (element.get("name") or "").strip()))
+            if not own or DEFAULT_SHAPE_NAME.fullmatch(own):
+                continue
+            ids = element.get("assetIds") or []
+            # A video or sound object also carries its still image; the name
+            # describes the media, so the still image does not take it.
+            media = [i for i in ids if kinds.get(i) in {"audio", "video"}]
+            for asset_id in media or ids:
+                names.setdefault(asset_id, own)
+    return names
+
+
 def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     """A name for every asset that says where it came from, keyed by asset id.
 
@@ -519,8 +555,14 @@ def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     follows the deck rather than the order the archive happened to store them
     in. An asset nothing placed -- one used only by a layout or a master --
     keeps a name without a slide rather than being given a misleading one.
+
+    Where the object carrying it has a name of its own -- PowerPoint names an
+    inserted video or sound after its file -- that name replaces the number,
+    so a teacher putting it back finds "Volcano eruption", not "video 3".
     """
     placed = _placements(manifest)
+    own = _own_names(manifest)
+    used: Counter[str] = Counter()
     width = len(str(max((slides[-1] for slides in placed.values()), default=0)))
     deck = clean_name(original_name)
     assets = list(manifest.get("assets", {}).values())
@@ -534,12 +576,16 @@ def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     for _, asset in ranked:
         kind = asset.get("kind") or "file"
         counts[kind] += 1
+        label = own.get(asset["id"]) or f"{kind} {counts[kind]}"
+        used[label.casefold()] += 1
+        if used[label.casefold()] > 1:  # two different files, one name
+            label = f"{label} ({used[label.casefold()]})"
         parts = [
             part
             for part in (
                 deck,
                 _slide_phrase(placed.get(asset["id"], []), width),
-                f"{kind} {counts[kind]}",
+                label,
             )
             if part
         ]
@@ -629,6 +675,55 @@ async def save_assets(
         )
 
 
+def videos_removed_warnings(videos: list[dict], manifest: dict, report: dict) -> list[dict]:
+    """What to tell a person about videos taken out before upload (issue #36).
+
+    Once a video is taken out, its copy in the conversion folder is the only
+    one the conversion made -- so a copy that failed is not a missed safety
+    net, as for other assets, but a video the person must fetch themselves.
+    """
+    if not videos:
+        return []
+    by_part = {
+        part: asset["id"] for asset in manifest["assets"].values() for part in asset["sourceParts"]
+    }
+    saved = {output["assetId"] for output in report.get("assetOutputs", [])}
+    missing = [video["part"] for video in videos if by_part.get(video["part"]) not in saved]
+    total = sum(video["bytes"] for video in videos)
+    plural = len(videos) != 1
+    where = (
+        ""
+        if missing
+        else f", and {'the videos are' if plural else 'the video is'} in the conversion folder"
+    )
+    notes = [
+        warning(
+            "videos_removed",
+            f"{len(videos)} embedded video{'s' if plural else ''} "
+            f"({total / 1_000_000:,.1f} MB) {'were' if plural else 'was'} not sent "
+            "to Google, which does not import embedded video. "
+            f"{'Each slide shows its' if plural else 'The slide shows the'} video's still image"
+            f"{where}.",
+            classification=C.IGNORED,
+            count=len(videos),
+            bytes=total,
+        )
+    ]
+    if missing:
+        notes.append(
+            warning(
+                "removed_video_not_saved",
+                f"{len(missing)} video{'s' if len(missing) != 1 else ''} could not be saved "
+                "to the conversion folder, so the converted presentation has only "
+                f"{'their' if len(missing) != 1 else 'its'} still image. The video is still "
+                "in your original file.",
+                classification=C.UNSUPPORTED,
+                parts=missing,
+            )
+        )
+    return notes
+
+
 async def convert(
     root: Path,
     manifest: dict,
@@ -670,9 +765,12 @@ async def convert(
         render_report = root / "result" / "render.json"
         if render_report.exists():
             rendered_details = json.loads(render_report.read_text(encoding="utf-8"))
+            videos = rendered_details.get("videosRemoved", [])
             report["conversion"] = {
-                "fontSubstitutions": rendered_details.get("fontSubstitutions", [])
+                "fontSubstitutions": rendered_details.get("fontSubstitutions", []),
+                "videosRemoved": videos,
             }
+            report["warnings"].extend(videos_removed_warnings(videos, manifest, report))
         report["verification"] = "page_size_count_and_text_checked"
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:

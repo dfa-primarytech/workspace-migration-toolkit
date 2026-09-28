@@ -21,6 +21,9 @@
 *.eml
 *.msg
 samples/
+# Synthetic test decks, each built by the script beside it with no real
+# content. Listed one by one: a pattern here would let a real deck through.
+!tests/fixtures/pptx/video-deck.pptx
 
 # clasp
 .clasp.json

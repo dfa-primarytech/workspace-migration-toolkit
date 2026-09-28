@@ -192,6 +192,20 @@ most of it the job folder, which on Cloud Run is RAM. Two 94 MiB jobs at once
 peaked at 751 MiB. **Size limits that remain are Google's**: its published
 conversion limits are 50 MB to Docs and 100 MB to Slides or Sheets. A larger
 file is warned about (`beyond_import_limit`) before converting, not refused.
+**Embedded video is taken out before a deck goes to Google** (issue #36): Slides
+does not import embedded video (`docs/research.md`), and the conversion saves
+each video to the conversion folder anyway. The video's part, its relationships
+and the markup that plays it are removed; the picture element stays, so the
+slide shows the video's poster frame where the video was. Audio is left alone.
+A video also used as a picture, or in a part whose edit cannot be confirmed by
+re-parsing, is kept. The report lists what was removed (`videosRemoved`), warns
+`videos_removed`, and warns `removed_video_not_saved` if a removed video's Drive
+copy failed -- its original file then still has it. The import-limit warning
+judges the file Google receives, not the upload.
+Saved copies are named `<deck> – slide NN – <name>`, where `<name>` is the
+object's own name when PowerPoint gave it a meaningful one (it names an
+inserted video or sound after its file) and `video 1`, `audio 2` and so on
+otherwise. PowerPoint's defaults such as "Picture 3" count as no name.
 The server is Hypercorn, which speaks HTTP/2 without TLS: Cloud Run refuses an
 HTTP/1 request body over 32 MiB, so deploy with end-to-end HTTP/2 (the `h2c`
 port name in `deploy/cloud-run.example.yaml`). The subprocess inherits only a small runtime environment,

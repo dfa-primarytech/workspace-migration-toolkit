@@ -537,7 +537,13 @@ def deck(*slides: list[str], assets: dict[str, str] | None = None) -> dict:
         "pages": [
             {
                 "index": index,
-                "elements": [{"assetIds": [asset_id]} for asset_id in ids],
+                # An id, or (id, the object's own name).
+                "elements": [
+                    {"assetIds": [i[0]], "name": i[1]}
+                    if isinstance(i, tuple)
+                    else {"assetIds": [i]}
+                    for i in ids
+                ],
             }
             for index, ids in enumerate(slides)
         ],
@@ -633,3 +639,43 @@ def test_an_unknown_type_is_named_without_inventing_a_suffix():
 def test_without_a_source_name_an_asset_is_still_named_usefully():
     manifest = deck([], ["sha1"], assets={"sha1": "image/png"})
     assert asset_names(manifest, "")["sha1"] == "slide 2 – image 1.png"
+
+
+# --------------------------------------------- media keeps its own name
+
+
+def test_media_is_named_after_the_file_the_teacher_inserted():
+    # PowerPoint names an inserted video or sound after its file.
+    manifest = deck([], [("v1", "Volcano eruption")], assets={"v1": "video/mp4"})
+    assert asset_names(manifest, "Science")["v1"] == "Science – slide 2 – Volcano eruption.mp4"
+
+
+def test_the_files_own_extension_is_not_doubled():
+    manifest = deck([("a1", "Class song.m4a")], assets={"a1": "audio/mpeg"})
+    assert asset_names(manifest, "Music")["a1"] == "Music – slide 1 – Class song.mp3"
+
+
+def test_powerpoints_default_names_fall_back_to_the_number():
+    manifest = deck(
+        [("v1", "Video 2"), ("a1", "Recorded Sound"), ("p1", "Picture 3"), ("x1", "")],
+        assets={"v1": "video/mp4", "a1": "audio/wav", "p1": "image/x-emf", "x1": "video/mp4"},
+    )
+    names = asset_names(manifest, "Topic")
+    assert names["v1"] == "Topic – slide 1 – video 1.mp4"
+    assert names["a1"] == "Topic – slide 1 – audio 1.wav"
+    assert names["p1"] == "Topic – slide 1 – image 1.emf"
+    assert names["x1"] == "Topic – slide 1 – video 2.mp4"
+
+
+def test_two_files_with_one_name_stay_apart():
+    manifest = deck(
+        [("v1", "Intro")], [("v2", "Intro")], assets={"v1": "video/mp4", "v2": "video/mp4"}
+    )
+    names = asset_names(manifest, "Topic")
+    assert names["v1"] == "Topic – slide 1 – Intro.mp4"
+    assert names["v2"] == "Topic – slide 2 – Intro (2).mp4"
+
+
+def test_an_unsafe_object_name_is_cleaned():
+    manifest = deck([("v1", 'Week 3/4: "tides"')], assets={"v1": "video/mp4"})
+    assert asset_names(manifest, "Topic")["v1"] == "Topic – slide 1 – Week 3 4 tides.mp4"
