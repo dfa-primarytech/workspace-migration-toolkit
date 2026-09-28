@@ -46,16 +46,18 @@ content is now counted in the preflight report (was silently skipped), a
 row that gains a picture from the floating-picture-inlining pass is
 protected from splitting across a page break, and pictures stacked across
 several consecutive paragraphs above a table (not just the last one) are
-now placed into their cells. Still open: #53 (post-import Docs
-API/PDF read-back) and #54 (fixing blank pages from separator paragraphs)
-are both explicitly design-only and blocked on verifying, against a live
-Google test tenant, whether `drive.file` scope reaches `documents.get` and
-`files.export` on a file the app itself created -- nobody has done that
-spike yet. #55's fully general geometry case (a picture anchored anywhere,
-placed by rectangle overlap against a table's own `tblpPr`/`tblInd`
-position and stated row heights) is still open; most real worksheets lack
-the explicit positioning or row heights to make that case computable
-without guessing.
+now placed into their cells, and (#55, now closed) so is a picture anchored
+anywhere in the document, by rectangle geometry against a table's own
+`tblpPr` position and stated row heights, for the minority of tables exact
+enough to measure that way.
+
+Still open: #53 (post-import Docs API/PDF read-back) and #54 (fixing blank
+pages from separator paragraphs) are both still design-only, but **no
+longer blocked**: the live scope spike they were waiting on ran on
+2026-09-28 against the project's real GCP project, and `drive.file` scope
+does reach both `documents.get` and `files.export` (PDF) on a Google Doc the
+app itself created -- see DECISIONS.md's 2026-09-28 entry. Neither issue is
+implemented yet; this only removes the reason neither could be started.
 
 **#36** (accept files over 25MB) looked like a config change but isn't:
 proper "no fixed limit" needs chunked/resumable upload, object storage
@@ -92,10 +94,25 @@ few smaller follow-ups (cell-limit estimate, one-based sheet indexes, an
 unused sweeper) still to be resolved or split out before it's ready for
 review.
 
-**Unverified everywhere**: live OAuth, real Google conversion and visual
-fidelity for PPTX, DOCX and Publisher alike. Every Google interaction in
-the test suite is a test double. No GCP resources are deployed. The next
-real milestone for any of this is a Google Cloud test project -- note that
-verification doesn't need Cloud Run: `config.py` permits `http://localhost`,
-so the app can be run locally against a real OAuth client. Cloud Run,
-billing and a public hostname are only needed to put it in front of staff.
+**Add from Drive** (PR #81) adds Google Picker as a second, opt-in source
+for a file to convert, alongside the existing local upload -- the server
+downloads a picked file itself by id rather than the browser sending it
+twice. Opt-in per deployment via `GOOGLE_PICKER_API_KEY`; unset, the app
+behaves exactly as before. Verified live 2026-09-28, see `docs/platform.md`
+and the 2026-09-28 DECISIONS.md entries for what the reasoned design got
+wrong and how it was fixed.
+
+**The GCP project exists** (`workspace-migration-toolkit`) and a Web OAuth
+client works against it -- this is new as of 2026-09-28; earlier notes in
+this file and in issues saying "no GCP resources exist" are stale. What's
+now actually verified live: the OAuth + PKCE sign-in flow; a real PPTX and a
+real DOCX converting end to end (both via local upload and via Add from
+Drive); Slides read-back verification (page size, count, text); and
+`drive.file` reaching `documents.get`/`files.export` on an app-created file
+(see #53/#54 above). **Still unverified**: visual fidelity (nobody has
+compared a converted document's actual rendering against the source, which
+is #53's own "read the converted document back" point), Publisher's Slides
+path (no renderer exists yet), and anything at Cloud Run/production scale --
+this was all run locally against `http://localhost:8080`, which `config.py`
+permits for exactly this reason. No billable resources beyond the free-tier
+API usage from this session were created.

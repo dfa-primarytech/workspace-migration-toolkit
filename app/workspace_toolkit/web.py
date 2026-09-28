@@ -61,17 +61,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Google Picker needs its own script and iframe origins, so the
         # default stays maximally strict and only loosens when the operator
         # has actually configured the feature (settings.picker_ready).
-        # UNVERIFIED against a live deployment -- no GCP project exists in
-        # this environment to test Picker against. If it doesn't load once
-        # tested for real, check the browser console for the exact origin
-        # CSP blocked and add it here.
+        # Verified live against a real GCP project (2026-09-28): gapi's own
+        # picker widget sets inline style="..." attributes on elements it
+        # creates in this page (not just inside its iframe), which needed
+        # style-src 'unsafe-inline' -- there is no hash/nonce we can apply to
+        # markup a third party generates. frame-src/script-src/connect-src
+        # were confirmed sufficient as originally written.
         script_src = "'self'" + (" https://apis.google.com" if settings.picker_ready else "")
+        style_src = "'self'" + (" 'unsafe-inline'" if settings.picker_ready else "")
         frame_src = " frame-src https://docs.google.com;" if settings.picker_ready else ""
         connect_src = (
             " connect-src 'self' https://www.googleapis.com;" if settings.picker_ready else ""
         )
         response.headers["Content-Security-Policy"] = (
-            f"default-src 'self'; script-src {script_src}; style-src 'self'; "
+            f"default-src 'self'; script-src {script_src}; style-src {style_src}; "
             f"img-src 'self';{frame_src}{connect_src} frame-ancestors 'none'; "
             "base-uri 'none'; form-action 'self'"
         )
@@ -98,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "formats": describe(),
                 "pickerEnabled": settings.picker_ready,
                 "pickerApiKey": settings.picker_api_key if settings.picker_ready else "",
+                "pickerAppId": settings.picker_app_id if settings.picker_ready else "",
             }
         except ToolkitError:
             return {
@@ -107,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "formats": describe(),
                 "pickerEnabled": settings.picker_ready,
                 "pickerApiKey": "",
+                "pickerAppId": "",
             }
 
     @app.get("/api/picker-token")

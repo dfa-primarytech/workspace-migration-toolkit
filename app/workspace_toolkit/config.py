@@ -47,6 +47,18 @@ class Settings:
         return bool(self.picker_api_key and self.oauth_ready)
 
     @property
+    def picker_app_id(self) -> str:
+        """The Cloud project number Picker needs via setAppId().
+
+        Verified live (2026-09-28): a drive.file-scoped app's per-file grant
+        on a picked file does not reliably take effect without this. It is
+        the numeric prefix of the OAuth client ID itself -- Google always
+        constructs a client ID as "<project number>-<random>.apps..." -- so
+        no separate configuration value is needed.
+        """
+        return self.client_id.split("-", 1)[0]
+
+    @property
     def redirect_uri(self) -> str:
         return self.base_url + "/auth/callback"
 

@@ -7,6 +7,20 @@ PR descriptions have the same detail in full.
 
 ---
 
+- Agent: Claude Code, working the DOCX issue queue at the human's request
+- Date: 2026-09-28 (later same day)
+- Branch: `fix/docx-header-footer-manifest`, PR #76, split out of #52 (BACKLOG item 12). Based on main after #71/#74/#73 merged.
+- Objective: the DOCX finding Claude 2 flagged back on #52 -- `docx.parse` counts anchors in `document.xml` only, while `render` also transforms headers and footers, so the preflight report can under-count.
+- Completed: `parse()` now scans every header/footer part too, via a shared `_element_pairs` helper factored out of the body loop so both paths build identical element shapes. They can't be attributed to a numbered page (a header/footer's page range isn't computed by this model), so they land in a new `headerFooterElements` list naming their source part. `analysis_report()` -- the actual reviewer-facing summary -- now folds those into its element counts and warnings too, tagged with the part instead of a page index.
+- Checks: 290 passed locally, 8 skipped, 13 pre-existing failures (confirmed present on unmodified main -- a subprocess-parser environment issue in this checkout, not this change; later traced to a missing editable install, not the checkout itself -- see HANDOFF.md's 2026-09-28 "later still" entry). Ruff, format, mypy and Bandit clean.
+- Known failures: none caused by this work.
+- Unresolved: #53 and #54 are both explicitly design-only and blocked on the live OAuth scope spike in #53 (no GCP access in this environment, so neither can responsibly be built yet). #55's second half (geometry-based orphan-picture placement) is still open, left as a larger follow-up per the previous handoff entry.
+- Decisions: none new.
+- Next task: #53/#54 need someone with a live Google test tenant to unblock the scope spike first. Until then, #55's second half or #36 (25MB upload limit) are the remaining unblocked DOCX/platform work.
+- Warnings: same as before -- don't assume a `test_docx.py`/`test_preflight.py`/`test_web.py` failure here is real without checking it also fails on unmodified `main` first.
+
+---
+
 - Agent: Claude Code / QuietHeron, standing in on DOCX at the human's request
 - Date: 2026-09-28
 - Branch: `fix/docx-blank-lines-follow-up`, based on main `e81d77e`

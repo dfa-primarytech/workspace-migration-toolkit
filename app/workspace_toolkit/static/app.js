@@ -55,6 +55,7 @@ async function openPicker() {
       .addView(view)
       .setOAuthToken(accessToken)
       .setDeveloperKey(session.pickerApiKey)
+      .setAppId(session.pickerAppId)
       .setCallback(data => {
         if (data.action === google.picker.Action.PICKED) {
           const doc = data.docs[0];
