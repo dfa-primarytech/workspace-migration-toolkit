@@ -58,8 +58,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        # Google Picker needs its own script and iframe origins, so the
+        # default stays maximally strict and only loosens when the operator
+        # has actually configured the feature (settings.picker_ready).
+        # Verified live against a real GCP project (2026-09-28): gapi's own
+        # picker widget sets inline style="..." attributes on elements it
+        # creates in this page (not just inside its iframe), which needed
+        # style-src 'unsafe-inline' -- there is no hash/nonce we can apply to
+        # markup a third party generates. frame-src/script-src/connect-src
+        # were confirmed sufficient as originally written.
+        script_src = "'self'" + (" https://apis.google.com" if settings.picker_ready else "")
+        style_src = "'self'" + (" 'unsafe-inline'" if settings.picker_ready else "")
+        frame_src = " frame-src https://docs.google.com;" if settings.picker_ready else ""
+        connect_src = (
+            " connect-src 'self' https://www.googleapis.com;" if settings.picker_ready else ""
+        )
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            f"default-src 'self'; script-src {script_src}; style-src {style_src}; "
+            f"img-src 'self';{frame_src}{connect_src} frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'self'"
         )
         if settings.secure_cookies:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
@@ -82,6 +99,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "csrfToken": data["csrf"],
                 "maxUploadBytes": settings.max_upload_bytes,
                 "formats": describe(),
+                "pickerEnabled": settings.picker_ready,
+                "pickerApiKey": settings.picker_api_key if settings.picker_ready else "",
+                "pickerAppId": settings.picker_app_id if settings.picker_ready else "",
             }
         except ToolkitError:
             return {
@@ -89,7 +109,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "configured": settings.oauth_ready,
                 "maxUploadBytes": settings.max_upload_bytes,
                 "formats": describe(),
+                "pickerEnabled": settings.picker_ready,
+                "pickerApiKey": "",
+                "pickerAppId": "",
             }
+
+    @app.get("/api/picker-token")
+    async def picker_token(request: Request):
+        # A read, not a state change, so no CSRF check -- same as
+        # /api/session. Fetched fresh only when the picker is actually
+        # opened, rather than embedded in the page on load, so it sits in
+        # browser memory for as little time as possible.
+        if not settings.picker_ready:
+            raise ToolkitError(
+                "picker_unavailable", "Adding a file from Drive is not available.", 503
+            )
+        data = auth.session(request)
+        return {"accessToken": data["access_token"]}
 
     @app.get("/auth/start")
     async def start():
@@ -138,16 +174,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         filename = unquote(request.headers.get("x-upload-filename", ""))
         pipeline = resolve(filename)
         validate_upload_name(filename, request.headers.get("content-type", ""), pipeline.fmt)
-        length = request.headers.get("content-length")
-        if length:
-            try:
-                declared = int(length)
-            except ValueError as exc:
-                raise ToolkitError("invalid_size", "Invalid upload size.") from exc
-            if declared < 0 or declared > settings.max_upload_bytes:
-                raise ToolkitError(
-                    "upload_too_large", "This file exceeds the upload size limit.", 413
-                )
+        # A file picked from Drive (see the picker-token route and app.js)
+        # arrives by id instead of a request body -- everything from here on
+        # is shared between the two sources.
+        drive_file_id = request.headers.get("x-drive-file-id") or None
+        if drive_file_id and not settings.picker_ready:
+            raise ToolkitError(
+                "picker_unavailable", "Adding a file from Drive is not available.", 503
+            )
+        if drive_file_id is None:
+            length = request.headers.get("content-length")
+            if length:
+                try:
+                    declared = int(length)
+                except ValueError as exc:
+                    raise ToolkitError("invalid_size", "Invalid upload size.") from exc
+                if declared < 0 or declared > settings.max_upload_bytes:
+                    raise ToolkitError(
+                        "upload_too_large", "This file exceeds the upload size limit.", 413
+                    )
         if gate.locked():
             raise ToolkitError("busy", "The converter is busy. Please try again shortly.", 503)
         async with gate:
@@ -156,32 +201,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 progress: dict = {}
                 try:
                     async with asyncio.timeout(settings.job_timeout):
-                        size = 0
-                        with (root / pipeline.source_name).open("xb") as stream:
-                            async for chunk in request.stream():
-                                size += len(chunk)
-                                if size > settings.max_upload_bytes:
-                                    raise ToolkitError(
-                                        "upload_too_large",
-                                        "This file exceeds the upload size limit.",
-                                        413,
-                                    )
-                                stream.write(chunk)
-                        if not size:
-                            raise ToolkitError(
-                                "empty_upload", "Please choose a file that is not empty."
-                            )
-                        manifest = await preflight(root, settings, pipeline.fmt)
-                        if not do_convert:
-                            return pipeline.analysis_report(manifest)
-                        if request.headers.get("x-source-sha256") != manifest["source"]["sha256"]:
-                            raise ToolkitError(
-                                "source_changed",
-                                "Please analyse this file before converting it.",
-                                409,
-                            )
+                        # Constructed unconditionally now rather than only at
+                        # convert time: a Drive-sourced file needs it just to
+                        # be fetched, even for an analyse-only request.
                         async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
                             google = Google(session["access_token"], client)
+
+                            destination = root / pipeline.source_name
+                            if drive_file_id:
+                                size = await google.download(
+                                    drive_file_id, destination, settings.max_upload_bytes
+                                )
+                            else:
+                                size = 0
+                                with destination.open("xb") as stream:
+                                    async for chunk in request.stream():
+                                        size += len(chunk)
+                                        if size > settings.max_upload_bytes:
+                                            raise ToolkitError(
+                                                "upload_too_large",
+                                                "This file exceeds the upload size limit.",
+                                                413,
+                                            )
+                                        stream.write(chunk)
+                            if not size:
+                                raise ToolkitError(
+                                    "empty_upload", "Please choose a file that is not empty."
+                                )
+
+                            manifest = await preflight(root, settings, pipeline.fmt)
+                            if not do_convert:
+                                return pipeline.analysis_report(manifest)
+                            if (
+                                request.headers.get("x-source-sha256")
+                                != manifest["source"]["sha256"]
+                            ):
+                                raise ToolkitError(
+                                    "source_changed",
+                                    "Please analyse this file before converting it.",
+                                    409,
+                                )
                             report = await pipeline.convert(
                                 root,
                                 manifest,

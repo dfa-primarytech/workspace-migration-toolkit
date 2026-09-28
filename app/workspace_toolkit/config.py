@@ -27,6 +27,12 @@ class Settings:
     client_id: str = ""
     client_secret: str = ""
     session_key: str = ""
+    # Google Picker's own developer key, distinct from the OAuth client
+    # secret: it identifies the project to Google's picker UI and is
+    # restricted by HTTP referrer in Cloud Console, not a value that needs
+    # to stay off the client -- unlike client_secret, which never leaves
+    # this process. "Add from Drive" is hidden in the UI while this is unset.
+    picker_api_key: str = ""
 
     @property
     def secure_cookies(self) -> bool:
@@ -35,6 +41,22 @@ class Settings:
     @property
     def oauth_ready(self) -> bool:
         return bool(self.client_id and self.client_secret and self.session_key)
+
+    @property
+    def picker_ready(self) -> bool:
+        return bool(self.picker_api_key and self.oauth_ready)
+
+    @property
+    def picker_app_id(self) -> str:
+        """The Cloud project number Picker needs via setAppId().
+
+        Verified live (2026-09-28): a drive.file-scoped app's per-file grant
+        on a picked file does not reliably take effect without this. It is
+        the numeric prefix of the OAuth client ID itself -- Google always
+        constructs a client ID as "<project number>-<random>.apps..." -- so
+        no separate configuration value is needed.
+        """
+        return self.client_id.split("-", 1)[0]
 
     @property
     def redirect_uri(self) -> str:
@@ -65,4 +87,5 @@ class Settings:
             client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
             client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
             session_key=os.getenv("SESSION_ENCRYPTION_KEY", ""),
+            picker_api_key=os.getenv("GOOGLE_PICKER_API_KEY", ""),
         )

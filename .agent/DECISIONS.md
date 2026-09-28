@@ -170,3 +170,77 @@ This was verified against library source, not against a real grouped document.
 PUB-001's acceptance test asserts its one layer is a wrapper, and it must be re-run
 locally. If that layer reclassifies, it is a finding to record deliberately, not a
 number to edit.
+
+## 2026-09-28: Add-from-Drive uses Google Picker, briefly exposing the OAuth
+## access token to browser JS
+
+The user asked for the tool to accept a file already in Drive, not only a
+local upload. Google Picker is the standard way to do that, and Picker's own
+integration model requires an OAuth access token in client-side JavaScript
+to authenticate the picker iframe -- there is no server-side-only way to
+drive it.
+
+This is a real change from the existing posture (the OAuth access token has
+never left this process before now, sealed in an encrypted HttpOnly cookie
+-- see the 2026-09-22 "First shared application" decision). The scope is
+kept as narrow as the tradeoff allows:
+
+- The token is fetched fresh, on demand, only when "Add from Drive" is
+  clicked (`GET /api/picker-token`), rather than embedded in the page on
+  load. It sits in browser memory for as short a time as possible.
+- It is still the same `drive.file`-scoped token the server already holds;
+  Picker grants nothing broader, and picking a file grants per-file access
+  under the same scope. No refresh token exists to leak (per the original
+  decision) and nothing new is stored anywhere.
+- The feature is opt-in per deployment via `GOOGLE_PICKER_API_KEY`
+  (`config.py`'s `picker_ready`). Left unset -- true for every deployment
+  today, since none has been created -- nothing about this is reachable:
+  the button is hidden, the CSP stays maximally strict, and
+  `/api/picker-token` refuses with `picker_unavailable`.
+- The Content-Security-Policy only loosens (`script-src`, `frame-src`,
+  `connect-src`) when the feature is actually configured, for the reason
+  above.
+
+**Not verified against a live deployment.** No GCP project exists in this
+environment to test Picker against; the exact CSP origins Picker needs are
+reasoned from Google's own documented integration, not observed. See the
+warning in `docs/platform.md`.
+
+## 2026-09-28: Add-from-Drive and the drive.file scope spike, verified live
+
+The human provided access to the project's real GCP project
+(`workspace-migration-toolkit`) and a Web application OAuth client
+(`wmt-local-dev-web`, redirect `http://localhost:8080/auth/callback`) was
+created for this. Superseding the "not verified against a live deployment"
+caveat on the entry above and unblocking #53/#54's own live-scope-spike
+requirement (CURRENT.md, "First run against live Google"), both run and
+confirmed against real Google APIs, not reasoned from documentation:
+
+- The full OAuth + PKCE + state sign-in flow works end to end against a real
+  account.
+- Add from Drive (this session's feature) works end to end -- Picker file
+  selection, server-side download by id, preflight and native conversion --
+  for both a `.docx` and a `.pptx`, once two bugs the design got wrong were
+  fixed: a Website-restricted Picker API key breaks Picker (restrict to the
+  Google Picker API only, not by referrer), and a `drive.file` per-file grant
+  needs `PickerBuilder.setAppId()` with the OAuth client's Cloud project
+  number, or a picked file downloads as unavailable even though Picker
+  itself works. Both fixed; see `docs/platform.md` and `config.py`'s
+  `picker_app_id`.
+- The Content-Security-Policy needed `style-src 'unsafe-inline'`, not just
+  the `script-src`/`frame-src`/`connect-src` already reasoned out: gapi's
+  picker widget sets inline styles directly on this page, not only inside
+  its iframe.
+- **`documents.get` and `files.export` (PDF) both succeed under `drive.file`
+  scope on a Google Doc this app itself created** -- confirmed directly
+  against the Docs and Drive APIs with a real access token, on a real
+  converted document. This is the exact question #53's "post-import checks"
+  design and #54's "post-import repair" design were both blocked on. Neither
+  is implemented yet; this only removes the reason they couldn't be started.
+
+A temporary local OAuth client and API key were used for this, both created
+in the GCP Console by the human, never entered as plain text by the
+assistant -- the client secret was read from a downloaded JSON file, and the
+short-lived access token used for the two API calls above was pasted by the
+human from their own already-authenticated browser session, not obtained by
+the assistant signing in. See CURRENT.md for what to do next.

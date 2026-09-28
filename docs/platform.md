@@ -68,6 +68,32 @@ Register the exact redirect URI `PUBLIC_BASE_URL/auth/callback`. Configure:
   `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
 - Optional `MAX_UPLOAD_SIZE` in bytes (default 25 MiB, configured maximum 100 MiB),
   `TEMP_DIR` (existing writable directory), `PORT`, `LOG_LEVEL`.
+- Optional `GOOGLE_PICKER_API_KEY`: a Cloud Console API key, restricted to the
+  Google Picker API, with the Picker API enabled. Adds an "Add from Drive"
+  option beside the local file chooser. Unlike the OAuth client secret, this
+  key is designed to be used from browser JavaScript -- the API restriction is
+  what keeps it safe to expose, not secrecy. Left unset, the feature is hidden
+  and the app behaves exactly as before.
+
+  **Verified live against a real GCP project (2026-09-28)**, both analyse and
+  convert, for a Drive-picked `.docx` and `.pptx`. Two things the reasoned
+  design got wrong, found only by testing for real:
+  - A Website (HTTP referrer) restriction on the API key breaks Picker --
+    Picker's own file-list requests aren't made from this page's origin, so
+    referrer checking rejects them. Restrict the key to the Google Picker API
+    only, not by website.
+  - A `drive.file`-scoped app's per-file grant on a picked file did not
+    reliably take effect without also calling `setAppId()` on the
+    `PickerBuilder`, with the OAuth client's own Cloud project number (the
+    numeric prefix of the client ID). Implemented in app.js; see
+    `Settings.picker_app_id`.
+  - The Content-Security-Policy needed `style-src 'unsafe-inline'` too:
+    gapi's picker widget sets inline `style="..."` attributes directly on
+    elements it creates in this page, not only inside its iframe. There is no
+    hash/nonce to apply to markup a third party generates.
+
+  `documents.get` and `files.export` (PDF) were also confirmed reachable
+  under `drive.file` scope on a file this app created -- see issue #53.
 
 Environment values are read directly; `.env` is an example format, not automatically
 loaded. Keep secrets outside Git. For Cloud Run, bind Secret Manager versions to

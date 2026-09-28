@@ -215,6 +215,56 @@ def test_upload_does_not_follow_untrusted_location(tmp_path):
     assert len(requests) == 1
 
 
+def test_download_writes_the_file_and_returns_its_size(tmp_path):
+    destination = tmp_path / "picked.docx"
+
+    def handler(request):
+        assert request.url.path == "/drive/v3/files/file123"
+        assert request.url.params["alt"] == "media"
+        return httpx.Response(200, content=b"a real docx body" * 100)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await Google("private-token", client).download(
+                "file123", destination, max_bytes=1_000_000
+            )
+
+    size = asyncio.run(run())
+    assert size == len(b"a real docx body" * 100)
+    assert destination.read_bytes() == b"a real docx body" * 100
+
+
+def test_download_stops_at_the_size_limit(tmp_path):
+    destination = tmp_path / "picked.docx"
+
+    def handler(request):
+        return httpx.Response(200, content=b"x" * 1000)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await Google("private-token", client).download("file123", destination, max_bytes=10)
+
+    with pytest.raises(ToolkitError) as excinfo:
+        asyncio.run(run())
+    assert excinfo.value.code == "upload_too_large"
+
+
+def test_download_reports_an_unavailable_file(tmp_path):
+    destination = tmp_path / "picked.docx"
+
+    def handler(request):
+        return httpx.Response(404)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await Google("private-token", client).download("gone", destination, max_bytes=1000)
+
+    with pytest.raises(ToolkitError) as excinfo:
+        asyncio.run(run())
+    assert excinfo.value.code == "drive_file_unavailable"
+    assert not destination.exists()
+
+
 def test_google_rejects_malformed_success_responses(tmp_path):
     path = tmp_path / "asset"
     path.write_bytes(b"data")

@@ -88,6 +88,46 @@ class Google:
                 detail=failure_detail(exc),
             ) from exc
 
+    async def download(self, file_id: str, destination: Path, max_bytes: int) -> int:
+        """Downloads a Drive file (picked, not one this app made) into
+        `destination`, chunked and stopped at `max_bytes`. Returns the byte
+        count written, so the caller can apply the same "not empty" check it
+        already applies to a browser upload.
+
+        A browser upload is already bounded by the same limit as it streams
+        (see web.py); a file picked from Drive has no such limit until it is
+        checked here, so the same guard applies mid-download rather than
+        after the whole thing has been pulled into the temp workspace.
+        """
+        try:
+            async with self.client.stream(
+                "GET",
+                DRIVE + f"/files/{file_id}",
+                headers=self.headers,
+                params={"alt": "media"},
+            ) as response:
+                response.raise_for_status()
+                size = 0
+                with destination.open("xb") as stream:
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise ToolkitError(
+                                "upload_too_large",
+                                "This file exceeds the upload size limit.",
+                                413,
+                            )
+                        stream.write(chunk)
+                return size
+        except httpx.HTTPError as exc:
+            raise ToolkitError(
+                "drive_file_unavailable",
+                "This file could not be read from Drive. It may have been "
+                "moved, deleted, or is not shared with this app.",
+                404,
+                detail=failure_detail(exc),
+            ) from exc
+
     async def make_folder(self, name: str, parent: str | None = None) -> str:
         metadata: dict = {"name": name, "mimeType": FOLDER_MIME}
         if parent:
