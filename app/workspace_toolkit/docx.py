@@ -342,8 +342,36 @@ def page_size(sect_pr: Element | None) -> dict:
     return {"widthPt": width / DXA_PER_POINT, "heightPt": height / DXA_PER_POINT}
 
 
+def _section_breaks(container: Element | list[Element]):
+    """Every mid-document <w:sectPr> that ends a section, in document order.
+
+    Descends into content controls (w:sdt/w:sdtContent), since a section
+    break can sit inside one. Never descends into w:sectPrChange, which
+    keeps a tracked change's *previous* properties rather than a live break
+    -- reached only by iterating the whole subtree, which this does not do.
+    """
+    for child in container:
+        tag = local(child.tag)
+        if tag == "p":
+            sect = child.find(q("w", "pPr") + "/" + q("w", "sectPr"))
+            if sect is not None:
+                yield sect
+        elif tag == "sdt":
+            content = child.find(q("w", "sdtContent"))
+            if content is not None:
+                yield from _section_breaks(content)
+
+
+def _ends_section(child: Element) -> bool:
+    return any(True for _ in _section_breaks([child]))
+
+
 def page_sizes(body: Element) -> list[dict]:
-    found = [page_size(sect) for sect in body.iter(q("w", "sectPr"))]
+    sections = list(_section_breaks(body))
+    body_level = body.find(q("w", "sectPr"))
+    if body_level is not None:
+        sections.append(body_level)
+    found = [page_size(sect) for sect in sections]
     return found or [page_size(None)]
 
 
@@ -351,14 +379,15 @@ def section_index(body: Element, count: int):
     """Maps an anchor to the section it falls in, by document order.
 
     A <w:sectPr> inside a paragraph's properties *ends* a section, so anchors
-    up to and including that paragraph belong to it.
+    up to and including that paragraph belong to it. That paragraph may sit
+    directly in the body or inside a content control's w:sdtContent.
     """
     order: dict[Element, int] = {}
     index = 0
     for child in body:
         for anchor in child.iter(q("wp", "anchor")):
             order[anchor] = index
-        if child.find(q("w", "pPr") + "/" + q("w", "sectPr")) is not None:
+        if _ends_section(child):
             index += 1
     last = count - 1
     return lambda anchor: min(order.get(anchor, last), last)
@@ -435,30 +464,42 @@ def theme_fonts(package: Package) -> dict[str, str]:
         entry = scheme.find(q("a", group))
         if entry is None:
             continue
-        for element, token in (("latin", "HAnsi"), ("cs", "Bidi"), ("ea", "EastAsia")):
+        for element, suffix in (("latin", "HAnsi"), ("cs", "Bidi"), ("ea", "EastAsia")):
             node = entry.find(q("a", element))
             typeface = node.get("typeface") if node is not None else None
             if typeface:
-                resolved[prefix + token] = typeface
+                resolved[prefix + suffix] = typeface
+                if suffix == "HAnsi":
+                    # ST_Theme names majorAscii/minorAscii as well as
+                    # majorHAnsi/minorHAnsi, but a:fontScheme has only one
+                    # <a:latin> per major/minor group -- both tokens resolve
+                    # to it.
+                    resolved[prefix + "Ascii"] = typeface
     return resolved
 
 
 def _slot_fonts(properties: Element | None) -> dict[str, str]:
-    """Families an rPr names, keyed by script. Literal names beat theme ones."""
+    """Families an rPr names, keyed by script. Theme names beat literal ones.
+
+    ECMA-376 SS17.3.2.26: when a *Theme attribute is present on w:rFonts, the
+    matching literal attribute (w:ascii etc.) is ignored, not merely a
+    fallback. Word writes both after a theme change or a paste, so reading
+    the literal first named a family the document no longer actually uses.
+    """
     if properties is None:
         return {}
     element = properties.find(q("w", "rFonts"))
     if element is None:
         return {}
     found: dict[str, str] = {}
-    for slot, script in SCRIPT_OF_SLOT.items():
-        value = element.get(q("w", slot))
-        if value:
-            found.setdefault(script, value)
     for slot, script in THEME_SLOT.items():
         token = element.get(q("w", slot))
         if token:
             found.setdefault(script, THEME_MARK + token)
+    for slot, script in SCRIPT_OF_SLOT.items():
+        value = element.get(q("w", slot))
+        if value:
+            found.setdefault(script, value)
     return found
 
 

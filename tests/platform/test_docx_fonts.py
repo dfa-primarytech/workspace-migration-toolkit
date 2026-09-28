@@ -126,6 +126,31 @@ def test_a_theme_font_resolves_to_a_real_family(tmp_path):
     assert ("Aptos", "latin") in found, f"the theme's body font was not resolved: {sorted(found)}"
 
 
+def test_a_theme_attribute_beats_a_stale_literal_name_in_the_same_rFonts(tmp_path):
+    """ECMA-376 SS17.3.2.26: a *Theme attribute makes the matching literal one
+
+    void, not merely lower priority. Word writes both after a theme change or
+    a paste, leaving a literal name the document no longer actually uses.
+    """
+    body = run_with('<w:rFonts w:ascii="Comic Sans MS" w:asciiTheme="minorHAnsi"/>')
+    found = requirements(tmp_path, body)
+    assert ("Aptos", "latin") in found, f"the theme attribute should have won: {sorted(found)}"
+    assert ("Comic Sans MS", "latin") not in found, (
+        f"the stale literal name should have been ignored: {sorted(found)}"
+    )
+
+
+def test_majorascii_and_minorascii_theme_tokens_resolve(tmp_path):
+    """ST_Theme names majorAscii/minorAscii as well as majorHAnsi/minorHAnsi.
+
+    a:fontScheme has only one <a:latin> per major/minor group, so both tokens
+    resolve to it -- but theme_fonts only produced the HAnsi ones, so an
+    asciiTheme reference vanished from the report instead of resolving.
+    """
+    found = requirements(tmp_path, run_with('<w:rFonts w:asciiTheme="majorAscii"/>'))
+    assert ("Calibri Light", "latin") in found, f"majorAscii did not resolve: {sorted(found)}"
+
+
 def test_a_font_inherited_through_a_style_chain_resolves(tmp_path):
     """Heading1 has no family of its own; Base, which it is based on, does."""
     body = '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>'
