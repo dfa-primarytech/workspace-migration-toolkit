@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from .config import Settings
@@ -12,10 +13,15 @@ from .package import FORMATS
 from .pictures import compress
 from .pptx import analyse as analyse_pptx
 from .pptx import render_path as render_pptx
+from .publisher import analyse as analyse_pub
 
 # Deliberately not importing the pipelines registry: that pulls in the Google
 # client, and this subprocess must never hold credentials or reach the network.
-ANALYSERS = {"pptx": analyse_pptx, "docx": analyse_docx}
+ANALYSERS: dict[str, Callable[..., object]] = {
+    "pptx": analyse_pptx,
+    "docx": analyse_docx,
+    "pub": analyse_pub,
+}
 
 
 def limit(name: str, value: int) -> None:

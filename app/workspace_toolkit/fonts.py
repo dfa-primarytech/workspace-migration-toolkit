@@ -141,6 +141,20 @@ SUBSTITUTIONS: dict[str, Substitution] = {
     "sassoon infant": Substitution(
         "Andika", Confidence.MEDIUM, "literacy-focused family with clear letterforms"
     ),
+    # The spellings a real Publisher file used (PUB-001), listed exactly rather
+    # than by widening name matching. Andika decided by the human, 2026-09-28.
+    **{
+        name: Substitution(
+            "Andika", Confidence.MEDIUM, "literacy-focused family with clear letterforms"
+        )
+        for name in (
+            "sassoonprimaryinfant",
+            "sassoonprimarytype",
+            "sassoon primary infant",
+            "sassoon primary type",
+            "sassooninfant",
+        )
+    },
     "twinkl": Substitution(
         "Andika",
         Confidence.LOW,

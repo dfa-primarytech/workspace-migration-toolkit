@@ -269,3 +269,32 @@ back; nothing was force-deleted from git history, only the working tree.
 Any live Apps Script deployment already running at the trust is unaffected
 by this repo change -- this removes the maintained source, not a running
 service.
+
+## 2026-09-28: Publisher → Google Slides, approved (PROJECT.md §38)
+The human reviewed `docs/publisher-renderer-readiness.md` and made its open
+decisions:
+
+- **Route: build slides through the Slides API**, not IR → `.pptx` → native
+  import. Chosen against the assistant's recommendation (which favoured
+  reusing the import path), for the precise control over each element.
+- **Images: a private Cloud Storage bucket and V4 signed URLs.** The Slides
+  API's `createImage` accepts only "a publicly accessible URL" (checked in
+  Google's reference and add-image guide, 2026-09-28), with no exception for
+  Drive files; Google's own guide recommends Cloud Storage with signed URLs
+  that expire in 15 minutes. Each image is uploaded, fetched once by Slides
+  through a signed link, and deleted straight after; the bucket also carries a
+  one-day delete rule as a backstop. Nothing is ever shared publicly in Drive.
+  The bucket and the signing permission are the human's to create -- they are
+  billable GCP resources -- and are documented, not created, by this repo.
+- **Border art: composed into one image per border**, reported as FLATTENED
+  (readiness §7.4).
+- **Sassoon Primary → Andika**, applied automatically and reported. Andika is
+  a Google font designed for early literacy (single-storey a and g). Owned by
+  the shared font service; recorded here because the human made the call.
+- **Master content: reported, not stripped** (readiness §7.5, the default).
+- **Evidence: PUB-001 only for now.** Anything verified on that one file is
+  labelled as such until PUB-002 onwards exist.
+
+Build order: (1) accept `.pub` in the app with a working "Check file";
+(2) the renderer, as pure IR → Slides requests, tested offline; (3) image
+delivery and conversion; (4) a live run by the human with PUB-001.
