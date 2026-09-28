@@ -718,6 +718,80 @@ def analyse(path: Path, output: Path, settings: Settings | None = None) -> dict:
         package.close()
 
 
+# A picture is stored at some pixel size and drawn at some physical size. A few
+# pixels stretched across most of a page can only render as a flat block, which
+# is sometimes exactly what an author wanted -- a coloured panel costs one
+# pixel -- and is sometimes all that is left of a picture something replaced.
+# Both are worth saying; neither is worth guessing between. A concern form
+# arrived as one 1x1 PNG stretched to 7.5 x 11.2in with the form's own tables
+# and text gone, and we reported nothing at all.
+FLAT_PIXELS = 4
+FLAT_DRAWN_EMU = EMU_PER_INCH  # an inch; below that a spacer is ordinary
+
+
+def pixel_size(data: bytes) -> tuple[int, int] | None:
+    """The stored size of an image, for the formats Word actually embeds."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:3] == b"GIF":
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if data[:2] == b"BM" and len(data) >= 26:
+        return int.from_bytes(data[18:22], "little"), int.from_bytes(data[22:26], "little")
+    if data[:2] == b"\xff\xd8":  # JPEG: walk the segments to a frame header
+        at = 2
+        while at + 9 < len(data) and data[at] == 0xFF:
+            marker, length = data[at + 1], int.from_bytes(data[at + 2 : at + 4], "big")
+            if 0xC0 <= marker <= 0xCF and marker not in {0xC4, 0xC8, 0xCC}:
+                return (
+                    int.from_bytes(data[at + 7 : at + 9], "big"),
+                    int.from_bytes(data[at + 5 : at + 7], "big"),
+                )
+            at += 2 + length
+    return None
+
+
+def flat_pictures(root: Element, sizes: dict[str, tuple[int, int]]) -> list[dict]:
+    """Reports a picture drawn far larger than the image stored behind it.
+
+    `sizes` maps a relationship id to the stored pixel size of what it points
+    at. A picture with no relationship, or one in a format we cannot measure,
+    says nothing either way and is left alone.
+    """
+    found = []
+    for drawing in root.iter(q("w", "drawing")):
+        blip = drawing.find(".//" + q("a", "blip"))
+        extent = drawing.find(".//" + q("wp", "extent"))
+        if blip is None or extent is None:
+            continue
+        stored = sizes.get(blip.get(q("r", "embed")) or "")
+        if stored is None:
+            continue
+        try:
+            drawn = int(extent.get("cx", "")), int(extent.get("cy", ""))
+        except ValueError:
+            continue
+        if max(stored) > FLAT_PIXELS or min(drawn) < FLAT_DRAWN_EMU:
+            continue
+        found.append(
+            warning(
+                "flat_image",
+                f"A picture is drawn {drawn[0] / EMU_PER_INCH:.1f} by "
+                f"{drawn[1] / EMU_PER_INCH:.1f} inches from an image stored at "
+                f"{stored[0]} by {stored[1]} pixels, so it can only appear as a flat block "
+                "of colour. That is sometimes deliberate. If a picture was meant to be "
+                "here, it is not in this file and cannot be converted.",
+                storedPixels=list(stored),
+                drawnEmu=list(drawn),
+                # IGNORED, not UNSUPPORTED: nothing is lost in the conversion.
+                # Whatever is in the file converts; the question is whether
+                # what is in the file is what the author put there, and only a
+                # person can answer that.
+                classification=C.IGNORED,
+            )
+        )
+    return found
+
+
 def _analyse(package: Package, path: Path, output: Path) -> dict:
     output.mkdir(parents=True, exist_ok=True)
     asset_dir = output / "assets"
@@ -751,6 +825,20 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
             "status": "extracted",
         }
     manifest["assets"] = assets
+
+    # Relationship id -> the stored size of the image it points at, so a
+    # picture can be compared with what is actually behind it.
+    sizes: dict[str, tuple[int, int]] = {}
+    for relationship in package.relationships(DOCX.main_part):
+        target = relationship["resolved"]
+        if relationship["external"] or not target or not target.startswith("word/media/"):
+            continue
+        measured = pixel_size(package.read(target))
+        if measured:
+            sizes[relationship["id"]] = measured
+    if sizes:
+        manifest["warnings"].extend(flat_pictures(package.xml(DOCX.main_part), sizes))
+
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 

@@ -1499,3 +1499,80 @@ def test_a_converted_text_box_never_leaves_a_cell_ending_in_a_table():
     assert report["textboxes"] == 1
     outer = root.find(".//" + q("w", "tc"))
     assert local(list(outer)[-1].tag) == "p", [local(c.tag) for c in outer]
+
+
+# ------------------------------------------------- a stretched flat image
+
+
+def png(width, height):
+    """A valid PNG header at a stated pixel size; the pixels never get read."""
+    import struct
+
+    ihdr = struct.pack(">II", width, height) + b"\x08\x06\x00\x00\x00"
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + b"\x00" * 4
+
+
+def picture_rels():
+    return (
+        f'<Relationships xmlns="{REL_NS}">'
+        f'<Relationship Id="rId1" Type="{NS["r"]}/image" Target="media/image1.png"/>'
+        "</Relationships>"
+    )
+
+
+def analysed(tmp_path, body, media, name="flat.docx"):
+    from workspace_toolkit.docx import analyse
+
+    path = tmp_path / name
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for part, content in docx_parts(body, media).items():
+            archive.writestr(part, content)
+        archive.writestr("word/_rels/document.xml.rels", picture_rels())
+    return analyse(path, tmp_path / "out", Settings())
+
+
+def test_one_pixel_stretched_across_a_page_is_reported(tmp_path):
+    """A concern form arrived as a single 1x1 PNG drawn at 7.5 x 11.2 inches,
+    with the form's own tables and text gone. Word showed an empty document and
+    we reported nothing at all."""
+    body = anchor(PICTURE, cx=6858000, cy=10248265) + SECTION
+    manifest = analysed(tmp_path, body, {"image1.png": png(1, 1)})
+
+    flat = [w for w in manifest["warnings"] if w["code"] == "flat_image"]
+    assert len(flat) == 1, [w["code"] for w in manifest["warnings"]]
+    assert flat[0]["storedPixels"] == [1, 1]
+    # Nothing is lost by the conversion; what is in the file is what converts.
+    # Whether that is what the author put there is a question for a person.
+    assert flat[0]["classification"] == "IGNORED"
+
+
+def test_a_real_picture_is_not_reported(tmp_path):
+    body = anchor(PICTURE, cx=6858000, cy=10248265) + SECTION
+    manifest = analysed(tmp_path, body, {"image1.png": png(1200, 1600)})
+    assert not [w for w in manifest["warnings"] if w["code"] == "flat_image"]
+
+
+def test_a_small_image_drawn_small_is_ordinary(tmp_path):
+    # A few pixels drawn at a few pixels is a spacer or a rule, not a loss.
+    body = anchor(PICTURE, cx=90000, cy=90000) + SECTION
+    manifest = analysed(tmp_path, body, {"image1.png": png(1, 1)})
+    assert not [w for w in manifest["warnings"] if w["code"] == "flat_image"]
+
+
+def test_an_unreadable_image_format_says_nothing_either_way(tmp_path):
+    body = anchor(PICTURE, cx=6858000, cy=10248265) + SECTION
+    manifest = analysed(tmp_path, body, {"image1.png": b"not an image at all"})
+    assert not [w for w in manifest["warnings"] if w["code"] == "flat_image"]
+
+
+def test_every_image_header_word_writes_is_measured():
+    import struct
+
+    from workspace_toolkit.docx import pixel_size
+
+    assert pixel_size(png(7, 9)) == (7, 9)
+    assert pixel_size(b"GIF89a" + struct.pack("<HH", 11, 13)) == (11, 13)
+    assert pixel_size(b"BM" + b"\x00" * 16 + struct.pack("<ii", 17, 19)) == (17, 19)
+    jpeg = b"\xff\xd8" + b"\xff\xc0" + struct.pack(">H", 17) + b"\x08" + struct.pack(">HH", 23, 21)
+    assert pixel_size(jpeg + b"\x00" * 10) == (21, 23), "JPEG states height before width"
+    assert pixel_size(b"nonsense") is None
