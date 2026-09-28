@@ -1,6 +1,9 @@
 # Coding agent instructions
 
-Read PROJECT.md, this file, CLAUDE.md and every file under .agent/ before working.
+Read PROJECT.md, this file, CLAUDE.md and every file under .agent/ before working,
+except HANDOFF-archive.md -- that's old session history already covered by git log
+and merged PR descriptions; consult it only if you need history older than what
+HANDOFF.md itself carries.
 Inspect git status, branch, recent commits and existing tests before changing code.
 Priorities: PPTX → Slides, DOCX → Docs, PUB → Slides, XLSX → Sheets.
 Preserve the working Apps Script files under src/; platform work must not change them.
