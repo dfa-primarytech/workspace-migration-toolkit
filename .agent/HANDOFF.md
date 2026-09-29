@@ -1,5 +1,22 @@
 # Handoff
 
+- Agent: Codex (XLSX)
+- Date: 2026-09-29
+- Branch: `codex/xlsx-live-followups`, based on main `77e08cb`; PR #94
+- Objective: Finish the XLSX follow-ups left after #72 and verify native Google Sheets import live.
+- Files changed: `xlsx.py`, `jobs.py`, `tests/platform/test_xlsx.py`, `tests/platform/test_xlsx_issue51.py`, `docs/xlsx-migration.md`, and coordination files.
+- Completed: cell-limit checks use observed cell extent and separately report stale declared extents; sheet indexes are zero-based; the uncalled stale-workspace sweeper and test are removed; a generated five-sheet workbook converted through real Drive and Sheets APIs, with five sheets confirmed by read-back.
+- Checks: 469 passed, 14 skipped before the final main reconciliation; Ruff check and format clean; mypy clean for 29 source files; Bandit and secret scan clean. Live report: 5 sheets, 227 populated cells, 47 formulas, 0 formula errors, native spreadsheet created and structurally verified.
+- Known failures: none.
+- Unresolved: formula results, charts, formatting, validation and protection still need human visual comparison in the imported Google Sheet. One synthetic live import does not establish broad fidelity.
+- Decisions: DECISIONS.md, 2026-09-29 (XLSX extent/index/cleanup and live native import).
+- Next task: visually compare the generated workbook against its Expected results sheet, then add targeted regression work only for observed fidelity losses.
+- Warnings: the downloaded conversion report contains private Drive file and folder IDs and must not be committed. No school document or OAuth token is in this branch.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-29
 - Branch: `feat/publisher-text-wrap`, based on main `d44e17c` (#96 merged)

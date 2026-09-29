@@ -445,3 +445,32 @@ the flow for editing) or leaving the overlaps.
   a picture across more than 60% of the line stays over the text.
 - Verified live on PUB-001, pages 2 and 3.
 
+## 2026-09-29: XLSX extent, indexes and abandoned workspace cleanup
+
+Google's workbook cell-limit preflight uses the bounding extent of actual `<c>`
+cell references, not SpreadsheetML's cached `<dimension>`. Some exporters leave
+that cache at the full Excel grid after cells are removed, causing a false hard
+block. Keep the declared extent as a separate diagnostic: when it alone exceeds
+Google's limit, report `declared_extent_needs_review` and allow native import.
+
+XLSX sheet indexes are zero-based, matching other toolkit manifests and list/API
+positions. User-facing messages may describe ordinal sheet numbers separately.
+
+Remove the uncalled stale-workspace sweeper. The context manager still removes
+normal request workspaces. Cleanup after process or host termination belongs to
+the deployment's ephemeral-storage lifecycle; an application helper that no
+startup or scheduler invokes creates a false cleanup guarantee.
+
+## 2026-09-29: XLSX native import verified live
+
+A generated five-sheet XLSX was analysed and converted through the running app
+against real Google Drive and Sheets APIs. The source SHA-256 in the downloaded
+conversion report matched the generated fixture. Drive created a native Google
+Sheet and archived the original; Sheets read-back confirmed five sheet names,
+GRID types and visibility states. The source inventory recorded 227 populated
+cells, 47 formulas and no formula-error cells.
+
+This verifies the OAuth scope, Drive import and Sheets structural read-back path.
+It does not establish formula, chart, formatting, validation or protection
+fidelity; the report correctly retains `workbook_review_required` for those.
+

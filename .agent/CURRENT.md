@@ -1,9 +1,11 @@
 # Current state
 
-Issue #51 is implemented on `rescue/xlsx-sheets-mvp` and reconciled with
-`main` at `4c6d655`. The XLSX/XLSM pipeline accepts macro-enabled containers,
-reports actual VBA as unsupported for native import, and inventories chart,
-dialog and macro sheets explicitly. Local checks pass; PR #72 is ready to merge.
+Issue #51's blocking defects are merged on main in `77e08cb` (#72). Follow-up
+work is on `codex/xlsx-live-followups`: cell-limit checks now use observed cell
+extent while reporting stale declared extents, sheet indexes are zero-based, and
+the unused workspace sweeper is removed. Local checks pass. Live native import
+was verified on 2026-09-29 with a generated five-sheet workbook: Drive creation
+and Sheets structural read-back succeeded. Visual fidelity remains a human review.
 
 A snapshot, not a log. Rewritten 28 September 2026 -- the previous version
 was a narrative changelog back to 22 September that had mostly gone stale
