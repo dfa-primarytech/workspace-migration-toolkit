@@ -44,7 +44,18 @@ from .publisher_art import (
     paint,
     subpaths,
 )
-from .publisher_fit import Fit, Para, Style, fit
+from .publisher_fit import (
+    INSET_X,
+    INSET_Y,
+    LINE,
+    SAFETY,
+    Fit,
+    Para,
+    Style,
+    advance,
+    fit,
+    measurable,
+)
 from .publisher_wrap import Obstacle, wrap
 from .units import Frame, length_points, percentage, size
 
@@ -653,6 +664,24 @@ def hidden_borders(object_id: str) -> dict:
     }
 
 
+def wordart_size(art, lines: list[str], family: str | None, frame: Frame) -> float:
+    """The largest size, to half a point, at which WordArt's lines fill its box.
+
+    WordArt is stretched to its box in Publisher; Slides can't stretch letters,
+    so the text is made as large as fits both ways, and no larger than its own
+    size said.
+    """
+    tall = (frame.height - 2 * INSET_Y) / (len(lines) * LINE)
+    wide = float("inf")
+    if family and measurable(family):
+        one = Style(family, 1.0, art.bold, art.italic)
+        widest = max(sum(advance(ch, one, 1.0) for ch in line) for line in lines)
+        if widest:
+            wide = (frame.width - 2 * INSET_X) * SAFETY / widest
+    size = min(tall, wide, art.size or float("inf"))
+    return max(6.0, int(size * 2) / 2)
+
+
 def missing_picture(object_id: str, where: dict) -> list[dict]:
     """A dashed box saying a picture could not be converted, where it was."""
     return [
@@ -723,6 +752,15 @@ class PageBuilder:
             handler = getattr(self, "_" + element["type"], self._unknown)
             if is_border_tile(element):
                 handler = self._border_tile
+            if element["id"] in self.prepared.wordart:
+                handler = self._wordart
+            elif element.get("parentId") in self.prepared.wordart:
+                self.line(
+                    element,
+                    C.IGNORED,
+                    note("wordart-outline", "Part of WordArt, which is now text."),
+                )
+                continue
             handler(element)
         self.group_all(elements)
 
@@ -1090,6 +1128,79 @@ class PageBuilder:
     def _group(self, element: dict) -> None:
         pass  # made once its contents exist: see group_all
 
+    def _wordart(self, element: dict) -> None:
+        """WordArt as a text box over its outlines' extent, sized to fill it."""
+        art, box = self.prepared.wordart[element["id"]]
+        frame = Frame.from_bounds(*box)
+        lines = [line for line in art.text.split("\n") if line]
+        object_id = oid(element["id"])
+        family = resolve_font(art.font, self.fonts) if art.font else None
+        size = wordart_size(art, lines, family, frame)
+        text = "\n".join(lines)
+        style: dict = {
+            "fontSize": {"magnitude": size, "unit": "PT"},
+            "bold": art.bold,
+            "italic": art.italic,
+        }
+        fields = ["fontSize", "bold", "italic"]
+        if family:
+            style["fontFamily"] = family
+            fields.append("fontFamily")
+        tint = colour(art.colour) or colour(art.line)
+        if tint:
+            style["foregroundColor"] = {"opaqueColor": rgb(tint)}
+            fields.append("foregroundColor")
+        whole = {"type": "FIXED_RANGE", "startIndex": 0, "endIndex": utf16(text)}
+        self.requests += [
+            {
+                "createShape": {
+                    "objectId": object_id,
+                    "shapeType": "TEXT_BOX",
+                    "elementProperties": placed(object_id, self.slide, frame),
+                }
+            },
+            {
+                "updateShapeProperties": {
+                    "objectId": object_id,
+                    "shapeProperties": {
+                        "shapeBackgroundFill": {"propertyState": "NOT_RENDERED"},
+                        "outline": {"propertyState": "NOT_RENDERED"},
+                        "contentAlignment": "MIDDLE",
+                    },
+                    "fields": "shapeBackgroundFill,outline,contentAlignment",
+                }
+            },
+            {"insertText": {"objectId": object_id, "insertionIndex": 0, "text": text}},
+            {
+                "updateTextStyle": {
+                    "objectId": object_id,
+                    "textRange": whole,
+                    "style": style,
+                    "fields": ",".join(fields),
+                }
+            },
+            {
+                "updateParagraphStyle": {
+                    "objectId": object_id,
+                    "textRange": whole,
+                    "style": {"alignment": "CENTER"},
+                    "fields": "alignment",
+                }
+            },
+        ]
+        entry = self.line(
+            element,
+            C.SUBSTITUTED,
+            note(
+                "wordart-text",
+                "WordArt was made into ordinary text you can edit. Its shaping, gradient and "
+                "effects (such as a reflection) can't be made in Slides.",
+            ),
+        )
+        if art.font and self.fonts.get(art.font, {}).get("status") != FontStatus.AVAILABLE:
+            entry.notes.append(note("font-substituted", "A font was replaced; see the fonts."))
+        self.made(element, entry, object_id)
+
     def group_all(self, elements: list[dict]) -> None:
         """Authored groups, innermost first, from the objects their contents became."""
         children: dict[str, list[dict]] = defaultdict(list)
@@ -1112,7 +1223,9 @@ class PageBuilder:
                 level, parent = level + 1, by_id[parent].get("parentId")
             return level
 
-        groups = [e for e in elements if e["type"] == "group"]
+        groups = [
+            e for e in elements if e["type"] == "group" and e["id"] not in self.prepared.wordart
+        ]
         for group in sorted(groups, key=depth, reverse=True):
             members = [o for c in children[group["id"]] for o in objects_of(c["id"])]
             kinds = {by_id[c["id"]]["type"] for c in children[group["id"]]}

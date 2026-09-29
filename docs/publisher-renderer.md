@@ -81,6 +81,8 @@ reported (`picture-stretched`).
 
 ## Known limits
 
+- **Numbered and bulleted lists lose their numbers and bullets.** libmspub 0.1.4 never passes lists on. PUB-001's table and its "Books to take home" items are numbered 1., 2., 3. in Publisher.
+
 - **Crops** are applied only when they fit their frame (see above). An outward crop (padding), which Publisher allows, is not handled and leaves the picture uncropped.
 - **Mirrored pictures** are reported, not flipped (the reader can't tell which way).
 - **Gradients** are drawn in a single colour; the reader does not pass their colours.
@@ -109,6 +111,9 @@ reported (`picture-stretched`).
   - everything else fits as it is.
 
   In Google, page 2's text ends at 554 pt and page 3's at 548 pt, both inside their 591 pt boxes on a 595 pt page.
+- **WordArt becomes editable text** (`publisher_wordart.py`). libmspub passes WordArt on as outlines only: a gradient-filled shape with no area, and one stroked baseline per line. PUB-001's title "Early Reading at St.Vincent's" came through as two purple lines. The words, font, size, weight and colours are the WordArt shape's own properties in `drawing.bin` (0xC0, 0xC5, 0xC3, 0xFF, 0x181, 0x1C0).
+
+  Each WordArt is matched to the outline libmspub drew for it: a layer of paths in the WordArt's own line colour, in drawing order. It's drawn there as a centred text box, as large as fits (WordArt stretches to its box; Slides can't), with the outlines left out. Its shaping, gradient and effects such as a reflection aren't recreated, and the report says so. A WordArt that can't be placed is reported with its words, so nothing is lost silently.
 - **Text wraps around pictures by indenting** (`publisher_wrap.py`). Slides can't wrap text: it runs straight under a picture. Publisher wraps text around any object in front of its frame, so each paragraph level with such a picture is indented on the picture's side, just far enough to clear it plus 3.6 pt. The text stays one editable box, with ordinary paragraph indents. An author's own indent is kept, and only a shortfall is made up.
 
   Positions come from the fitting layout. Indenting and fitting are repeated until they settle, so wrapped text still fits (on PUB-001, pages 2 and 3 go to 11 pt). Limits, each reported:

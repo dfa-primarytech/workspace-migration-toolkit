@@ -61,6 +61,9 @@ class Prepared:
     borders: dict[str, Drawn] = field(default_factory=dict)  # by border key
     refused: dict[str, str] = field(default_factory=dict)  # asset id → reason
     cropped: dict[str, Picture] = field(default_factory=dict)  # by element id
+    # WordArt recovered from the drawing records, by the layer libmspub drew
+    # its outline in: (publisher_wordart.WordArt, its box on the page).
+    wordart: dict[str, tuple] = field(default_factory=dict)
     notes: list[dict] = field(default_factory=list)  # about the document as a whole
 
 

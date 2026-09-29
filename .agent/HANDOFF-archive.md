@@ -9,6 +9,27 @@ PR descriptions have the same detail in full.
 
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-29
+- Branch: `feat/publisher-table-borders`, based on main `03d1980` (#93 merged)
+- Objective: stop Publisher tables showing Google's default grey grid, which the original didn't have.
+- Files changed:
+  - `publisher_slides.py` (`hidden_borders`, sent after `createTable`; the checker knows `updateTableBorderProperties`);
+  - `test_publisher_slides.py`;
+  - `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - Tables are drawn with transparent borders, and the report says why.
+  - libmspub 0.1.4's source confirms it passes on no table borders at all.
+  - Verified live on PUB-001: page 1's table has no lines, matching LibreOffice's rendering.
+- Checks: Publisher tests pass (66) on Windows; the full Linux suite runs before the PR; ruff and mypy clean.
+- Known failures: none.
+- Unresolved: real table borders and picture crops both need the `.pub` read directly (the next investigation).
+- Decisions: DECISIONS.md, 2026-09-29 (tables without borders).
+- Next task: merge on approval. Then the crop investigation: where Publisher keeps a picture's crop, and whether libmspub reads it.
+- Warnings: CT 203 still has `/root/wmt-test/live` (the OAuth client secret, and a token expiring at 13:23 UTC) and the running `wmt-test-live` container. Remove both when live testing ends.
+
+---
+
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
 - Branch: `feat/publisher-text-fit`, based on main `43155f3` (#92 merged), PR #93
 - Objective: fit substituted text inside its frame. PUB-001's live run showed Andika text running off pages 2 and 3, and under the frog on page 2.
 - Files changed:

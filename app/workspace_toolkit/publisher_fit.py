@@ -26,7 +26,7 @@ font it has no measurements for is left as it is.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 from pathlib import Path
 
@@ -177,6 +177,23 @@ def layout(
         if para.space_below:
             out.append(("space", para.space_below))
     return out
+
+
+def largest(
+    lines: list[str], style: Style, box_width: float, box_height: float, floor: float = 6.0
+) -> float:
+    """The largest size, up to `style.size`, at which each line fits the box
+    without wrapping and all of them fit its height: WordArt fills its frame."""
+    width = box_width - 2 * INSET_X
+    room = (box_height - 2 * INSET_Y) * SAFETY
+    size = style.size
+    while size > floor:
+        trial = replace(style, size=size)
+        wide = max(sum(advance(ch, trial, 1.0) for ch in line) for line in lines)
+        if wide <= width and len(lines) * size * LINE <= room:
+            return size
+        size -= 0.5
+    return floor
 
 
 def fit(paras: list[Para], box_width: float, box_height: float) -> Fit | None:
