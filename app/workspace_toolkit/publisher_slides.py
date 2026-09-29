@@ -622,6 +622,20 @@ def placed(object_id: str, page: str, frame: Frame) -> dict:
 # ------------------------------------------------------------------ elements
 
 
+def hidden_borders(object_id: str) -> dict:
+    """Every border of a table, made invisible."""
+    return {
+        "updateTableBorderProperties": {
+            "objectId": object_id,
+            "borderPosition": "ALL",
+            "tableBorderProperties": {
+                "tableBorderFill": {"solidFill": {"color": rgb((0, 0, 0)), "alpha": 0}}
+            },
+            "fields": "tableBorderFill",
+        }
+    }
+
+
 def missing_picture(object_id: str, where: dict) -> list[dict]:
     """A dashed box saying a picture could not be converted, where it was."""
     return [
@@ -898,6 +912,11 @@ class PageBuilder:
                 }
             }
         )
+        # libmspub 0.1.4 passes on no table borders at all (its TableInfo holds
+        # only sizes and spans), so the table is drawn without them, as
+        # LibreOffice draws it, rather than with Google's default grey grid.
+        # Slides has no "no border": the border is made fully transparent.
+        self.requests.append(hidden_borders(object_id))
         for index, column in enumerate(columns):
             width = (column.get("width") or {}).get("points")
             if not width:
@@ -976,8 +995,8 @@ class PageBuilder:
         notes.append(
             note(
                 "table-borders",
-                "The reader does not describe table borders, so Google's standard borders "
-                "are used.",
+                "The table is drawn without borders: the reader can't see whether the "
+                "original had any. If it did, add them in Slides.",
             )
         )
         entry = self.line(element, C.SUBSTITUTED, *_unique(notes))
@@ -1232,6 +1251,7 @@ KNOWN = {
     "updateTableColumnProperties",
     "updateTableRowProperties",
     "updateTableCellProperties",
+    "updateTableBorderProperties",
     "mergeTableCells",
     "groupObjects",
 }
