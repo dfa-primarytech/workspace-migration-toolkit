@@ -1,5 +1,37 @@
 # Handoff
 
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
+- Branch: `feat/publisher-text-fit`, based on main `43155f3` (#92 merged)
+- Objective: fit substituted text inside its frame. PUB-001's live run showed Andika text running off pages 2 and 3, and under the frog on page 2.
+- Files changed:
+  - `publisher_fit.py` (new: layout with real font measurements; spacing, then size);
+  - `publisher_slides.py` (`measured`, `text_requests(fitted=)`, sizes scaled to half points);
+  - `font_metrics/andika.json` and its README (new: Andika's numbers only, no font file);
+  - `scripts/font_metrics.py` (new: the extractor, run by hand with fontTools);
+  - `pyproject.toml` (package data);
+  - `tests/platform/test_publisher_fit.py` (new, 8 tests);
+  - `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - Each text frame whose fonts have measurements is laid out before sending. If it overflows, line spacing is tightened (to no less than 1.2 em), then the size is reduced (to no less than 75%), and both are reported.
+  - On PUB-001: page 2 gets 74% spacing and 90% size, page 3 gets 74% and 95%, and page 4's web address gets 74% and 90%.
+- Checks:
+  - Linux (host, app user, PUB-001 supplied): 469 passed, 11 skipped. The rebuilt image contains the metrics file.
+  - Ruff and mypy clean.
+- Known failures: none.
+- Unresolved:
+  - **Not yet seen on Google.** The layout is an estimate: Google's text insets are assumed. The next live run should confirm pages 2 and 3 now fit, and whether the 3% margin is right.
+  - Still open from the live run: default table borders, and stretched pictures (the crop investigation).
+- Decisions: DECISIONS.md, 2026-09-29 (fit substituted text).
+- Next task: a live run to confirm the fit (the human mints a fresh one-hour token). Then the table borders, and the crop investigation.
+- Warnings:
+  - CT 203 still holds `/root/wmt-test/live`, containing the OAuth client secret and an expired picture token (root-only). The app container `wmt-test-live` is still running. Both stay only while live testing continues.
+  - The image `wmt-test/app:pub4` has this branch's code.
+
+---
+
+## Previous handoff
+
 - Agent: Codex (XLSX)
 - Date: 2026-09-29
 - Branch: `rescue/xlsx-sheets-mvp`, merged with main `4c6d655`
@@ -59,37 +91,3 @@
 - Decisions: DECISIONS.md, 2026-09-28 (Publisher picture delivery) and 2026-09-29 (page size by import).
 - Next task: merge #92 on the human's approval. Then decide on the follow-ups: borders, and line spacing for Andika.
 - Warnings: the test host still holds `/root/wmt-test/private/pub-001.pub`, its bundle, `/root/wmt-test/repo`, `/root/wmt-test/live` (the OAuth client secret and the picture token, root-only) and the running container `wmt-test-live`. Stop the container and remove `live` as soon as testing ends; remove the rest when the Publisher work is finished.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code / QuietHeron (Publisher)
-- Date: 2026-09-28
-- Branch: `feat/publisher-renderer`, based on main `bb9cd61` (#90 merged)
-- Objective: Publisher step 2 of 4. The renderer: IR → Google Slides API requests, offline.
-- Files changed:
-  - `app/workspace_toolkit/units.py` (new: lengths, frames, the Slides transform);
-  - `publisher_art.py` (new: pictures Slides can take, drawn paths, composed border art);
-  - `publisher_slides.py` (new: `plan`, `bind`, `check`);
-  - `tests/platform/test_publisher_slides.py` (new, 38 tests);
-  - `docs/publisher-renderer.md` (new), DECISIONS.md, this file, HANDOFF-archive.md.
-- Completed:
-  - Every IR element type has a mapping and a report line. See the table in `docs/publisher-renderer.md`.
-  - Pictures carry a key until `bind()`; `keys_for(page)` lets step 3 sign links a page at a time.
-  - `check()` refuses a plan Google would refuse: unknown requests, bad or duplicate IDs, use before creation, text ranges outside the text, unbound pictures.
-- Checks:
-  - Windows: 418 passed, 13 skipped. Linux (the human's Docker host, as the app user, with PUB-001 supplied): 421 passed, 10 skipped, including the PUB-001 plan test.
-  - Ruff, mypy, bandit and the secret scan are clean.
-  - **PUB-001:** 272 requests, no `check()` problems, pictures within 0.0001 pt of their frames. Status counts: 13 NATIVE, 7 SUBSTITUTED, 2 IGNORED. An offline drawing of the plan matched LibreOffice's rendering of the file.
-- Known failures: none.
-- Unresolved (all for step 3 or 4, and all unverified against Google):
-  - whether `presentations.create` keeps an A5 page size (§14);
-  - Google's text insets;
-  - default table borders;
-  - whether a 0.01 pt-tall line is accepted.
-- Decisions: DECISIONS.md, 2026-09-28 (renderer defaults).
-- Next task: step 3. Upload each page's pictures to the bucket, sign 15-minute links, `bind`, send, delete, then read the presentation back and report. The human creates the bucket and the signing permission; document the steps for them.
-- Warnings:
-  - Four PUB-001 pictures are heavily stretched. The reader drops Publisher's crops, and LibreOffice shows the same stretching. They are reported, not fixed.
-  - The test host holds `/root/wmt-test/private/pub-001.pub` (the real booklet, mode 644 so the container user can read it) and its parsed bundle. Remove both when the Publisher work is finished.

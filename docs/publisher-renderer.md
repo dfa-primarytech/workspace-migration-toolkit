@@ -74,7 +74,15 @@ draws them the same way. Publisher probably cropped them, and libmspub
 - **Table borders** are not described by the reader, so Google's default borders are used.
 - **Exact line spacing** has no Slides equivalent; percentage spacing is kept.
 - **Page size (§14), settled live.** `presentations.create` accepts a `pageSize` and ignores it: A5 came back as 720 × 405 pt. The presentation is therefore made by importing an empty PowerPoint deck of the publication's size (`publisher_deck.py`), which Google keeps. The size is still read back and reported if it differs.
-- **Text flows differently.** Andika is more compact than Sassoon Primary, and Google adds its own space inside text boxes. So lines break in slightly different places, and text can slide under a picture that Publisher's layout kept it clear of. On PUB-001 the frog on page 2 covers the end of two lines.
+- **Text is fitted to its box** (`publisher_fit.py`). Publisher sized each frame for its original font. Andika, which replaces Sassoon, spaces lines 1.61 times its size apart (most fonts use about 1.2), and its letters are wider. So the same text ran off PUB-001's pages and under the frog on page 2.
+
+  Each frame is laid out beforehand with Andika's real measurements (`font_metrics/andika.json`, extracted by `scripts/font_metrics.py`; no font file ships):
+  - if it would overflow, its line spacing is tightened, no further than 1.2 times the font size;
+  - only then are its sizes reduced, evenly, to no less than 75%.
+
+  Each change is reported, and so is text that still won't fit. It's an estimate: Google's text insets are assumed to be PowerPoint's (0.1 in at the sides, 0.05 in above and below), and a 3% margin is kept. A frame in a font without measurements is left alone.
+
+  On PUB-001: page 2 gets 74% spacing and 90% size (12 pt becomes 11 pt), page 3 gets 74% and 95%, and the web address on page 4 gets 74% and 90%. The rest need nothing.
 
 ## Evidence
 

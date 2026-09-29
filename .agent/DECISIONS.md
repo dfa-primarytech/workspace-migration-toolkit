@@ -371,3 +371,24 @@ for verification/dependency matching. Web workspaces are temporary; CLI output
 retains the manifest and must be treated as document data. Reports omit those
 names, values, formula expressions and macro source. The earlier content-free,
 ephemeral-only manifest wording was inaccurate and is superseded here.
+
+## 2026-09-29: Fit substituted text to its frame: spacing first, then size
+The live run showed Andika text running off the page. Andika's line height
+is 1.61 em, against about 1.2 for most fonts (including, by the look of the
+original, Sassoon), and its letters are wider. Each text frame is now laid out
+offline with Andika's real measurements before the requests are written.
+
+- **Line spacing is tightened first**, to no less than 1.2 em. Andika's extra
+  height is room for stacked accents that English text does not use, and
+  young readers need the letters large more than the lines far apart.
+- **Only then is the text made smaller**, evenly across the frame, to no
+  less than 75%, rounded to half points.
+- **Every change is reported per frame**, and so is text that still won't fit.
+  A font without shipped measurements is left untouched.
+- **Measurements, not fonts.** `scripts/font_metrics.py` extracts advance
+  widths and line metrics from Google Fonts' files into JSON. No font binary
+  enters the repository.
+- **Google's text insets are assumed** to be PowerPoint's defaults, because
+  the API doesn't expose them. A 3% margin covers the estimate until a live
+  run confirms it.
+
