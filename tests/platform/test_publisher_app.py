@@ -45,24 +45,62 @@ def document() -> dict:
             "elements": elements,
         }
 
-    text = {
-        "id": "el_000001",
-        "type": "text",
-        "warnings": [],
-        "compatibility": {"status": "NATIVE"},
+    def element(eid: str, kind: str, page_index: int, z: int, **extra) -> dict:
+        return {
+            "id": eid,
+            "type": kind,
+            "pageIndex": page_index,
+            "bounds": {"x": 20, "y": 20 + 60 * z, "width": 200, "height": 50, "unit": "pt"},
+            "zIndex": z,
+            "parentId": None,
+            "visible": True,
+            "source": {"properties": {}, "styleProperties": {"draw:fill": "none"}},
+            "warnings": [],
+            "compatibility": {"status": "NATIVE"},
+            **extra,
+        }
+
+    run = {
+        "text": "Hello",
+        "items": [{"kind": "text", "value": "Hello"}],
+        "style": {
+            "fontFamily": "SassoonPrimaryInfant",
+            "fontSizePoints": 12,
+            "bold": False,
+            "italic": False,
+            "underline": None,
+            "color": "#000000",
+        },
     }
-    image = {
-        "id": "el_000002",
-        "type": "image",
-        "warnings": [],
-        "compatibility": {"status": "NATIVE"},
-    }
-    path = {
-        "id": "el_000003",
-        "type": "path",
-        "warnings": [{"code": "path-flattened", "message": "A drawn path is kept as a picture."}],
-        "compatibility": {"status": "FLATTENED"},
-    }
+    text = element(
+        "el_000001",
+        "text",
+        0,
+        0,
+        paragraphs=[{"style": {"alignment": "left", "lineHeight": None}, "runs": [run]}],
+    )
+    image = element(
+        "el_000002",
+        "image",
+        0,
+        1,
+        image={"assetId": "asset_0001", "polygon": [], "path": []},
+    )
+    rule = [
+        {"action": "M", "properties": {"svg:x": "0.5in", "svg:y": "1in"}},
+        {"action": "L", "properties": {"svg:x": "3in", "svg:y": "1in"}},
+    ]
+    path = element(
+        "el_000003",
+        "path",
+        1,
+        0,
+        bounds=None,
+        geometry={"shapeKind": "path", "points": [], "path": rule},
+        warnings=[{"code": "path-flattened", "message": "A drawn path is kept as a picture."}],
+        compatibility={"status": "FLATTENED"},
+    )
+    path["source"]["styleProperties"] = {"draw:stroke": "solid", "svg:stroke-color": "#8064a2"}
     return {
         "schemaVersion": "1.0.0",
         "source": {"type": "publisher", "filename": "booklet.pub", "sha256": "ab" * 32},
@@ -92,7 +130,7 @@ if mode == "refuse":
 if mode == "fail":
     sys.exit(1)
 (bundle / "document.json").write_text(json.dumps({document}))
-(bundle / "assets.json").write_text(json.dumps({{"assets": [{{"mimeType": "image/png"}}, {{"mimeType": "image/jpeg"}}]}}))
+(bundle / "assets.json").write_text(json.dumps({{"assets": [{{"id": "asset_0001", "filename": "assets/" + "0" * 64 + ".png", "mimeType": "image/png"}}, {{"id": "asset_0002", "filename": "assets/" + "1" * 64 + ".jpg", "mimeType": "image/jpeg"}}]}}))
 """
 
 
@@ -130,10 +168,12 @@ def test_a_pub_with_the_wrong_type_is_refused():
         validate_upload_name("booklet.pub", "text/plain", PUB)
 
 
-def test_the_browser_is_told_a_pub_can_be_checked_but_not_yet_converted():
-    formats = {f["extension"]: f for f in describe()}
-    assert formats[".pub"]["convertible"] is False
-    assert formats[".pptx"]["convertible"] is True
+def test_a_pub_converts_only_where_a_picture_bucket_is_set_up():
+    plain = {f["extension"]: f for f in describe(Settings())}
+    assert plain[".pub"]["convertible"] is False
+    assert plain[".pptx"]["convertible"] is True
+    ready = {f["extension"]: f for f in describe(Settings(publisher_bucket="b"))}
+    assert ready[".pub"]["convertible"] is True
 
 
 def test_sassoon_as_publisher_spells_it_becomes_andika():
@@ -161,7 +201,7 @@ def test_a_publisher_file_is_read_and_summarised(tmp_path):
     fonts = {f["name"]: f for f in report["fonts"]}
     assert fonts["SassoonPrimaryInfant"]["replacement"] == "Andika"
     codes = [w["code"] for w in report["warnings"]]
-    assert "path-flattened" in codes and "publisher_check_only" in codes
+    assert "path-flattened" in codes
     assert report["limitations"][0]["code"] == "no-lists"
 
 

@@ -56,6 +56,13 @@ class Settings:
     # The native Publisher reader (native/pub-parser). The app image builds it
     # in; elsewhere, point PUBLISHER_PARSER_BIN at a local build.
     publisher_parser: str = "/usr/local/bin/publisher-parser"
+    # Converting a Publisher file hands its pictures to Slides through a
+    # private Cloud Storage bucket and short-lived signed links
+    # (docs/publisher-storage.md). Unset, a .pub can be checked but not
+    # converted. The signer is the service account that signs the links; on
+    # Cloud Run it defaults to the one the service runs as.
+    publisher_bucket: str = ""
+    publisher_signer: str = ""
 
     def entry_limit(self, source_bytes: int) -> int:
         return max(self.max_entry_bytes, self.entry_scale * source_bytes)
@@ -80,6 +87,10 @@ class Settings:
     @property
     def oauth_ready(self) -> bool:
         return bool(self.client_id and self.client_secret and self.session_key)
+
+    @property
+    def publisher_ready(self) -> bool:
+        return bool(self.publisher_bucket)
 
     @property
     def picker_ready(self) -> bool:
@@ -130,4 +141,6 @@ class Settings:
             session_key=os.getenv("SESSION_ENCRYPTION_KEY", ""),
             picker_api_key=os.getenv("GOOGLE_PICKER_API_KEY", ""),
             publisher_parser=os.getenv("PUBLISHER_PARSER_BIN", "/usr/local/bin/publisher-parser"),
+            publisher_bucket=os.getenv("PUBLISHER_BUCKET", "").strip(),
+            publisher_signer=os.getenv("PUBLISHER_SIGNER", "").strip(),
         )

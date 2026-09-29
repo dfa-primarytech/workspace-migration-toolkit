@@ -28,6 +28,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .fonts import FontStatus, catalogue, compatibility
 from .model import Compatibility as C
@@ -43,6 +44,7 @@ from .publisher_art import (
     paint,
     subpaths,
 )
+from .publisher_fit import Fit, Para, Style, fit
 from .units import Frame, length_points, percentage, size
 
 PICTURE = "wmt-picture:"
@@ -111,6 +113,37 @@ class Plan:
     pictures: dict[str, Picture]
     slides: list[str]
     report: dict
+
+    def as_dict(self, root: Path) -> dict:
+        """For plan.json: the worker writes it, the app sends it."""
+        return {
+            "create": self.create,
+            "setup": self.setup,
+            "pages": self.pages,
+            "slides": self.slides,
+            "report": self.report,
+            "pictures": {
+                key: {
+                    "path": picture.path.relative_to(root).as_posix(),
+                    "width": picture.width,
+                    "height": picture.height,
+                    "mime": picture.mime,
+                }
+                for key, picture in self.pictures.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, root: Path) -> Plan:
+        pictures = {}
+        for key, item in data["pictures"].items():
+            path = (root / item["path"]).resolve()
+            if not path.is_relative_to(root.resolve()):
+                raise ValueError("a picture outside the job")
+            pictures[key] = Picture(key, path, item["width"], item["height"], item["mime"])
+        return cls(
+            data["create"], data["setup"], data["pages"], pictures, data["slides"], data["report"]
+        )
 
     def keys_for(self, page: int) -> list[str]:
         """The pictures a page's requests need links for."""
@@ -267,6 +300,18 @@ def paragraph_style(paragraph: dict) -> tuple[dict, list[str], list[dict]]:
     return result, fields, notes
 
 
+# Characters Slides drops or merges on insert, which would shift every text
+# range after them. The reader leaves Publisher's own paragraph mark (a
+# carriage return) at the end of each paragraph's text: found by the first live
+# run, where Google refused every page because the ranges overran the text.
+# Tabs stay, and line breaks inside a paragraph are written as vertical tabs.
+DROPPED = {chr(c) for c in range(32) if chr(c) not in "\t\u000b"} | {"\u007f"}
+
+
+def clean(text: str) -> str:
+    return "".join(ch for ch in text if ch not in DROPPED)
+
+
 def paragraph_text(paragraph: dict) -> list[tuple[str, dict]]:
     """Each run's text as Slides should receive it."""
     pieces = []
@@ -286,8 +331,49 @@ def paragraph_text(paragraph: dict) -> list[tuple[str, dict]]:
                     text += item.get("value") or " "
                 elif kind == "text":
                     text += item.get("value", "")
-        pieces.append((text.replace("\n", "\u000b"), run))
+        pieces.append((clean(text.replace("\n", "\u000b")), run))
     return pieces
+
+
+def _laid(paragraphs: list[dict]) -> tuple[list[dict], list[list[tuple[str, dict]]]]:
+    laid = [paragraph_text(p) for p in paragraphs]
+    while laid and not "".join(t for t, _ in laid[-1]):
+        laid.pop()  # a trailing empty paragraph adds nothing Slides can show
+    return paragraphs[: len(laid)], laid
+
+
+def measured(paragraphs: list[dict], fonts: dict[str, dict]) -> list[Para]:
+    """The text as publisher_fit lays it out: in the fonts Slides will use."""
+    paragraphs, laid = _laid(paragraphs)
+    result = []
+    for paragraph, pieces in zip(paragraphs, laid, strict=True):
+        style, _, _ = paragraph_style(paragraph)
+        points = {k: float(v["magnitude"]) for k, v in style.items() if isinstance(v, dict)}
+
+        runs = [
+            (
+                text,
+                Style(
+                    resolve_font(run["style"].get("fontFamily"), fonts),
+                    float(run["style"].get("fontSizePoints") or 12),
+                    bool(run["style"].get("bold")),
+                    bool(run["style"].get("italic")),
+                ),
+            )
+            for text, run in pieces
+        ]
+        result.append(
+            Para(
+                runs,
+                points.get("indentStart", 0.0),
+                points.get("indentFirstLine", 0.0),
+                points.get("indentEnd", 0.0),
+                points.get("spaceAbove", 0.0),
+                points.get("spaceBelow", 0.0),
+                style.get("lineSpacing"),
+            )
+        )
+    return result
 
 
 def text_requests(
@@ -295,12 +381,16 @@ def text_requests(
     paragraphs: list[dict],
     fonts: dict[str, dict],
     cell: dict | None = None,
+    fitted: Fit | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Insert the text, then style each run and paragraph by its range."""
-    laid = [paragraph_text(p) for p in paragraphs]
-    while laid and not "".join(t for t, _ in laid[-1]):
-        laid.pop()  # a trailing empty paragraph adds nothing Slides can show
-    paragraphs = paragraphs[: len(laid)]
+    """Insert the text, then style each run and paragraph by its range.
+
+    `fitted` (publisher_fit) makes the text fit its box: its scale applies to
+    every font size, and its line spacing to every paragraph.
+    """
+    paragraphs, laid = _laid(paragraphs)
+    scale = fitted.scale if fitted else 1.0
+    spacing = fitted.line_spacing if fitted else None
     whole = "\n".join("".join(t for t, _ in pieces) for pieces in laid)
     notes: list[dict] = []
     if any(i.get("kind") == "field" for p in paragraphs for r in p["runs"] for i in r["items"]):
@@ -319,15 +409,21 @@ def text_requests(
             length = utf16(text)
             if length:
                 style, fields = run_style(run["style"], run.get("sourceProperties") or {}, fonts)
-                requests.append(_styled(where, position, position + length, style, fields))
+                requests.append(
+                    _styled(where, position, position + length, _scaled(style, scale), fields)
+                )
             position += length
         if position == start and start < total and pieces:
             # An empty paragraph is as tall as its font: style its line break.
             _, run = pieces[0]
             style, fields = run_style(run["style"], run.get("sourceProperties") or {}, fonts)
-            requests.append(_styled(where, start, start + 1, style, fields))
+            requests.append(_styled(where, start, start + 1, _scaled(style, scale), fields))
         style, fields, more = paragraph_style(paragraph)
         notes += more
+        if spacing is not None and spacing < style.get("lineSpacing", 100):
+            style["lineSpacing"] = spacing
+            if "lineSpacing" not in fields:
+                fields.append("lineSpacing")
         if fields:
             end = position if position > start else min(start + 1, total)
             requests.append(
@@ -342,6 +438,14 @@ def text_requests(
             )
         position += 1  # the paragraph break
     return requests, _unique(notes)
+
+
+def _scaled(style: dict, scale: float) -> dict:
+    """Font sizes times `scale`, to the nearest half point."""
+    if scale == 1.0 or "fontSize" not in style:
+        return style
+    size = style["fontSize"]["magnitude"]
+    return {**style, "fontSize": {"magnitude": round(size * scale * 2) / 2, "unit": "PT"}}
 
 
 def _styled(where: dict[str, object], start: int, end: int, style: dict, fields: list[str]) -> dict:
@@ -518,6 +622,54 @@ def placed(object_id: str, page: str, frame: Frame) -> dict:
 # ------------------------------------------------------------------ elements
 
 
+def hidden_borders(object_id: str) -> dict:
+    """Every border of a table, made invisible."""
+    return {
+        "updateTableBorderProperties": {
+            "objectId": object_id,
+            "borderPosition": "ALL",
+            "tableBorderProperties": {
+                "tableBorderFill": {"solidFill": {"color": rgb((0, 0, 0)), "alpha": 0}}
+            },
+            "fields": "tableBorderFill",
+        }
+    }
+
+
+def missing_picture(object_id: str, where: dict) -> list[dict]:
+    """A dashed box saying a picture could not be converted, where it was."""
+    return [
+        {
+            "createShape": {
+                "objectId": object_id,
+                "shapeType": "RECTANGLE",
+                "elementProperties": where,
+            }
+        },
+        {
+            "updateShapeProperties": {
+                "objectId": object_id,
+                "shapeProperties": {
+                    "shapeBackgroundFill": {"propertyState": "NOT_RENDERED"},
+                    "outline": {
+                        "outlineFill": solid((192, 0, 0)),
+                        "weight": {"magnitude": 1, "unit": "PT"},
+                        "dashStyle": "DASH",
+                    },
+                },
+                "fields": "shapeBackgroundFill,outline",
+            }
+        },
+        {
+            "insertText": {
+                "objectId": object_id,
+                "insertionIndex": 0,
+                "text": "A picture from the original could not be converted.",
+            }
+        },
+    ]
+
+
 class PageBuilder:
     def __init__(self, page: dict, slide: str, prepared: Prepared, fonts: dict[str, dict]):
         self.page = page
@@ -576,8 +728,12 @@ class PageBuilder:
         )
         style, notes = box_style(object_id, element["source"]["styleProperties"], text=True)
         self.requests += style
-        text, more = text_requests(object_id, element.get("paragraphs", []), self.fonts)
+        paragraphs = element.get("paragraphs", [])
+        fitted = fit(measured(paragraphs, self.fonts), frame.width, frame.height)
+        text, more = text_requests(object_id, paragraphs, self.fonts, fitted=fitted)
         self.requests += text
+        if fitted:
+            notes = [*notes, *fitted.notes]
         substituted = any(
             self.fonts[f]["status"] != FontStatus.AVAILABLE
             for f in _families(element.get("paragraphs", []))
@@ -618,36 +774,7 @@ class PageBuilder:
     def _missing(self, element: dict, frame: Frame, reason: str) -> None:
         """A marked space where a picture could not go, so it is not lost silently."""
         object_id = oid(element["id"])
-        self.requests += [
-            {
-                "createShape": {
-                    "objectId": object_id,
-                    "shapeType": "RECTANGLE",
-                    "elementProperties": placed(object_id, self.slide, frame),
-                }
-            },
-            {
-                "updateShapeProperties": {
-                    "objectId": object_id,
-                    "shapeProperties": {
-                        "shapeBackgroundFill": {"propertyState": "NOT_RENDERED"},
-                        "outline": {
-                            "outlineFill": solid((192, 0, 0)),
-                            "weight": {"magnitude": 1, "unit": "PT"},
-                            "dashStyle": "DASH",
-                        },
-                    },
-                    "fields": "shapeBackgroundFill,outline",
-                }
-            },
-            {
-                "insertText": {
-                    "objectId": object_id,
-                    "insertionIndex": 0,
-                    "text": "A picture from the original could not be converted.",
-                }
-            },
-        ]
+        self.requests += missing_picture(object_id, placed(object_id, self.slide, frame))
         entry = self.line(element, C.UNSUPPORTED, note("picture-missing", reason))
         self.made(element, entry, object_id)
 
@@ -785,6 +912,11 @@ class PageBuilder:
                 }
             }
         )
+        # libmspub 0.1.4 passes on no table borders at all (its TableInfo holds
+        # only sizes and spans), so the table is drawn without them, as
+        # LibreOffice draws it, rather than with Google's default grey grid.
+        # Slides has no "no border": the border is made fully transparent.
+        self.requests.append(hidden_borders(object_id))
         for index, column in enumerate(columns):
             width = (column.get("width") or {}).get("points")
             if not width:
@@ -863,8 +995,8 @@ class PageBuilder:
         notes.append(
             note(
                 "table-borders",
-                "The reader does not describe table borders, so Google's standard borders "
-                "are used.",
+                "The table is drawn without borders: the reader can't see whether the "
+                "original had any. If it did, add them in Slides.",
             )
         )
         entry = self.line(element, C.SUBSTITUTED, *_unique(notes))
@@ -1119,6 +1251,7 @@ KNOWN = {
     "updateTableColumnProperties",
     "updateTableRowProperties",
     "updateTableCellProperties",
+    "updateTableBorderProperties",
     "mergeTableCells",
     "groupObjects",
 }
@@ -1183,6 +1316,9 @@ def check(plan_: Plan, *, existing: Iterable[str] = (), bound: bool = False) -> 
             if not (0 <= cell["rowIndex"] < rows and 0 <= cell["columnIndex"] < columns):
                 problems.append(f"#{number}: cell {cell} outside the table")
         if kind == "insertText":
+            stray = {ch for ch in body["text"] if ch in DROPPED and ch != "\n"}
+            if stray:
+                problems.append(f"#{number}: text holds characters Slides drops: {sorted(stray)}")
             if body["insertionIndex"] > lengths.get(key, 0):
                 problems.append(f"#{number}: text inserted past the end")
             lengths[key] = lengths.get(key, 0) + utf16(body["text"])

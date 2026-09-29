@@ -321,6 +321,38 @@ reported per element, and none is verified against Google until step 4.
 - **Requests are grouped per page** so step 3 can sign picture links a page
   at a time within their 15-minute life.
 
+## 2026-09-28: Publisher picture delivery (step 3)
+How the approved bucket-and-signed-link route is built:
+
+- **No key files.** The app acts as its own service account: from the
+  metadata server on Cloud Run, or a developer's `gcloud` application-default
+  login elsewhere. Links are signed by Google through IAM `signBlob`. A
+  downloaded service-account key is refused: it is a long-lived secret on disk.
+- **No new dependencies.** V4 signing is about 30 lines over `httpx`, and is
+  tested against Google's published conformance cases.
+- **One page at a time.** Store that page's pictures, sign 15-minute links,
+  send the page, and delete the copies in a `finally`. Links live seconds in
+  practice. The bucket's one-day lifecycle rule is the backstop.
+- **Two identities, kept apart.** The person's `drive.file` token creates
+  and edits the presentation. The app's account only touches the bucket.
+- **Nothing that could carry a link is reported.** Only the index of a
+  refused request is read from a Slides error; its text is never kept.
+- **A refused picture becomes the marked box** from step 2, and the page is
+  sent again, rather than the page being lost.
+- **Convert appears only where a bucket is configured.** `describe()`
+  now takes the settings, so a deployment without one still offers Check.
+
+## 2026-09-29: A Publisher conversion starts from an imported deck
+PROJECT.md §14 asked how Slides can be made at a publication's own size.
+The live run answered it. `presentations.create` accepts a `pageSize` and
+ignores it: A5 came back as 720 × 405 pt, Slides' default. Google's
+PowerPoint import does keep a deck's own size. So the converter uploads an
+empty one-slide `.pptx` of the publication's size (`publisher_deck.py`,
+written by hand, so nothing in it comes from a template), with conversion to
+Slides. It then builds the pages into that presentation through the API as
+before, and deletes the deck's own slide. Verified live with PUB-001: A5
+portrait kept.
+
 ## 2026-09-28: Excel source format and non-worksheet sheets (#51)
 
 Keep the worker package byte-for-byte in its source format. A macro-enabled
@@ -368,3 +400,38 @@ cells, 47 formulas and no formula-error cells.
 This verifies the OAuth scope, Drive import and Sheets structural read-back path.
 It does not establish formula, chart, formatting, validation or protection
 fidelity; the report correctly retains `workbook_review_required` for those.
+
+## 2026-09-29: Fit substituted text to its frame: spacing first, then size
+The live run showed Andika text running off PUB-001's pages. Andika's
+letters are wider than Sassoon's, so the same text wraps onto more lines.
+Each text frame is now laid out offline with Andika's real advance widths
+before the requests are written.
+
+- **Google's own geometry, measured, not the font's.** On the live slides,
+  Google spaced lines 1.2 times the font size apart at 100% (Andika's
+  metrics say 1.61), and kept 7.2 pt inside the box at the sides. A first
+  version used the font's 1.61 and overcorrected. The first version was
+  measured, fixed and re-run the same day: page 2's last line then landed
+  within 2 pt of the estimate.
+- **Line spacing is tightened first**, to no less than 90%, then **the text
+  is made smaller**, evenly, to no less than 75%, rounded to half points.
+  Young readers need the letters large more than the lines far apart.
+- **Every change is reported per frame**, and so is text that still won't fit.
+  A font without shipped measurements is left untouched.
+- **Measurements, not fonts.** `scripts/font_metrics.py` extracts advance
+  widths from Google Fonts' files into JSON. No font binary enters the
+  repository.
+- **Hand-made line breaks are kept**, even where the new font leaves a word
+  on its own line: they are the author's.
+
+## 2026-09-29: Publisher tables are drawn without borders
+libmspub 0.1.4 passes on no table borders at all: its `TableInfo` holds row
+heights, column widths and cell spans, and it writes nothing else per cell
+(`MSPUBCollector.cpp`, checked in the 0.1.4 source). So whether a Publisher
+table had lines can't be known from the reader. The renderer makes every
+border transparent (Slides has no "no border"), which is how LibreOffice
+draws such tables and how PUB-001 looks, instead of leaving Google's default
+grey grid. The report says so and tells staff to add borders if the original
+had them. Reading real borders from the `.pub` belongs with the picture-crop
+investigation, which needs the same direct reading of the file. Verified live
+on PUB-001.
