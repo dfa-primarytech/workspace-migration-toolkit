@@ -535,3 +535,16 @@ pictures stream as it keeps the drawing records, and the app pairs marks with
 unplaced picture shapes. That qualifies route A's "one patch each": where
 libmspub has no model for a thing at all, reading Publisher's own records
 beside it (as for crops and WordArt) is the smaller change.
+
+## 2026-09-29: Keep tables on the page, readable text first (owner)
+
+Slides grows table rows to their text, so Publisher tables laid out Google's
+way ran off the page (PUB-002 pages 3, 7, 8, 9). A table may now grow into
+free space below it: down to whatever is below, the bottom of a box it sits
+in, or 10 pt from the page edge. Only past that is its text set closer, then
+smaller, to the same floors as a text box (90% spacing, 75% size). The owner
+chose readable text over Publisher's exact bottom edge, so a table may pass a
+border it overhung in Publisher. Calibri and Arial are now measured (from
+their metric-compatible open fonts, Carlito and Liberation Sans), so text
+boxes in them are fitted too. Every one of those that shrinks on PUB-002 was
+measured live as overflowing its box before.

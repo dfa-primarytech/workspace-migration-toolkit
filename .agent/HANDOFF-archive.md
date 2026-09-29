@@ -608,3 +608,18 @@ archive rather than growing this one further.
 - Decisions: DECISIONS.md, 2026-09-29 (WordArt).
 - Next task: a live run with a fresh token to see the title in Google; then lists and table borders.
 - Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and an expired picture token. The container `wmt-test-live` and this machine's SSH tunnel on port 8080 are still up. The image `wmt-test/app:pub8` has this branch.
+
+---
+
+- Agent: Codex (XLSX)
+- Date: 2026-09-29
+- Branch: `codex/xlsx-live-followups`, based on main `77e08cb`; PR #94
+- Objective: Finish the XLSX follow-ups left after #72 and verify native Google Sheets import live.
+- Files changed: `xlsx.py`, `jobs.py`, `tests/platform/test_xlsx.py`, `tests/platform/test_xlsx_issue51.py`, `docs/xlsx-migration.md`, and coordination files.
+- Completed: cell-limit checks use observed cell extent and separately report stale declared extents; sheet indexes are zero-based; the uncalled stale-workspace sweeper and test are removed; a generated five-sheet workbook converted through real Drive and Sheets APIs, with five sheets confirmed by read-back.
+- Checks: 469 passed, 14 skipped before the final main reconciliation; Ruff check and format clean; mypy clean for 29 source files; Bandit and secret scan clean. Live report: 5 sheets, 227 populated cells, 47 formulas, 0 formula errors, native spreadsheet created and structurally verified.
+- Known failures: none.
+- Unresolved: formula results, charts, formatting, validation and protection still need human visual comparison in the imported Google Sheet. One synthetic live import does not establish broad fidelity.
+- Decisions: DECISIONS.md, 2026-09-29 (XLSX extent/index/cleanup and live native import).
+- Next task: visually compare the generated workbook against its Expected results sheet, then add targeted regression work only for observed fidelity losses.
+- Warnings: the downloaded conversion report contains private Drive file and folder IDs and must not be committed. No school document or OAuth token is in this branch.

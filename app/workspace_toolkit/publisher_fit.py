@@ -26,6 +26,7 @@ font it has no measurements for is left as it is.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import cache
 from pathlib import Path
@@ -203,24 +204,31 @@ def fit(paras: list[Para], box_width: float, box_height: float) -> Fit | None:
         return None
     width = box_width - 2 * INSET_X
     room = (box_height - 2 * INSET_Y) * SAFETY
-    natural = height(paras, width, None, 1.0)
+    return fit_with(lambda spacing, scale: height(paras, width, spacing, scale), room)
+
+
+def fit_with(laid_out: Callable[[float | None, float], float], room: float) -> Fit:
+    """The least change that brings a layout within `room`: spacing first,
+    then size, each within its floor. `laid_out(spacing, scale)` is the
+    height of the text laid out that way."""
+    natural = laid_out(None, 1.0)
     if natural <= room:
         return Fit(height=natural)
     floor = SPACING_FLOOR
     spacing = 100
     while spacing - SPACING_STEP >= floor:
         spacing -= SPACING_STEP
-        laid = height(paras, width, spacing, 1.0)
+        laid = laid_out(spacing, 1.0)
         if laid <= room:
             return Fit(spacing, 1.0, False, laid, [_tightened()])
     spacing = floor
     scale = 1.0
     while round(scale - SCALE_STEP, 2) >= MIN_SCALE:
         scale = round(scale - SCALE_STEP, 2)
-        laid = height(paras, width, spacing, scale)
+        laid = laid_out(spacing, scale)
         if laid <= room:
             return Fit(spacing, scale, False, laid, [_tightened(), _smaller(scale)])
-    laid = height(paras, width, spacing, scale)
+    laid = laid_out(spacing, scale)
     return Fit(
         spacing,
         scale,
