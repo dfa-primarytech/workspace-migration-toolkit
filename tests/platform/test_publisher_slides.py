@@ -816,3 +816,11 @@ def test_pub001_plans_cleanly(tmp_path):
     assert result.report["statusCounts"] == {"NATIVE": 14, "SUBSTITUTED": 6, "IGNORED": 2}
     assert len(requests(result, "createImage")) == 12
     assert len(requests(result, "createLine")) == 2
+
+
+def test_the_readers_notes_are_kept_and_marked_as_the_readers():
+    reader = {"code": "implicit-text-frame", "message": "text arrived outside a text frame"}
+    box = text_box("el_1", 0, (10, 10, 100, 40), paragraph(run("Hi")), warnings=[reader])
+    notes = report(planned(document([box])))["el_1"]["notes"]
+    kept = [n for n in notes if n["code"] == "implicit-text-frame"]
+    assert kept == [{**reader, "source": "reader"}]

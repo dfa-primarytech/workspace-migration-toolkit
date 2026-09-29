@@ -103,19 +103,26 @@ def analyse(source: Path, output: Path, settings: Settings) -> dict:
 
 
 def analysis_report(manifest: dict) -> dict:
-    """The "Check file" summary for a Publisher file."""
+    """The "Check file" summary for a Publisher file.
+
+    The reader's own notes ("startLayer/startEmbeddedGraphics is a rendering
+    construct...") are for whoever supports the app, not for staff: they go
+    in `technicalNotes`, which the downloadable report keeps and the page
+    does not list. `warnings` holds only what the app says in plain words.
+    """
     document = manifest["document"]
     pages = [p for p in document["pages"] if p.get("kind", "page") == "page"]
     elements = [e for page in pages for e in page.get("elements", [])]
     assets = manifest["assets"].get("assets", [])
     families = {font["family"] for font in document.get("fonts", []) if font.get("family")}
+    technical = []
     notes = []
     for note in document.get("warnings", []):
-        notes.append(warning(note["code"], note["message"], classification=C.UNSUPPORTED))
+        technical.append(warning(note["code"], note["message"], classification=C.UNSUPPORTED))
     for page in pages:
         for element in page.get("elements", []):
             for note in element.get("warnings", []):
-                notes.append(
+                technical.append(
                     warning(
                         note["code"],
                         note["message"],
@@ -128,7 +135,7 @@ def analysis_report(manifest: dict) -> dict:
                 )
     for diagnostic in manifest.get("report", {}).get("diagnostics", []):
         if diagnostic.get("severity") in {"warning", "error"}:
-            notes.append(
+            technical.append(
                 warning(diagnostic["code"], diagnostic["message"], classification=C.UNSUPPORTED)
             )
     if document.get("truncation", {}).get("truncated"):
@@ -152,6 +159,7 @@ def analysis_report(manifest: dict) -> dict:
         ),
         "fonts": catalogue(families),
         "warnings": notes,
+        "technicalNotes": technical,
         "limitations": document.get("limitations", []),
         "verification": "not_converted",
         "classificationBasis": "Preflight candidates, not verified Google compatibility.",

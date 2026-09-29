@@ -572,3 +572,20 @@ def test_the_summary_keeps_notes_that_differ_only_in_their_numbers():
         "Smaller (to 90%). (2 on page 2, 4)",
         "Smaller (to 95%). (1 on page 3)",
     ]
+
+
+def test_the_readers_own_notes_stay_out_of_the_summary_people_read():
+    from workspace_toolkit.publisher_convert import summarise
+    from workspace_toolkit.publisher_slides import Plan
+
+    notes = [
+        {"code": "text-made-smaller", "message": "Text was made smaller."},
+        {
+            "code": "group-inferred",
+            "message": "inferred from a layer that contains another layer",
+            "source": "reader",
+        },
+    ]
+    report = {"elements": [{"pageIndex": 0, "status": "NATIVE", "notes": notes}], "warnings": []}
+    summary = summarise(Plan({}, [], [], {}, [], report))
+    assert [n["code"] for n in summary] == ["text-made-smaller"]

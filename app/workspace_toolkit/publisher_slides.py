@@ -922,8 +922,10 @@ class PageBuilder:
     def line(self, element: dict, status: str, *notes: dict) -> Line:
         entry = Line(element["id"], element["pageIndex"], element["type"], status)
         entry.notes += [n for n in notes if n]
+        # The reader's own notes are kept for the technical report, marked so
+        # the summary people read leaves them out (publisher_convert.summarise).
         entry.notes += [
-            note(w["code"], w["message"])
+            {**note(w["code"], w["message"]), "source": "reader"}
             for w in element.get("warnings", [])
             if w["code"] not in SETTLED
         ]

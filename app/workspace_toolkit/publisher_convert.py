@@ -269,11 +269,14 @@ def summarise(plan: Plan) -> list[dict]:
     """The plan's per-element notes, one line per distinct note, for people to read.
 
     Grouped by wording, not only by kind: "made smaller (to 90%)" and "(to 95%)"
-    are different things to have happened to a page.
+    are different things to have happened to a page. The reader's own notes
+    are left out: they stay with each element in the technical report.
     """
     grouped: dict[tuple[str, str], dict] = {}
     for line in plan.report.get("elements", []):
         for item in line.get("notes", []):
+            if item.get("source") == "reader":
+                continue
             entry = grouped.setdefault(
                 (item["code"], item["message"]),
                 {"message": item["message"], "status": line["status"], "pages": set(), "count": 0},
