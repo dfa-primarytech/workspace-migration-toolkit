@@ -73,9 +73,49 @@ draws them the same way. Publisher probably cropped them, and libmspub
 - **Text insets**: the Slides API has no setting for the space inside a text box, so text may wrap slightly differently.
 - **Table borders** are not described by the reader, so Google's default borders are used.
 - **Exact line spacing** has no Slides equivalent; percentage spacing is kept.
-- **Page size** is requested in `presentations.create`. Whether Google keeps an A5 size must be checked in step 4 (§14), and step 3 will read the size back rather than assume it.
+- **Page size (§14), settled live.** `presentations.create` accepts a `pageSize` and ignores it: A5 came back as 720 × 405 pt. The presentation is therefore made by importing an empty PowerPoint deck of the publication's size (`publisher_deck.py`), which Google keeps. The size is still read back and reported if it differs.
+- **Text is fitted to its box** (`publisher_fit.py`). Publisher sized each frame for its original font. Andika, which replaces Sassoon, has wider letters, so the same text wraps onto more lines. On the first live run it ran off pages 2 and 3, and under the frog on page 2.
+
+  Each frame is laid out beforehand with Andika's real advance widths (`font_metrics/andika.json`, extracted by `scripts/font_metrics.py`; no font file ships), in Google's own line geometry. If it would overflow:
+  - its line spacing is tightened, to no less than 90%;
+  - only then are its sizes reduced, evenly, to no less than 75%.
+
+  Each change is reported, and so is text that still won't fit. A frame in a font without measurements is left alone.
+
+  **Google's geometry, measured on the live slides (2026-09-29):**
+  - lines are **1.2 times the font size** apart at 100% spacing, whatever the font; Andika's own metrics say 1.61, and Google ignores them;
+  - the text box's inner margin is **7.2 pt at the sides**.
+
+  With those numbers the estimate for PUB-001's page 2 landed within 2 pt of where Google put the last line.
+
+  On PUB-001:
+  - pages 2 and 3 keep their 12 pt text, with lines 10% and 5% closer;
+  - the web address on page 4 goes to 85% so it stays on one line;
+  - everything else fits as it is.
+
+  In Google, page 2's text ends at 554 pt and page 3's at 548 pt, both inside their 591 pt boxes on a 595 pt page.
+- **Hand-made line breaks.** Where an author pressed Enter mid-sentence to steer text around a picture, the break was placed for the original font. In Andika the last word can land on a line of its own (PUB-001 page 3). These breaks are part of the document, so they're kept.
 
 ## Evidence
+
+**Live run, PUB-001, 2026-09-29.** Converted through the app on the test host into a real staff account's Drive:
+
+- 4 A5 portrait slides, in order;
+- all 22 items on the right slides, and every text box's text as planned (read back and checked);
+- Sassoon shown as Andika;
+- the two rules as editable lines;
+- the table with its text;
+- all 12 pictures, including a scannable QR code;
+- the bucket empty afterwards.
+
+It took two fixes to get there, both found only by Google:
+- the page size (above);
+- Publisher's paragraph marks. The reader leaves a carriage return at the end of each paragraph, and Slides drops it on insert, so every later text range overran and Google refused every page. They are now stripped, the checker refuses them, and the fake Google in the tests drops them as Google does.
+
+Seen on the slides, and reported:
+- Google's default table borders (Publisher's table had none);
+- four stretched pictures;
+- text flowing slightly differently from the original.
 
 - Offline tests: `tests/platform/test_publisher_slides.py`, 38 tests. Every document in them is built in the test. They check the geometry by applying each transform as Slides does.
 - **PUB-001** (4 pages; parsed in the app image on the test host, never committed):

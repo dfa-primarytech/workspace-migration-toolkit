@@ -29,6 +29,10 @@ spec:
           env:
             - name: PUBLIC_BASE_URL
               value: https://YOUR_SERVICE_HOST
+            # Publisher conversion (docs/publisher-storage.md). The signer
+            # defaults to RUNTIME_SERVICE_ACCOUNT; omit both to turn it off.
+            - name: PUBLISHER_BUCKET
+              value: YOUR_PICTURE_BUCKET
             - name: GOOGLE_CLIENT_ID
               valueFrom:
                 secretKeyRef:

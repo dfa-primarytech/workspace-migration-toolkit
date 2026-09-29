@@ -108,14 +108,14 @@ async function perform(convert) {
     for (const message of [...new Set(report.warnings.map(w=>w.message))]) { const li = document.createElement('li'); li.textContent = message; list.append(li); }
     parent.append(list);
     // A format that can only be checked so far (Publisher) offers no Convert.
-    if (!convert) { sourceHash = report.sourceSha256; selected = source; const canConvert = !chosen || chosen.convertible !== false; $('convert').hidden = !canConvert; $('smaller-choice').hidden = !canConvert; }
+    if (!convert) { sourceHash = report.sourceSha256; selected = source; const canConvert = !chosen || chosen.convertible !== false; $('convert').hidden = !canConvert; $('smaller-choice').hidden = !canConvert || (chosen && chosen.extension === '.pub'); }
     else {
       if (report.url) link(report.url, 'Open in ' + ((chosen && chosen.destination) || 'Google Drive'), parent);
       if (report.folderUrl) link(report.folderUrl, 'Open recovered files in Drive', parent);
       $('convert').hidden = true; $('smaller-choice').hidden = true;
     }
     download(report, parent);
-    $('status').textContent = !convert ? (chosen && chosen.convertible === false ? 'Checked. Converting this kind of file is not available yet.' : 'Ready to convert. Review the findings above.') : report.status.startsWith('failed') ? 'Conversion did not finish. Check the report and any saved files before retrying.' : 'Conversion finished. Please review the result and report.';
+    $('status').textContent = !convert ? (chosen && chosen.convertible === false ? 'Checked. Converting this kind of file is not set up here yet.' : 'Ready to convert. Review the findings above.') : report.status.startsWith('failed') ? 'Conversion did not finish. Check the report and any saved files before retrying.' : 'Conversion finished. Please review the result and report.';
   } catch (error) { $('status').textContent = error.message; }
   finally { busy(false); }
 }

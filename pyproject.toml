@@ -22,7 +22,7 @@ workspace-server = "workspace_toolkit.server:main"
 where = ["app"]
 
 [tool.setuptools.package-data]
-workspace_toolkit = ["static/*"]
+workspace_toolkit = ["static/*", "font_metrics/*.json", "font_metrics/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/platform"]
