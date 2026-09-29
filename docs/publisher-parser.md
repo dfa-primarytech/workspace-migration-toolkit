@@ -196,6 +196,7 @@ output/
 ├── assets.json
 ├── report.json
 ├── drawing.bin      Publisher's drawing records (Escher/EscherStm), unchanged
+├── drawing-pictures.bin  its stored pictures (Escher/EscherDelayStm), unchanged
 └── assets/
     ├── <sha256>.png
     └── <sha256>.jpg
@@ -204,8 +205,14 @@ output/
 `drawing.bin` is written when the file has drawing records and they are within
 the per-asset size limit. libmspub reads each picture's crop from them and
 drops it; the app reads the crops back (`publisher_crop.py`). It holds numbers
-and record structure, not text or pictures (those live in `EscherDelayStm`,
-which is not copied).
+and record structure, not text or pictures.
+
+`drawing-pictures.bin` is `EscherDelayStm`, the stored pictures themselves,
+written when it is within the limit on all assets together. libmspub takes
+from it only the pictures it places; a picture set inline in text, such as
+PUB-002's book covers in table cells, is left there, and the app recovers it
+(`publisher_inline.py`). Every picture in it is checked like any other before
+it is used.
 
 Exit codes: `0` complete, `1` libmspub could not parse the document,
 `2` refused before or during output, `3` parsed but truncated by a

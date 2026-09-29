@@ -126,6 +126,11 @@ TEST(bundle_keeps_the_drawing_records_only_when_there_are_some) {
   CHECK(writeBundle(doc, Limits(), dir.path() + "/with", "ok", false).ok);
   CHECK(fileExists(dir.path() + "/with/drawing.bin"));
   CHECK(readFile(dir.path() + "/with/drawing.bin") == doc.drawingData);
+  CHECK(!fileExists(dir.path() + "/with/drawing-pictures.bin"));
+
+  doc.drawingDelayData = std::string("\xff\xd8\xff", 3);
+  CHECK(writeBundle(doc, Limits(), dir.path() + "/pictures", "ok", false).ok);
+  CHECK(readFile(dir.path() + "/pictures/drawing-pictures.bin") == doc.drawingDelayData);
 }
 
 TEST(bundle_asset_filenames_come_from_the_content_hash) {

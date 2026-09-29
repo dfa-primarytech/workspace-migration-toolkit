@@ -154,6 +154,16 @@ WriteResult writeBundle(const Document &doc, const Limits &limits, const std::st
     }
   }
 
+  if (!doc.drawingDelayData.empty()) {
+    std::string error;
+    if (!writeFileAtomic(outputDir + "/drawing-pictures.bin", doc.drawingDelayData, scratch,
+                         error)) {
+      result.errorCode = "drawing-write-failed";
+      result.errorMessage = error;
+      return result;
+    }
+  }
+
   struct Doc {
     const char *name;
     std::string content;

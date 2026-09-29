@@ -515,3 +515,23 @@ source. Every build (the app image, docker/publisher.Dockerfile, CI) uses
 the same script, and `--version` names the patches applied. Further gaps
 libmspub parses but drops, or never parses (table borders), are to be closed
 the same way, one patch each, rather than by re-reading the file beside it.
+
+## 2026-09-29: Table grids, and pictures set in text
+
+**Grid.** No table in PUB-001 or PUB-002 stores a border setting in any
+record (Contents table and cell records, the text's TCD records and the
+drawing records, all dumped with a debug build of libmspub). Yet every table
+in both prints a thin black grid, as the owner's print previews show. So
+tables are drawn with Publisher's default grid (0.75 pt black), replacing the
+invisible borders of #95. A table with authored lines has not been seen; its
+records will show where Publisher keeps them.
+
+**Inline pictures.** A picture set in a line of text belongs to a Contents
+record that is not a page, so libmspub never draws it. Its text keeps U+FFFC,
+and the picture stays in the drawing records. Getting it through libmspub
+would mean a patch that invents inline objects in its text stream, which
+librevenge has no settled form for. Instead, the parser keeps the stored
+pictures stream as it keeps the drawing records, and the app pairs marks with
+unplaced picture shapes. That qualifies route A's "one patch each": where
+libmspub has no model for a thing at all, reading Publisher's own records
+beside it (as for crops and WordArt) is the smaller change.

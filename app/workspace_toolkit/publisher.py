@@ -26,6 +26,7 @@ from .model import Compatibility as C
 from .model import warning
 from .publisher_art import prepare
 from .publisher_crop import crops
+from .publisher_inline import prepared as inline_prepared
 from .publisher_slides import plan
 from .publisher_wordart import placed as wordart_placed
 
@@ -171,6 +172,8 @@ def render_path(output: Path) -> dict:
     prepared = prepare(document, assets, bundle, output / "art", crops=found)
     prepared.notes += notes
     prepared.wordart, notes = wordart_placed(bundle, document)
+    prepared.notes += notes
+    prepared.inline, notes = inline_prepared(bundle, document, assets, output / "art")
     prepared.notes += notes
     result = plan(document, prepared, title="Converted publication")
     data = result.as_dict(output)
