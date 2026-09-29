@@ -116,6 +116,18 @@ TEST(bundle_writes_the_three_documents_and_the_assets) {
   CHECK(fileExists(out + "/" + doc.assets[0].filename));
 }
 
+TEST(bundle_keeps_the_drawing_records_only_when_there_are_some) {
+  TempDir dir;
+  Document doc = sampleDocument();
+  CHECK(writeBundle(doc, Limits(), dir.path() + "/without", "ok", false).ok);
+  CHECK(!fileExists(dir.path() + "/without/drawing.bin"));
+
+  doc.drawingData = std::string("\x0f\x00\x00\xf0\x00\x00\x00\x00", 8);
+  CHECK(writeBundle(doc, Limits(), dir.path() + "/with", "ok", false).ok);
+  CHECK(fileExists(dir.path() + "/with/drawing.bin"));
+  CHECK(readFile(dir.path() + "/with/drawing.bin") == doc.drawingData);
+}
+
 TEST(bundle_asset_filenames_come_from_the_content_hash) {
   TempDir dir;
   const Document doc = sampleDocument();

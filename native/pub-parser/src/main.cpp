@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -229,6 +230,27 @@ int main(int argc, char **argv) {
     }
     std::fprintf(stderr, "publisher-parser: parse-failed: libmspub could not parse this document\n");
     return 1;
+  }
+
+  // libmspub reads each picture's crop from the drawing records and drops
+  // it, so a cropped picture would be drawn whole, stretched into its frame.
+  // Keep the records as they are: the app reads the crops from them. They
+  // come from the same OLE container libmspub has just accepted, through
+  // librevenge, and are held to the per-asset size limit.
+  stream.seek(0, librevenge::RVNG_SEEK_SET);
+  std::unique_ptr<librevenge::RVNGInputStream> drawing(
+      stream.isStructured() ? stream.getSubStreamByName("Escher/EscherStm") : nullptr);
+  if (drawing) {
+    std::string data;
+    while (!drawing->isEnd() && static_cast<long long>(data.size()) <= limits.maxAssetBytes) {
+      unsigned long got = 0;
+      const unsigned char *chunk = drawing->read(64 * 1024, got);
+      if (chunk == nullptr || got == 0) break;
+      data.append(reinterpret_cast<const char *>(chunk), got);
+    }
+    if (!data.empty() && static_cast<long long>(data.size()) <= limits.maxAssetBytes) {
+      collector.setDrawingData(std::move(data));
+    }
   }
 
   const std::string status = model.truncated ? "truncated" : "ok";

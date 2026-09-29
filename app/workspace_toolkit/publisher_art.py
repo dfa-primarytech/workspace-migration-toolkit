@@ -60,6 +60,8 @@ class Prepared:
     drawn: dict[str, Drawn] = field(default_factory=dict)  # by element id
     borders: dict[str, Drawn] = field(default_factory=dict)  # by border key
     refused: dict[str, str] = field(default_factory=dict)  # asset id → reason
+    cropped: dict[str, Picture] = field(default_factory=dict)  # by element id
+    notes: list[dict] = field(default_factory=list)  # about the document as a whole
 
 
 def note(code: str, message: str) -> dict:
@@ -405,8 +407,38 @@ def compose_border(key: str, tiles: list[dict], images: dict[str, Picture], out:
 # ------------------------------------------------------------------ all of it
 
 
-def prepare(document: dict, assets: dict, bundle: Path, out: Path) -> Prepared:
-    """Makes every picture the document needs, under `out`."""
+def crop_picture(key: str, picture: Picture, crop, out: Path) -> Picture | None:
+    """The part of a picture Publisher showed, as its own file: a photograph
+    stays JPEG, anything else becomes PNG."""
+    image = _open(picture.path)
+    if image is None:
+        return None
+    width, height = image.size
+    box = (
+        round(width * crop.left),
+        round(height * crop.top),
+        round(width * (1 - crop.right)),
+        round(height * (1 - crop.bottom)),
+    )
+    if box[2] - box[0] < 1 or box[3] - box[1] < 1:
+        return None
+    part = image.crop(box)
+    if picture.mime == "image/jpeg":
+        path, mime = out / f"{key}.jpg", "image/jpeg"
+        part.convert("RGB").save(path, "JPEG", quality=92)
+    else:
+        path, mime = out / f"{key}.png", "image/png"
+        part.save(path, "PNG", optimize=True)
+    return Picture(key, path, part.width, part.height, mime, list(picture.notes))
+
+
+def prepare(
+    document: dict, assets: dict, bundle: Path, out: Path, crops: dict | None = None
+) -> Prepared:
+    """Makes every picture the document needs, under `out`.
+
+    `crops` (publisher_crop) gives the part of a picture each placement shows.
+    """
     from .publisher_slides import path_plan  # the renderer decides what is drawn
 
     out.mkdir(parents=True, exist_ok=True)
@@ -417,6 +449,18 @@ def prepare(document: dict, assets: dict, bundle: Path, out: Path) -> Prepared:
             prepared.refused[asset["id"]] = reason or "unreadable"
         else:
             prepared.pictures[asset["id"]] = picture
+    by_element = {
+        element["id"]: (element.get("image") or {}).get("assetId")
+        for page in document.get("pages", [])
+        for element in page.get("elements", [])
+    }
+    for element_id, crop in (crops or {}).items():
+        source = prepared.pictures.get(by_element.get(element_id) or "")
+        if source is None:
+            continue
+        part = crop_picture(f"crop_{element_id}", source, crop, out)
+        if part is not None:
+            prepared.cropped[element_id] = part
     borders: dict[str, list[dict]] = defaultdict(list)
     for page in document.get("pages", []):
         if page.get("kind", "page") != "page":

@@ -407,3 +407,24 @@ had them. Reading real borders from the `.pub` belongs with the picture-crop
 investigation, which needs the same direct reading of the file. Verified live
 on PUB-001.
 
+## 2026-09-29: Recover picture crops from Publisher's drawing records
+PUB-001's stretched pictures were cropped in Publisher. The crops are the
+Office drawing properties "crop from top/bottom/left/right" (0x100 to 0x103)
+on each picture shape in `Escher/EscherStm`. libmspub 0.1.4 reads every shape
+property into a map and never looks those four up (checked in its source).
+
+- **The parser keeps the records as they are** (`drawing.bin`), read
+  through librevenge from the container libmspub has just accepted and held
+  to the per-asset limit. It gets no new parsing code and no new dependency.
+  The records are small (11 KB for PUB-001) and hold no text or picture data.
+- **The app interprets them** (`publisher_crop.py`, in the worker): stored
+  pictures are matched to assets by size, and placements to shapes in
+  whichever order fits.
+- **A crop is applied only when the cropped picture has its frame's shape**,
+  within 3%. That is the purpose of a crop, and it guards against any
+  mismatch. On PUB-001 all five fit exactly, including one picture cropped
+  two different ways.
+- The same records hold other properties libmspub drops. They are the
+  place to look next for anything the reader loses (not table borders,
+  which live in the Contents stream).
+

@@ -7,6 +7,21 @@ PR descriptions have the same detail in full.
 
 ---
 
+- Agent: Codex (XLSX)
+- Date: 2026-09-29
+- Branch: `rescue/xlsx-sheets-mvp`, merged with main `4c6d655`
+- Objective: Fix issue #51: the `.xlsm` crash, chart-sheet rejection and conflicts with main.
+- Files changed: XLSX pipeline modules and tests; shared package, pipeline, worker and web format registration; generated XLSX fixtures and documentation; coordination files. Main's Publisher/platform changes were retained by the merge. The pipeline-selection integration assertion in `tests/platform/test_docx.py` was updated only to recognise main's existing Publisher support.
+- Completed: `.xlsm` keeps its source extension and MIME through native import; real VBA is reported as unsupported; chart sheets are retained and reported UNSUPPORTED; dialog and macro sheets require manual migration; generated fixtures cover both issue regressions; current main conflicts are resolved.
+- Checks: 440 passed, 13 skipped; Ruff check passed; Ruff format checked 47 files; mypy passed 25 source files; Bandit passed; secret scan passed; JavaScript syntax passed.
+- Known failures: none.
+- Unresolved: live Google Sheets import remains unverified; cell-limit estimation, one-based sheet-index consistency and the unused sweeper remain follow-ups outside issue #51.
+- Decisions: DECISIONS.md, 2026-09-28 (Excel source format and non-worksheet sheets).
+- Next task: merge PR #72 after GitHub checks pass, then verify a synthetic workbook against a controlled Google Workspace tenant.
+- Warnings: no real school files were used or committed. No GCP resources or credentials were created. Do not treat retained CLI manifests as content-free; they can contain sheet and external-workbook names.
+
+---
+
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-28
 - Branch: `feat/publisher-convert`, based on main `4c6d655` (#91 merged)

@@ -15,6 +15,7 @@
 #include <chrono>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "limits.h"
@@ -31,6 +32,8 @@ public:
   void setSource(const std::string &filename, const std::string &sha256, long long byteLength,
                  const std::string &containerType, const std::string &formatFamily);
   void setSupported(bool supported);
+  // Publisher's drawing records, read from the file after parsing (main.cpp).
+  void setDrawingData(std::string bytes) { doc_.drawingData = std::move(bytes); }
 
   // Finishes any structure libmspub left open (a truncated file can end
   // mid-page) and computes the derived counts. Safe to call twice.
