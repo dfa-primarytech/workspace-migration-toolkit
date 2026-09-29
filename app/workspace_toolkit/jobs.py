@@ -23,7 +23,12 @@ def workspace(settings: Settings):
 
 
 async def preflight(
-    root: Path, settings: Settings, fmt: Format = PPTX, *, compress_pictures: bool = False
+    root: Path,
+    settings: Settings,
+    fmt: Format = PPTX,
+    *,
+    compress_pictures: bool = False,
+    check_only: bool = False,
 ) -> dict:
     output = root / "result"
     output.mkdir()
@@ -52,6 +57,7 @@ async def preflight(
         str(config),
         fmt.key,
         *(["compress-pictures"] if compress_pictures else []),
+        *(["check-only"] if check_only else []),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         env={

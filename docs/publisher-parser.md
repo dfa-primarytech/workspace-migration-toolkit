@@ -126,23 +126,34 @@ content.
 
 | Library | Tested version | Licence |
 |---|---|---|
-| [libmspub](https://github.com/LibreOffice/libmspub) | **0.1.4** (Ubuntu `0.1.4-3build7`) | MPL-2.0 |
-| [librevenge](https://sourceforge.net/projects/libwpd/) | **0.0.5** (Ubuntu `0.0.5-3build1`) | MPL-2.0 / LGPL-2.1+ |
+| [libmspub](https://github.com/LibreOffice/libmspub) | **0.1.4**, built from LibreOffice's release tarball with this repository's patches | MPL-2.0 |
+| [librevenge](https://sourceforge.net/projects/libwpd/) | **0.0.5** (Ubuntu `0.0.5-3build1`, Debian `0.0.5-3`) | MPL-2.0 / LGPL-2.1+ |
 
-Both are installed from the distribution, not vendored. They are stable,
-LibreOffice-maintained libraries with no reason to carry a private fork,
-and vendoring would put a copy of someone else's MPL-2.0 source in this
-repository for no technical gain.
+librevenge is installed from the distribution. libmspub is not: it reads
+things it never passes on, and PUB-001's numbered lists were lost that way
+(DECISIONS.md, 2026-09-29). `native/pub-parser/libmspub/build.sh` downloads
+the 0.1.4 tarball, checks its SHA-256, applies `libmspub/patches/*.patch`
+and installs into a private prefix (`/opt/libmspub` in the images). Only
+the patches are kept in this repository, never libmspub's source; libmspub
+has had no release since 0.1.4, so they stay put.
 
+| Patch | What it changes |
+|---|---|
+| `0000-include-cstdint` | Adds a missing `<cstdint>` include: GCC 13 and later refuse to build without it. |
+| `0001-pass-lists-through` | Passes each paragraph's list on as `librevenge:list-type`, `librevenge:bullet-codepoint`, `librevenge:numbering-type`, `librevenge:numbering-delimiter` and `text:start-value`, and reads the list sub-records from the right buffer. |
+
+The parser finds that copy by its run path, not the system's.
 `publisher-parser --version` reports the versions its binary was built
-against, taken from `pkg-config` at configure time. Record that output
-alongside any conversion result: the parser's behaviour is largely
-libmspub's behaviour.
+against, taken from `pkg-config` at configure time, and the patches
+applied (`libmspub 0.1.4 patched: 0000-include-cstdint,0001-pass-lists-through`).
+Record that output alongside any conversion result: the parser's behaviour
+is largely libmspub's behaviour.
 
 ### Licence notices
 
-This parser links libmspub and librevenge dynamically and does not modify
-or redistribute their source. Both are available under the Mozilla Public
+This parser links libmspub and librevenge dynamically. libmspub is modified
+by the patches above, which are published here under libmspub's own MPL-2.0;
+the repository carries no other part of either library's source. Both are available under the Mozilla Public
 Licence 2.0; librevenge is additionally available under the LGPL 2.1 or
 later. A distribution that ships the binaries (the container image does)
 must carry their licence texts. The parser's own code is MIT, like the
@@ -155,9 +166,13 @@ derived from a Publisher document.
 ## Building
 
 ```bash
-sudo apt-get install -y build-essential cmake pkg-config libmspub-dev librevenge-dev
+sudo apt-get install -y build-essential cmake pkg-config patch curl xz-utils \
+  librevenge-dev libicu-dev libboost-dev zlib1g-dev
+sh native/pub-parser/libmspub/build.sh "$HOME/.local/libmspub"
 cd native/pub-parser
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+PKG_CONFIG_PATH="$HOME/.local/libmspub/lib/pkgconfig" \
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DPUBIR_LIBMSPUB_PATCHES="$(ls libmspub/patches | sed 's/\.patch$//' | paste -sd, -)"
 cmake --build build --parallel
 ```
 

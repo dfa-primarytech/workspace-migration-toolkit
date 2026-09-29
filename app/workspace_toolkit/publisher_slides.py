@@ -416,6 +416,11 @@ def text_requests(
         where["cellLocation"] = cell
     total = utf16(whole)
     requests: list[dict] = [{"insertText": {**where, "insertionIndex": 0, "text": whole}}]
+    # Lists before any paragraph style: Slides sets its own indents when it
+    # makes a list, and Publisher's hanging indents must be the ones that stay.
+    bullets, more = list_requests(where, paragraphs, laid)
+    requests += bullets
+    notes += more
     position = 0
     for number, (paragraph, pieces) in enumerate(zip(paragraphs, laid, strict=True)):
         start = position
@@ -455,6 +460,101 @@ def text_requests(
             )
         position += 1  # the paragraph break
     return requests, _unique(notes)
+
+
+# Publisher's list numbering (libmspub's NumberingType, and NumberingDelimiter,
+# which arrives in the value's upper half), as the nearest Slides list preset.
+# Slides presets set every level; only the first is used here.
+NUMBERED = {
+    (0, 2): "NUMBERED_DIGIT_ALPHA_ROMAN",  # 1.
+    (0, 0): "NUMBERED_DIGIT_ALPHA_ROMAN_PARENS",  # 1)
+    (0, -1): "NUMBERED_DIGIT_ALPHA_ROMAN",
+    (1, 2): "NUMBERED_UPPERROMAN_UPPERALPHA_DIGIT",  # I.
+    (3, 2): "NUMBERED_UPPERALPHA_ALPHA_ROMAN",  # A.
+}
+DOTS = {0x2022, 0x00B7, 0xF0B7, 0x25CF}  # •, and Symbol's • at 0xB7 and 0xF0B7
+BULLETED = "BULLET_DISC_CIRCLE_SQUARE"
+
+
+def _list_of(paragraph: dict) -> tuple[str, str | None] | None:
+    """A paragraph's list as (Slides preset, a note if approximated), or None."""
+    props = paragraph.get("sourceProperties") or {}
+    kind = props.get("librevenge:list-type")
+    if kind == "unordered":
+        bullet = _int(props.get("librevenge:bullet-codepoint"))
+        return BULLETED, None if bullet in DOTS or bullet is None else "list-bullet-dot"
+    if kind == "ordered":
+        numbering = _int(props.get("librevenge:numbering-type")) or 0
+        delimiter = _int(props.get("librevenge:numbering-delimiter"))
+        if delimiter is None:
+            delimiter = -1
+        elif delimiter > 0xFFFF:
+            delimiter >>= 16
+        preset = NUMBERED.get((numbering, delimiter))
+        return (preset, None) if preset else ("NUMBERED_DIGIT_ALPHA_ROMAN", "list-numbers-digits")
+    return None
+
+
+def _int(value: object) -> int | None:
+    try:
+        return int(str(value)) if value is not None else None
+    except ValueError:
+        return None
+
+
+def list_requests(
+    where: dict[str, object], paragraphs: list[dict], laid: list[list[tuple[str, dict]]]
+) -> tuple[list[dict], list[dict]]:
+    """One Slides list for each run of consecutive list paragraphs of one kind.
+
+    A run is broken by any other paragraph, so separate lists restart at 1, as
+    they do in Publisher. Slides can't start a list at another number; a list
+    that did is reported.
+    """
+    requests: list[dict] = []
+    notes: list[dict] = []
+    position = 0
+    run: tuple[str, int, int] | None = None  # preset, start, end
+
+    def close() -> None:
+        nonlocal run
+        if run is not None:
+            preset, start, end = run
+            requests.append(
+                {
+                    "createParagraphBullets": {
+                        **where,
+                        "textRange": {"type": "FIXED_RANGE", "startIndex": start, "endIndex": end},
+                        "bulletPreset": preset,
+                    }
+                }
+            )
+        run = None
+
+    for paragraph, pieces in zip(paragraphs, laid, strict=True):
+        length = sum(utf16(text) for text, _ in pieces)
+        found = _list_of(paragraph) if length else None
+        if found is None:
+            close()
+        else:
+            preset, approximated = found
+            if approximated == "list-bullet-dot":
+                notes.append(note(approximated, "A list's own bullet symbol is shown as a dot."))
+            elif approximated:
+                notes.append(note(approximated, "A list's numbering is shown as 1, 2, 3."))
+            start_value = _int((paragraph.get("sourceProperties") or {}).get("text:start-value"))
+            if start_value and start_value > 1 and run is None:
+                notes.append(
+                    note("list-restart", "A list that started at a later number starts at 1.")
+                )
+            if run is not None and run[0] == preset:
+                run = (preset, run[1], position + length)
+            else:
+                close()
+                run = (preset, position, position + length)
+        position += length + 1
+    close()
+    return requests, notes
 
 
 def _indent(style: dict, fields: list[str], start: float, end: float) -> None:
@@ -1439,6 +1539,7 @@ KNOWN = {
     "updateTableRowProperties",
     "updateTableCellProperties",
     "updateTableBorderProperties",
+    "createParagraphBullets",
     "mergeTableCells",
     "groupObjects",
 }
@@ -1509,11 +1610,11 @@ def check(plan_: Plan, *, existing: Iterable[str] = (), bound: bool = False) -> 
             if body["insertionIndex"] > lengths.get(key, 0):
                 problems.append(f"#{number}: text inserted past the end")
             lengths[key] = lengths.get(key, 0) + utf16(body["text"])
-        elif kind in {"updateTextStyle", "updateParagraphStyle"}:
+        elif kind in {"updateTextStyle", "updateParagraphStyle", "createParagraphBullets"}:
             text_range = body["textRange"]
             start, end = text_range["startIndex"], text_range["endIndex"]
             if not 0 <= start < end <= lengths.get(key, 0):
                 problems.append(f"#{number}: range {start}-{end} outside {lengths.get(key, 0)}")
-            if not body.get("fields"):
+            if kind != "createParagraphBullets" and not body.get("fields"):
                 problems.append(f"#{number}: no fields")
     return problems

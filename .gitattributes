@@ -1,0 +1,3 @@
+# Built on Linux: a carriage return breaks `patch` and the shell.
+native/pub-parser/libmspub/** text eol=lf
+*.sh text eol=lf

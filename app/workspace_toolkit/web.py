@@ -328,7 +328,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 )
 
                             manifest = await preflight(
-                                root, settings, pipeline.fmt, compress_pictures=smaller
+                                root,
+                                settings,
+                                pipeline.fmt,
+                                compress_pictures=smaller,
+                                check_only=not do_convert,
                             )
                             # What Google receives: for a deck, without its video.
                             sent = root / "result" / ("converted" + pipeline.fmt.suffix)

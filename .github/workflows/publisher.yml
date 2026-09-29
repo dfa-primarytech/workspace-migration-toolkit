@@ -59,11 +59,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install libmspub and librevenge
+      - name: Install librevenge and libmspub's build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            build-essential cmake pkg-config libmspub-dev librevenge-dev
+            build-essential cmake pkg-config patch curl xz-utils \
+            librevenge-dev libicu-dev libboost-dev zlib1g-dev
+
+      - name: Build the patched libmspub
+        # libmspub 0.1.4 from LibreOffice's tarball, checked against its
+        # SHA-256, with native/pub-parser/libmspub/patches applied.
+        run: |
+          sh native/pub-parser/libmspub/build.sh "$RUNNER_TEMP/libmspub"
+          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/libmspub/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Record the tested library versions
         # The parser's behaviour is the behaviour of these two libraries,
@@ -74,14 +82,15 @@ jobs:
             echo
             echo "| Library | Version |"
             echo "| --- | --- |"
-            echo "| libmspub | $(pkg-config --modversion libmspub-0.1) |"
+            echo "| libmspub | $(pkg-config --modversion libmspub-0.1), patched: $(ls native/pub-parser/libmspub/patches | sed 's/\.patch$//' | paste -sd, -) |"
             echo "| librevenge | $(pkg-config --modversion librevenge-0.0) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Configure and build
         working-directory: native/pub-parser
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DPUBIR_LIBMSPUB_PATCHES="$(ls libmspub/patches | sed 's/\.patch$//' | paste -sd, -)"
           cmake --build build --parallel
 
       - name: Unit tests
