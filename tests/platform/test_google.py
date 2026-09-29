@@ -806,3 +806,13 @@ def test_the_library_search_survives_one_throttled_reply(monkeypatch):
     calls = asyncio.run(run())
     assert [c.method for c in calls] == ["GET", "GET", "POST"]
     assert json_body(calls[-1])["parents"] == ["library-1"]
+
+
+def test_a_stopped_conversion_says_why_in_one_line():
+    from workspace_toolkit.errors import ToolkitError
+    from workspace_toolkit.google import failed
+
+    report = {"folderUrl": "https://drive.google.com/drive/folders/x", "warnings": []}
+    failed(report, ToolkitError("picture_delivery_failed", "Pictures could not be sent.", 502))
+    assert report["status"] == "failed_with_partial_outputs"
+    assert report["stoppedBecause"] == "Pictures could not be sent."

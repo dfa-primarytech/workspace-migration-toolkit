@@ -132,7 +132,8 @@ async function convertAll() {
         const folder = report.folderUrl && link(report.folderUrl, 'Folder');
         if (report.status && report.status.startsWith('failed')) {
           failed += 1;
-          src.row.replaceChildren('Didn’t finish. ', ...(folder ? [folder] : []));
+          const why = report.stoppedBecause ? `Didn’t finish: ${report.stoppedBecause} ` : 'Didn’t finish. ';
+          src.row.replaceChildren(why, ...(folder ? [folder] : []));
         } else {
           done += 1;
           src.row.replaceChildren(...[open, folder].filter(Boolean).flatMap((a, i) => i ? [' · ', a] : [a]));
