@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import time
 import zipfile
 from dataclasses import replace
 
@@ -11,7 +9,7 @@ from workspace_toolkit.batch import FileStatus, WorkbookJob, plan
 from workspace_toolkit.config import Settings
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.google import Google
-from workspace_toolkit.jobs import preflight, sweep_stale_workspaces
+from workspace_toolkit.jobs import preflight
 from workspace_toolkit.package import CONTENT_NS, REL_NS, XLSM, XLSX, Package
 from workspace_toolkit.pipelines import resolve
 from workspace_toolkit.sheets import SHEETS_MIME, convert
@@ -25,8 +23,10 @@ def workbook_parts(
     long_text="",
     external_target=None,
     features=(),
+    far_cell=None,
 ):
     fmt = XLSM if suffix == ".xlsm" else XLSX
+    extra_cell = f'<c r="{far_cell}"><v>1</v></c>' if far_cell else ""
     overrides = [
         f'<Override PartName="/xl/workbook.xml" ContentType="{fmt.main_mime}"/>',
         '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
@@ -37,7 +37,7 @@ def workbook_parts(
         "_rels/.rels": f'<Relationships xmlns="{REL_NS}"><Relationship Id="root" Type="{NS["r"]}/officeDocument" Target="xl/workbook.xml"/></Relationships>',
         "xl/workbook.xml": f'<workbook xmlns="{NS["x"]}" xmlns:r="{NS["r"]}"><sheets><sheet name="Class data" sheetId="1" r:id="sheet"/></sheets></workbook>',
         "xl/_rels/workbook.xml.rels": f'<Relationships xmlns="{REL_NS}"><Relationship Id="sheet" Type="{NS["r"]}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
-        "xl/worksheets/sheet1.xml": f'<worksheet xmlns="{NS["x"]}"><dimension ref="A1:{dimension}"/><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><f>SUM(1,2)</f><v>3</v></c><c r="C1" t="e"><f>1/0</f><v>#DIV/0!</v></c></row></sheetData><mergeCells><mergeCell ref="A2:B2"/></mergeCells><conditionalFormatting sqref="A1"/><dataValidations count="1"><dataValidation sqref="A1"/></dataValidations></worksheet>',
+        "xl/worksheets/sheet1.xml": f'<worksheet xmlns="{NS["x"]}"><dimension ref="A1:{dimension}"/><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><f>SUM(1,2)</f><v>3</v></c><c r="C1" t="e"><f>1/0</f><v>#DIV/0!</v></c>{extra_cell}</row></sheetData><mergeCells><mergeCell ref="A2:B2"/></mergeCells><conditionalFormatting sqref="A1"/><dataValidations count="1"><dataValidation sqref="A1"/></dataValidations></worksheet>',
         "xl/sharedStrings.xml": f'<sst xmlns="{NS["x"]}"><si><t>{long_text or "private classroom value"}</t></si></sst>',
     }
     if external_target:
@@ -107,6 +107,7 @@ def test_google_limits_and_unsupported_features_escalate(tmp_path):
     source = write_workbook(
         tmp_path / "source.xlsm",
         dimension="XFD1000",
+        far_cell="XFD1000",
         long_text=long_text,
         features=("pivot", "query", "connections", "forms", "activex", "embedded", "chart"),
     )
@@ -129,9 +130,22 @@ def test_google_limits_and_unsupported_features_escalate(tmp_path):
     assert "VBA-private-source" not in json.dumps(manifest)
 
 
+def test_stale_declared_extent_is_reported_without_blocking_import(tmp_path):
+    source = write_workbook(tmp_path / "source.xlsx", dimension="XFD1048576")
+    manifest = analyse(source, tmp_path / "result")
+
+    assert manifest["inventory"]["totalGridCells"] == 3
+    assert manifest["inventory"]["declaredGridCells"] == 17_179_869_184
+    assert {item["code"] for item in manifest["warnings"]} >= {"declared_extent_needs_review"}
+    assert analysis_report(manifest)["migrationTier"] == "converted_with_review"
+
+
 def test_column_limit_and_external_target_inventory_are_redacted(tmp_path):
     source = write_workbook(
-        tmp_path / "source.xlsx", dimension="ZZZZ1", external_target="Other%20Class.xlsx"
+        tmp_path / "source.xlsx",
+        dimension="ZZZZ1",
+        external_target="Other%20Class.xlsx",
+        far_cell="ZZZZ1",
     )
     manifest = analyse(source, tmp_path / "result")
     assert manifest["externalWorkbookTargets"] == ["Other Class.xlsx"]
@@ -260,16 +274,3 @@ def test_macro_workbook_is_archived_but_not_imported(tmp_path):
     assert report["status"] == "manual_migration_required"
     assert google.uploads[0][0] == "source.xlsm"
     assert all(not kwargs.get("convert") for _, _, kwargs in google.uploads)
-
-
-def test_stale_workspace_sweeper_only_removes_old_matching_directories(tmp_path):
-    old = tmp_path / "wmt-old"
-    fresh = tmp_path / "wmt-fresh"
-    unrelated = tmp_path / "other"
-    for path in (old, fresh, unrelated):
-        path.mkdir()
-    now = time.time()
-    os.utime(old, (now - 1000, now - 1000))
-    assert sweep_stale_workspaces(replace(Settings(), temp_dir=str(tmp_path)), 100, now) == 1
-    assert not old.exists()
-    assert fresh.exists() and unrelated.exists()

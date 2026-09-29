@@ -137,7 +137,8 @@ def test_chart_sheet_is_inventoried_and_preserved_with_a_review_warning(tmp_path
     assert report["migrationTier"] == "converted_with_review"
     finding = next(w for w in report["warnings"] if w["code"] == "chart_sheet_needs_review")
     assert finding["classification"] == "UNSUPPORTED"
-    assert finding["sheetIndex"] == manifest["sheets"][1]["index"]
+    assert finding["sheetIndex"] == 1
+    assert [sheet["index"] for sheet in manifest["sheets"]] == [0, 1]
     assert "Chart overview" not in json.dumps(report)
     assert (tmp_path / "result/converted.xlsx").read_bytes() == source.read_bytes()
 

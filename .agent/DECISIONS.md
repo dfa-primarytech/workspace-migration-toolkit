@@ -339,3 +339,19 @@ for verification/dependency matching. Web workspaces are temporary; CLI output
 retains the manifest and must be treated as document data. Reports omit those
 names, values, formula expressions and macro source. The earlier content-free,
 ephemeral-only manifest wording was inaccurate and is superseded here.
+
+## 2026-09-29: XLSX extent, indexes and abandoned workspace cleanup
+
+Google's workbook cell-limit preflight uses the bounding extent of actual `<c>`
+cell references, not SpreadsheetML's cached `<dimension>`. Some exporters leave
+that cache at the full Excel grid after cells are removed, causing a false hard
+block. Keep the declared extent as a separate diagnostic: when it alone exceeds
+Google's limit, report `declared_extent_needs_review` and allow native import.
+
+XLSX sheet indexes are zero-based, matching other toolkit manifests and list/API
+positions. User-facing messages may describe ordinal sheet numbers separately.
+
+Remove the uncalled stale-workspace sweeper. The context manager still removes
+normal request workspaces. Cleanup after process or host termination belongs to
+the deployment's ephemeral-storage lifecycle; an application helper that no
+startup or scheduler invokes creates a false cleanup guarantee.

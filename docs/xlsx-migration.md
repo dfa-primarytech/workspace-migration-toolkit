@@ -38,7 +38,12 @@ implemented and tested.
 
 Preflight enforces the package's compressed and expanded ZIP limits and checks
 the Google Sheets limits of 10 million cells per spreadsheet, 18,278 columns
-and 50,000 characters per cell. It inventories formulas by storage type,
+and 50,000 characters per cell. Grid-size checks use the furthest actual cell
+reference in each worksheet rather than SpreadsheetML's cached `<dimension>`,
+which exporters can leave at the full Excel grid after content is removed. The
+declared extent is retained separately; an over-limit declaration with an
+in-limit observed extent produces an explicit review finding instead of blocking
+conversion. It inventories formulas by storage type,
 formula error cells, charts, pivots, queries, connections, controls, embedded
 objects, protection, hidden sheets, defined names and external workbook links.
 
@@ -70,6 +75,8 @@ also inventoried and preserved. They require manual migration even without a VBA
 project. Macro-sheet automation is never executed or translated. These are
 `UNSUPPORTED`, not `IGNORED`: the tool cannot safely represent their behaviour.
 Missing, external or mismatched sheet references still produce explicit errors.
+Sheet indexes in manifests and findings are zero-based, matching the other source
+formats and API-facing collections in the toolkit.
 
 The sheet kinds follow Microsoft's
 [SpreadsheetML sheet documentation](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-sheets)
@@ -96,8 +103,8 @@ transpilation is out of scope.
 4. The returned and uploaded report contains counts, statuses and review
    findings only.
 5. The workspace context deletes all local source, manifest and worker output
-   on success or failure. `sweep_stale_workspaces` is an explicit startup or
-   scheduled hook for directories left by a terminated process.
+on success or failure. Crash recovery for directories left by a terminated
+process belongs to deployment-level temporary-storage lifecycle management.
 
 Operational logs contain job ID, file type, duration and error code only. They
 must never contain filenames, worksheet names, cell values, formulas or macro
@@ -105,8 +112,7 @@ source.
 
 ## Issue #51 follow-ups
 
-The upload-path crash, non-worksheet rejection and conflict with main are fixed.
-The manifest's retained names are documented above. Remaining audit items are the
-dimension-based cell-limit estimate (which can overstate a workbook's extent),
-one-based sheet indexes, and integrating or removing the unused stale-workspace
-sweeper. These are not claimed fixed by the upload/chart-sheet regression tests.
+The upload-path crash, non-worksheet rejection, manifest privacy wording,
+dimension-based cell-limit false positive and one-based sheet indexes are fixed.
+The unused stale-workspace sweeper and its isolated test were removed; terminated
+process cleanup is a deployment concern rather than an uncalled application hook.
