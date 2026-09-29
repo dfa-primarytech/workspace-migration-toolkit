@@ -1,20 +1,22 @@
 """Fitting a Publisher text frame's text inside its box, in the font Slides uses.
 
 Publisher sized every frame to its text in the original font. A substituted
-font takes different room: Andika, which replaces Sassoon Primary, sets lines
-1.61 times its size apart where most fonts use about 1.2, and its letters are
-wider. So text written into the same box runs past it: off the page, or under
-the picture beside it. PUB-001's live run showed both.
+font takes different room: Andika, which replaces Sassoon Primary, has wider
+letters, so the same text wraps onto more lines and runs past its box, off the
+page or under the picture beside it. PUB-001's live run showed both.
 
 Before the requests are written, each frame is laid out here, a line at a
 time, with the font's real advance widths and vertical metrics (extracted by
 scripts/font_metrics.py, so no font file ships). If it would overflow:
 
-1. tighten the line spacing, no further than about 1.2 times the font size,
-   a normal single spacing; Andika's extra height is room for stacked
-   accents that English text does not use;
+1. tighten the line spacing a little, to no less than SPACING_FLOOR;
 2. only then make the text smaller, evenly, and never below MIN_SCALE,
    because size matters more than spacing to a young reader.
+
+Google lays lines out 1.2 times the font size apart at 100% spacing, whatever
+the font: measured on the live PUB-001 slides (2026-09-29), not the 1.61 that
+Andika's own metrics give. Its space inside a text box measured 7.2 pt at the
+sides, PowerPoint's 0.1 inch.
 
 Every change is reported. A frame that still overflows is reported too. The
 layout is an estimate, not Google's own: it keeps a margin, and a frame in a
@@ -31,13 +33,14 @@ from pathlib import Path
 from .fonts import normalise_family
 
 METRICS = Path(__file__).parent / "font_metrics"
-# Google's space inside a text box, assumed to be PowerPoint's default
-# (0.1 in at the sides, 0.05 in above and below): the API does not expose it.
+# Google's space inside a text box: 7.2 pt at the sides, measured live; above
+# and below assumed to be PowerPoint's 0.05 in. The API exposes neither.
 INSET_X = 7.2
 INSET_Y = 3.6
+LINE = 1.2  # Google's line height at 100% spacing, in ems: measured live
 TAB = 36.0  # points to the next default tab stop, half an inch
 SAFETY = 0.97  # of the room available: the layout is an estimate
-SINGLE = 1.2  # a normal single line spacing, in ems
+SPACING_FLOOR = 90  # percent: closer than this and lines start to crowd
 SPACING_STEP = 5  # percent
 SCALE_STEP = 0.05
 MIN_SCALE = 0.75
@@ -95,9 +98,14 @@ def measurable(family: str | None) -> bool:
 
 
 def em(family: str) -> float:
-    """The font's own line height, in ems."""
+    """The font's own line height, in ems (for reference: Google does not use it)."""
     data = known(family)
     return (data["ascent"] + data["descent"] + data["lineGap"]) / data["unitsPerEm"]
+
+
+def sized(size: float, scale: float) -> float:
+    """A font size as Slides receives it: scaled, to the nearest half point."""
+    return size if scale == 1.0 else round(size * scale * 2) / 2
 
 
 def advance(ch: str, style: Style, scale: float) -> float:
@@ -109,16 +117,23 @@ def advance(ch: str, style: Style, scale: float) -> float:
         {"": "regular", "bold": "bold", "Italic": "italic"}.get(key, "boldItalic")
     ]
     units = table["widths"].get(ord(ch), table["average"])
-    return units / data["unitsPerEm"] * style.size * scale
+    return units / data["unitsPerEm"] * sized(style.size, scale)
 
 
 def _pitch(styles: list[Style], spacing: float, scale: float) -> float:
-    return max(s.size * scale * em(s.family or "") for s in styles) * spacing / 100
+    return max(sized(s.size, scale) for s in styles) * LINE * spacing / 100
 
 
 def height(paras: list[Para], width: float, spacing: float | None, scale: float) -> float:
     """How tall the frame's text lays out, greedily wrapping at spaces."""
-    total = 0.0
+    return sum(pitch for _, pitch in layout(paras, width, spacing, scale))
+
+
+def layout(
+    paras: list[Para], width: float, spacing: float | None, scale: float
+) -> list[tuple[str, float]]:
+    """Each line the text wraps to, as (kind, height): "line" or "space"."""
+    out: list[tuple[str, float]] = []
     for para in paras:
         own = para.line_spacing or 100.0
         used = min(own, spacing) if spacing is not None else own
@@ -156,9 +171,12 @@ def height(paras: list[Para], width: float, spacing: float | None, scale: float)
                 lines.append(word_styles[:-1] or [style])
                 word, word_styles = size, [style]
                 room = width - para.indent_start - para.indent_end
-        total += para.space_above + para.space_below
-        total += sum(_pitch(styles, used, scale) for styles in lines)
-    return total
+        if para.space_above:
+            out.append(("space", para.space_above))
+        out += [("line", _pitch(styles, used, scale)) for styles in lines]
+        if para.space_below:
+            out.append(("space", para.space_below))
+    return out
 
 
 def fit(paras: list[Para], box_width: float, box_height: float) -> Fit | None:
@@ -171,7 +189,7 @@ def fit(paras: list[Para], box_width: float, box_height: float) -> Fit | None:
     natural = height(paras, width, None, 1.0)
     if natural <= room:
         return Fit(height=natural)
-    floor = min(round(SINGLE / max(em(s.family or "") for s in styles) * 100), 100)
+    floor = SPACING_FLOOR
     spacing = 100
     while spacing - SPACING_STEP >= floor:
         spacing -= SPACING_STEP
@@ -205,8 +223,7 @@ def fit(paras: list[Para], box_width: float, box_height: float) -> Fit | None:
 def _tightened() -> dict:
     return {
         "code": "text-spacing-tightened",
-        "message": "Lines were set closer together so the text fits its box, as it did "
-        "in the original font.",
+        "message": "Lines were set a little closer together so the text fits its box.",
     }
 
 

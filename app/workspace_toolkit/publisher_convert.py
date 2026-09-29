@@ -266,18 +266,22 @@ def page_size_note(plan: Plan, presentation: dict) -> dict | None:
 
 
 def summarise(plan: Plan) -> list[dict]:
-    """The plan's per-element notes, one line per kind, for people to read."""
-    grouped: dict[str, dict] = {}
+    """The plan's per-element notes, one line per distinct note, for people to read.
+
+    Grouped by wording, not only by kind: "made smaller (to 90%)" and "(to 95%)"
+    are different things to have happened to a page.
+    """
+    grouped: dict[tuple[str, str], dict] = {}
     for line in plan.report.get("elements", []):
         for item in line.get("notes", []):
             entry = grouped.setdefault(
-                item["code"],
+                (item["code"], item["message"]),
                 {"message": item["message"], "status": line["status"], "pages": set(), "count": 0},
             )
             entry["count"] += 1
             entry["pages"].add(line["pageIndex"] + 1)
     result = []
-    for code, entry in grouped.items():
+    for (code, _), entry in grouped.items():
         pages = ", ".join(str(p) for p in sorted(entry["pages"]))
         result.append(
             warning(

@@ -74,15 +74,27 @@ draws them the same way. Publisher probably cropped them, and libmspub
 - **Table borders** are not described by the reader, so Google's default borders are used.
 - **Exact line spacing** has no Slides equivalent; percentage spacing is kept.
 - **Page size (§14), settled live.** `presentations.create` accepts a `pageSize` and ignores it: A5 came back as 720 × 405 pt. The presentation is therefore made by importing an empty PowerPoint deck of the publication's size (`publisher_deck.py`), which Google keeps. The size is still read back and reported if it differs.
-- **Text is fitted to its box** (`publisher_fit.py`). Publisher sized each frame for its original font. Andika, which replaces Sassoon, spaces lines 1.61 times its size apart (most fonts use about 1.2), and its letters are wider. So the same text ran off PUB-001's pages and under the frog on page 2.
+- **Text is fitted to its box** (`publisher_fit.py`). Publisher sized each frame for its original font. Andika, which replaces Sassoon, has wider letters, so the same text wraps onto more lines. On the first live run it ran off pages 2 and 3, and under the frog on page 2.
 
-  Each frame is laid out beforehand with Andika's real measurements (`font_metrics/andika.json`, extracted by `scripts/font_metrics.py`; no font file ships):
-  - if it would overflow, its line spacing is tightened, no further than 1.2 times the font size;
+  Each frame is laid out beforehand with Andika's real advance widths (`font_metrics/andika.json`, extracted by `scripts/font_metrics.py`; no font file ships), in Google's own line geometry. If it would overflow:
+  - its line spacing is tightened, to no less than 90%;
   - only then are its sizes reduced, evenly, to no less than 75%.
 
-  Each change is reported, and so is text that still won't fit. It's an estimate: Google's text insets are assumed to be PowerPoint's (0.1 in at the sides, 0.05 in above and below), and a 3% margin is kept. A frame in a font without measurements is left alone.
+  Each change is reported, and so is text that still won't fit. A frame in a font without measurements is left alone.
 
-  On PUB-001: page 2 gets 74% spacing and 90% size (12 pt becomes 11 pt), page 3 gets 74% and 95%, and the web address on page 4 gets 74% and 90%. The rest need nothing.
+  **Google's geometry, measured on the live slides (2026-09-29):**
+  - lines are **1.2 times the font size** apart at 100% spacing, whatever the font; Andika's own metrics say 1.61, and Google ignores them;
+  - the text box's inner margin is **7.2 pt at the sides**.
+
+  With those numbers the estimate for PUB-001's page 2 landed within 2 pt of where Google put the last line.
+
+  On PUB-001:
+  - pages 2 and 3 keep their 12 pt text, with lines 10% and 5% closer;
+  - the web address on page 4 goes to 85% so it stays on one line;
+  - everything else fits as it is.
+
+  In Google, page 2's text ends at 554 pt and page 3's at 548 pt, both inside their 591 pt boxes on a 595 pt page.
+- **Hand-made line breaks.** Where an author pressed Enter mid-sentence to steer text around a picture, the break was placed for the original font. In Andika the last word can land on a line of its own (PUB-001 page 3). These breaks are part of the document, so they're kept.
 
 ## Evidence
 

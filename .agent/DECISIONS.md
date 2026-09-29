@@ -373,22 +373,25 @@ names, values, formula expressions and macro source. The earlier content-free,
 ephemeral-only manifest wording was inaccurate and is superseded here.
 
 ## 2026-09-29: Fit substituted text to its frame: spacing first, then size
-The live run showed Andika text running off the page. Andika's line height
-is 1.61 em, against about 1.2 for most fonts (including, by the look of the
-original, Sassoon), and its letters are wider. Each text frame is now laid out
-offline with Andika's real measurements before the requests are written.
+The live run showed Andika text running off PUB-001's pages. Andika's
+letters are wider than Sassoon's, so the same text wraps onto more lines.
+Each text frame is now laid out offline with Andika's real advance widths
+before the requests are written.
 
-- **Line spacing is tightened first**, to no less than 1.2 em. Andika's extra
-  height is room for stacked accents that English text does not use, and
-  young readers need the letters large more than the lines far apart.
-- **Only then is the text made smaller**, evenly across the frame, to no
-  less than 75%, rounded to half points.
+- **Google's own geometry, measured, not the font's.** On the live slides,
+  Google spaced lines 1.2 times the font size apart at 100% (Andika's
+  metrics say 1.61), and kept 7.2 pt inside the box at the sides. A first
+  version used the font's 1.61 and overcorrected. The first version was
+  measured, fixed and re-run the same day: page 2's last line then landed
+  within 2 pt of the estimate.
+- **Line spacing is tightened first**, to no less than 90%, then **the text
+  is made smaller**, evenly, to no less than 75%, rounded to half points.
+  Young readers need the letters large more than the lines far apart.
 - **Every change is reported per frame**, and so is text that still won't fit.
   A font without shipped measurements is left untouched.
 - **Measurements, not fonts.** `scripts/font_metrics.py` extracts advance
-  widths and line metrics from Google Fonts' files into JSON. No font binary
-  enters the repository.
-- **Google's text insets are assumed** to be PowerPoint's defaults, because
-  the API doesn't expose them. A 3% margin covers the estimate until a live
-  run confirms it.
+  widths from Google Fonts' files into JSON. No font binary enters the
+  repository.
+- **Hand-made line breaks are kept**, even where the new font leaves a word
+  on its own line: they are the author's.
 

@@ -2,31 +2,34 @@
 
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-29
-- Branch: `feat/publisher-text-fit`, based on main `43155f3` (#92 merged)
+- Branch: `feat/publisher-text-fit`, based on main `43155f3` (#92 merged), PR #93
 - Objective: fit substituted text inside its frame. PUB-001's live run showed Andika text running off pages 2 and 3, and under the frog on page 2.
 - Files changed:
-  - `publisher_fit.py` (new: layout with real font measurements; spacing, then size);
+  - `publisher_fit.py` (new: layout with Andika's real widths in Google's measured line geometry; spacing, then size);
   - `publisher_slides.py` (`measured`, `text_requests(fitted=)`, sizes scaled to half points);
-  - `font_metrics/andika.json` and its README (new: Andika's numbers only, no font file);
+  - `publisher_convert.py` (the summary groups notes by wording, so different percentages aren't merged);
+  - `font_metrics/andika.json` and its README (new: numbers only, no font file);
   - `scripts/font_metrics.py` (new: the extractor, run by hand with fontTools);
   - `pyproject.toml` (package data);
-  - `tests/platform/test_publisher_fit.py` (new, 8 tests);
+  - tests `test_publisher_fit.py` (new, 10) and `test_publisher_convert.py`;
   - `docs/publisher-renderer.md`, DECISIONS.md, this file.
 - Completed:
-  - Each text frame whose fonts have measurements is laid out before sending. If it overflows, line spacing is tightened (to no less than 1.2 em), then the size is reduced (to no less than 75%), and both are reported.
-  - On PUB-001: page 2 gets 74% spacing and 90% size, page 3 gets 74% and 95%, and page 4's web address gets 74% and 90%.
+  - **Verified live with PUB-001, three runs on 2026-09-29.** The first fitting used Andika's own line height (1.61 em) and overcorrected.
+  - Measuring the rendered slide in the Slides editor showed Google uses 1.2 em and a 7.2 pt side inset. With those, page 2's last line landed within 2 pt of the estimate.
+  - Final result: pages 2 and 3 keep 12 pt with lines 10% and 5% closer; their text ends at 554 and 548 pt, inside 591 pt boxes. Page 4's web address goes to 85%.
 - Checks:
-  - Linux (host, app user, PUB-001 supplied): 469 passed, 11 skipped. The rebuilt image contains the metrics file.
+  - Windows: the Publisher tests pass (66). Linux (host): the full suite passed before calibration (469). The calibrated build ran live.
   - Ruff and mypy clean.
 - Known failures: none.
 - Unresolved:
-  - **Not yet seen on Google.** The layout is an estimate: Google's text insets are assumed. The next live run should confirm pages 2 and 3 now fit, and whether the 3% margin is right.
-  - Still open from the live run: default table borders, and stretched pictures (the crop investigation).
+  - Default table borders (the original had none).
+  - Stretched pictures (the crop investigation).
+  - Hand-made line breaks can leave one word on a line in the new font. This is kept deliberately.
 - Decisions: DECISIONS.md, 2026-09-29 (fit substituted text).
-- Next task: a live run to confirm the fit (the human mints a fresh one-hour token). Then the table borders, and the crop investigation.
+- Next task: merge #93 on approval; then the table borders, and the crop investigation.
 - Warnings:
-  - CT 203 still holds `/root/wmt-test/live`, containing the OAuth client secret and an expired picture token (root-only). The app container `wmt-test-live` is still running. Both stay only while live testing continues.
-  - The image `wmt-test/app:pub4` has this branch's code.
+  - CT 203: `/root/wmt-test/live` holds the OAuth client secret and a picture token that expires at 13:23 UTC, root-only. The container `wmt-test-live` is running. Remove both when live testing ends.
+  - `wmt-test/app:pub3` and `:pub4` hold this branch's build.
 
 ---
 

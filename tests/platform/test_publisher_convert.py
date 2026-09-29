@@ -546,3 +546,29 @@ def test_the_blank_deck_is_a_valid_package_of_the_right_size():
     assert '<p:sldSz cx="5346000" cy="7560000"/>' in package.read("ppt/presentation.xml").decode()
     huge = zipfile.ZipFile(io.BytesIO(blank_deck(99999, 99999)))
     assert f'cx="{MAX_EMU}"' in huge.read("ppt/presentation.xml").decode()  # PowerPoint's limit
+
+
+def test_the_summary_keeps_notes_that_differ_only_in_their_numbers():
+    from workspace_toolkit.publisher_convert import summarise
+    from workspace_toolkit.publisher_slides import Plan
+
+    def line(page, message):
+        return {
+            "pageIndex": page,
+            "status": "SUBSTITUTED",
+            "notes": [{"code": "text-made-smaller", "message": message}],
+        }
+
+    report = {
+        "elements": [
+            line(1, "Smaller (to 90%)."),
+            line(2, "Smaller (to 95%)."),
+            line(3, "Smaller (to 90%)."),
+        ],
+        "warnings": [],
+    }
+    notes = summarise(Plan({}, [], [], {}, [], report))
+    assert sorted(n["message"] for n in notes) == [
+        "Smaller (to 90%). (2 on page 2, 4)",
+        "Smaller (to 95%). (1 on page 3)",
+    ]
