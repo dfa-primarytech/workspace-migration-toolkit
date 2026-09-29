@@ -445,6 +445,23 @@ the flow for editing) or leaving the overlaps.
   a picture across more than 60% of the line stays over the text.
 - Verified live on PUB-001, pages 2 and 3.
 
+## 2026-09-29: WordArt is recovered as editable text
+The human compared PUB-001 in Publisher with the conversion. The title
+"Early Reading at St.Vincent's" is WordArt, and libmspub passes WordArt on
+only as outlines (a zero-area gradient shape and one baseline per line), so
+the conversion showed two purple lines and no words. The words, font (Sassoon
+Primary), size (44 pt), bold and colour (#8064a2) are the WordArt shape's
+Office drawing properties, in the records the crops already come from.
+
+Each WordArt is matched to its outline layer by the outline's colour, in
+drawing order, and drawn as a centred text box as large as fits. The outlines
+are left out. Effects are reported, not faked, and a WordArt with nowhere to
+go is reported with its words.
+
+Two parallel sessions built this at once in one checkout. The surviving
+module (`publisher_wordart.py`, `placed()`) is the one that reports unplaced
+WordArt, and the renderer wiring was fitted to it.
+
 ## 2026-09-29: XLSX extent, indexes and abandoned workspace cleanup
 
 Google's workbook cell-limit preflight uses the bounding extent of actual `<c>`

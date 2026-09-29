@@ -27,6 +27,7 @@ from .model import warning
 from .publisher_art import prepare
 from .publisher_crop import crops
 from .publisher_slides import plan
+from .publisher_wordart import placed as wordart_placed
 
 # What the parser's failure codes mean, in words a member of staff can act on.
 REFUSALS = {
@@ -168,6 +169,8 @@ def render_path(output: Path) -> dict:
     assets = json.loads((bundle / "assets.json").read_text(encoding="utf-8"))
     found, notes = crops(bundle, document, assets)
     prepared = prepare(document, assets, bundle, output / "art", crops=found)
+    prepared.notes += notes
+    prepared.wordart, notes = wordart_placed(bundle, document)
     prepared.notes += notes
     result = plan(document, prepared, title="Converted publication")
     data = result.as_dict(output)
