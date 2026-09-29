@@ -299,6 +299,18 @@ def paragraph_style(paragraph: dict) -> tuple[dict, list[str], list[dict]]:
     return result, fields, notes
 
 
+# Characters Slides drops or merges on insert, which would shift every text
+# range after them. The reader leaves Publisher's own paragraph mark (a
+# carriage return) at the end of each paragraph's text: found by the first live
+# run, where Google refused every page because the ranges overran the text.
+# Tabs stay, and line breaks inside a paragraph are written as vertical tabs.
+DROPPED = {chr(c) for c in range(32) if chr(c) not in "\t\u000b"} | {"\u007f"}
+
+
+def clean(text: str) -> str:
+    return "".join(ch for ch in text if ch not in DROPPED)
+
+
 def paragraph_text(paragraph: dict) -> list[tuple[str, dict]]:
     """Each run's text as Slides should receive it."""
     pieces = []
@@ -318,7 +330,7 @@ def paragraph_text(paragraph: dict) -> list[tuple[str, dict]]:
                     text += item.get("value") or " "
                 elif kind == "text":
                     text += item.get("value", "")
-        pieces.append((text.replace("\n", "\u000b"), run))
+        pieces.append((clean(text.replace("\n", "\u000b")), run))
     return pieces
 
 
@@ -1220,6 +1232,9 @@ def check(plan_: Plan, *, existing: Iterable[str] = (), bound: bool = False) -> 
             if not (0 <= cell["rowIndex"] < rows and 0 <= cell["columnIndex"] < columns):
                 problems.append(f"#{number}: cell {cell} outside the table")
         if kind == "insertText":
+            stray = {ch for ch in body["text"] if ch in DROPPED and ch != "\n"}
+            if stray:
+                problems.append(f"#{number}: text holds characters Slides drops: {sorted(stray)}")
             if body["insertionIndex"] > lengths.get(key, 0):
                 problems.append(f"#{number}: text inserted past the end")
             lengths[key] = lengths.get(key, 0) + utf16(body["text"])

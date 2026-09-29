@@ -3,8 +3,9 @@
 The worker has already parsed the file, drawn its pictures and written
 `plan.json` (publisher.render_path). This builds the presentation from it:
 
-1. create the presentation at the publication's page size, in the job's
-   folder, and read back the size Google actually gave it;
+1. create the presentation by importing an empty PowerPoint deck of the
+   publication's page size (the Slides API ignores a requested size), in the
+   job's folder, and read back the size Google actually gave it;
 2. make one blank slide per page and remove the one Google starts with;
 3. for each page: store its pictures in the bucket, sign 15-minute links,
    send the page, and delete the pictures straight away;
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -28,16 +30,20 @@ import httpx
 
 from .config import Settings
 from .errors import ToolkitError
-from .google import DRIVE, SEPARATOR, TRANSIENT, Google, clean_name, failed, save_report
+from .google import SEPARATOR, TRANSIENT, Google, clean_name, failed, save_report
 from .model import Compatibility as C
 from .model import warning
+from .package import PPTX_MIME
 from .publisher import analysis_report
+from .publisher_deck import blank_deck
 from .publisher_slides import CREATES, Plan, bind, check, missing_picture
 from .storage import Bucket, MetadataCredentials, credentials
 from .units import EMU_PER_POINT
 
 SLIDES_API = "https://slides.googleapis.com/v1/presentations"
 REFUSED_INDEX = re.compile(r"requests\[(\d+)\]")
+ANY_LINK = re.compile(r"https?://\S+")
+logger = logging.getLogger(__name__)
 ATTEMPTS = 3
 MAX_REPLACED = 20  # pictures swapped for a marked box before a page is given up
 PAGE_SIZE_TOLERANCE = 1.0  # points
@@ -46,10 +52,11 @@ PAGE_SIZE_TOLERANCE = 1.0  # points
 class Refused(Exception):
     """Slides refused a page. `index` is the request it named, if any."""
 
-    def __init__(self, status: int, index: int | None):
+    def __init__(self, status: int, index: int | None, kind: str = ""):
         super().__init__(f"HTTP {status}")
         self.status = status
         self.index = index
+        self.kind = kind  # the kind of request refused, e.g. "createImage"
 
 
 # ------------------------------------------------------------------ Google calls
@@ -91,7 +98,23 @@ async def send(google: Google, presentation: str, slide: str, requests: list[dic
             except ValueError:
                 message = ""
             found = REFUSED_INDEX.search(message)
-            raise Refused(response.status_code, int(found.group(1)) if found else None)
+            index = int(found.group(1)) if found else None
+            kind = (
+                next(iter(requests[index])) if index is not None and index < len(requests) else ""
+            )
+            # For whoever runs the server: Google's reason, without any link
+            # in it, and never in the report people see.
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "slides_refused",
+                        "status": response.status_code,
+                        "request": kind,
+                        "reason": ANY_LINK.sub("[link]", message)[:400],
+                    }
+                )
+            )
+            raise Refused(response.status_code, index, kind)
         # A lost or failed reply can still mean the batch applied: look first.
         if first and await _exists(google, presentation, slide, first):
             return
@@ -99,19 +122,6 @@ async def send(google: Google, presentation: str, slide: str, requests: list[dic
             raise Refused(response.status_code if response is not None else 0, None)
         await asyncio.sleep(delay)
         delay *= 2
-
-
-async def move(google: Google, file_id: str, folder: str) -> None:
-    current = await google.request("GET", f"{DRIVE}/files/{file_id}", params={"fields": "parents"})
-    await google.request(
-        "PATCH",
-        f"{DRIVE}/files/{file_id}",
-        params={
-            "addParents": folder,
-            "removeParents": ",".join(current.get("parents", [])),
-            "fields": "id",
-        },
-    )
 
 
 # ------------------------------------------------------------------ one page
@@ -317,13 +327,18 @@ async def convert(
         plan.create["title"] = output_name
         folder = await google.folder(output_name)
         report["folderUrl"] = "https://drive.google.com/drive/folders/" + folder
-        # Never asked twice: a lost reply can still mean a presentation exists.
-        created = await google.request("POST", SLIDES_API, json=plan.create)
-        presentation = created["presentationId"]
+        # The Slides API ignores a page size, but PowerPoint import keeps one:
+        # start from an empty deck of the publication's size (publisher_deck).
+        # Never retried: a lost reply can still mean a presentation exists.
+        size = plan.create["pageSize"]
+        deck = root / "blank.pptx"
+        deck.write_bytes(blank_deck(size["width"]["magnitude"], size["height"]["magnitude"]))
+        made = await google.upload(deck, output_name, PPTX_MIME, folder, convert=True)
+        presentation = made["id"]
         report["outputs"].append({"kind": "presentation", "id": presentation})
         report["presentationId"] = presentation
         report["url"] = f"https://docs.google.com/presentation/d/{presentation}/edit"
-        await move(google, presentation, folder)
+        created = await google.request("GET", f"{SLIDES_API}/{presentation}")
         size_note = page_size_note(plan, created)
         starting = [s["objectId"] for s in created.get("slides", [])]
         plan.setup += [{"deleteObject": {"objectId": s}} for s in starting]
@@ -357,13 +372,17 @@ async def convert(
                     503,
                 )
             bucket = Bucket(settings.publisher_bucket, signer, creds, client)
-            failed_pages = []
+            failed_pages: list[int] = []
+            refusals: list[dict] = []
             for index in range(len(plan.pages)):
                 try:
                     swapped, _ = await build_page(google, bucket, presentation, plan, index)
                     replaced.update(swapped)
-                except Refused:
+                except Refused as refusal:
                     failed_pages.append(index + 1)
+                    refusals.append(
+                        {"page": index + 1, "status": refusal.status, "request": refusal.kind}
+                    )
         notes = summarise(plan)
         if size_note:
             notes.append(size_note)
@@ -401,6 +420,7 @@ async def convert(
         # what was done about them; keep only those about the whole document.
         report["warnings"] = [w for w in report.get("warnings", []) if "elementId" not in w] + notes
         report["conversion"] = {
+            "refusals": refusals,
             "statusCounts": plan.report.get("statusCounts", {}),
             "elements": plan.report.get("elements", []),
             "basis": "Read back from Google Slides after conversion.",

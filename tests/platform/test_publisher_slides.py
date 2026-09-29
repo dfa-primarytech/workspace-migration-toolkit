@@ -355,6 +355,33 @@ def test_breaks_and_empty_paragraphs():
     assert any(s["style"].get("fontSize", {}).get("magnitude") == 30 for s in styles)
 
 
+def test_publishers_paragraph_marks_are_not_sent():
+    # The reader leaves Publisher's own paragraph mark, a carriage return, at
+    # the end of each paragraph's text. Slides drops it on insert, so sending
+    # it made every later range overrun the text (the first live run).
+    marked = [run("First\r"), run("Second\r"), run("\r")]
+    box = text_box(
+        "el_1",
+        0,
+        (0, 0, 100, 100),
+        paragraph(marked[0]),
+        paragraph(marked[1]),
+        paragraph(marked[2]),
+    )
+    result = planned(document([box]))
+    assert requests(result, "insertText")[0]["text"] == "First\nSecond"
+    only_mark = text_box("el_2", 0, (0, 0, 100, 100), paragraph(run("\r")))
+    assert not requests(planned(document([only_mark])), "insertText")
+
+
+def test_the_checker_refuses_characters_slides_would_drop():
+    result = planned(document([text_box("el_1", 0, (0, 0, 10, 10), paragraph(run("ok")))]))
+    result.pages[0].append(
+        {"insertText": {"objectId": "wmt_el_1", "insertionIndex": 0, "text": "bad\r"}}
+    )
+    assert any("characters Slides drops" in p for p in check(result, existing=["p"]))
+
+
 def test_an_empty_text_box_is_still_placed():
     result = planned(document([text_box("el_1", 0, (0, 0, 100, 100))]))
     assert requests(result, "createShape") and not requests(result, "insertText")
@@ -778,6 +805,8 @@ def test_pub001_plans_cleanly(tmp_path):
     result = plan(doc, prepare(doc, assets, bundle, tmp_path / "art"), title="PUB-001")
     assert check(result) == []
     assert len(result.slides) == 4
-    assert result.report["statusCounts"] == {"NATIVE": 13, "SUBSTITUTED": 7, "IGNORED": 2}
+    # Two of its text frames hold only Publisher's paragraph marks: empty, so
+    # no font needs replacing in them.
+    assert result.report["statusCounts"] == {"NATIVE": 14, "SUBSTITUTED": 6, "IGNORED": 2}
     assert len(requests(result, "createImage")) == 12
     assert len(requests(result, "createLine")) == 2

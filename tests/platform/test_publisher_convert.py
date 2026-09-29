@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import re
+import zipfile
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -186,6 +188,8 @@ class FakeGoogle:
         self.batches = 0
         self.presentations = 0
         self.saved: list[bytes] = []
+        self.pending = ""  # the mimeType of the upload in progress
+        self.deck: bytes = b""
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         host, path = request.url.host, request.url.path
@@ -197,6 +201,7 @@ class FakeGoogle:
         if host == "slides.googleapis.com":
             return self.slides_api(request)
         if path.startswith("/upload/drive") and request.method == "POST":
+            self.pending = json.loads(request.content)["mimeType"]
             return httpx.Response(
                 200,
                 headers={
@@ -204,6 +209,13 @@ class FakeGoogle:
                 },
             )
         if path.startswith("/upload/drive") and request.method == "PUT":
+            if self.pending == "application/vnd.google-apps.presentation":
+                # An imported deck becomes a presentation with one slide of its own.
+                self.presentations += 1
+                self.deck = request.read()
+                self.slides = {"p": []}
+                self.order = ["p"]
+                return httpx.Response(200, json={"id": "pres-1"})
             self.saved.append(request.read())
             return httpx.Response(200, json={"id": "report-1"})
         if path == "/drive/v3/files" and request.method == "GET":
@@ -237,19 +249,7 @@ class FakeGoogle:
     def slides_api(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if request.method == "POST" and path == "/v1/presentations":
-            self.presentations += 1
-            body = json.loads(request.content)
-            assert body["pageSize"]["width"]["unit"] == "PT"
-            self.slides = {"p": []}
-            self.order = ["p"]
-            return httpx.Response(
-                200,
-                json={
-                    "presentationId": "pres-1",
-                    "pageSize": self.page_size,
-                    "slides": [{"objectId": "p"}],
-                },
-            )
+            raise AssertionError("the Slides API ignores a page size: import a deck instead")
         if request.method == "POST" and path.endswith(":batchUpdate"):
             return self.batch(json.loads(request.content)["requests"])
         if request.method == "GET" and "/pages/" in path:
@@ -284,7 +284,26 @@ class FakeGoogle:
     def batch(self, requests: list[dict]) -> httpx.Response:
         self.batches += 1
         # Atomic, as Slides is: check everything before changing anything.
+        lengths = {k: len(v.get("text", "")) for k, v in self.objects.items()}
         for index, request in enumerate(requests):
+            kind, body = next(iter(request.items()))
+            if kind == "insertText" and "cellLocation" not in body:
+                kept = "".join(ch for ch in body["text"] if ch >= " " or ch in "\t\n\u000b")
+                lengths[body["objectId"]] = lengths.get(body["objectId"], 0) + len(kept)
+            if kind == "updateTextStyle" and "cellLocation" not in body:
+                end = body["textRange"]["endIndex"]
+                have = lengths.get(body["objectId"], 0)
+                if not have or end > have:
+                    return httpx.Response(
+                        400,
+                        json={
+                            "error": {
+                                "message": f"Invalid requests[{index}].updateTextStyle: The end "
+                                f"index ({end}) should not be greater than the existing text "
+                                f"length ({have})."
+                            }
+                        },
+                    )
             image = request.get("createImage")
             if image:
                 parts = urlsplit(image["url"])
@@ -317,7 +336,8 @@ class FakeGoogle:
                 self.slides[page].append(body["objectId"])
             elif kind == "insertText" and "cellLocation" not in body:
                 element = self.objects[body["objectId"]]
-                element["text"] = element.get("text", "") + body["text"]
+                kept = "".join(ch for ch in body["text"] if ch >= " " or ch in "\t\n\u000b")
+                element["text"] = element.get("text", "") + kept
             elif kind == "groupObjects":
                 children = body["childrenObjectIds"]
                 page = self.objects[children[0]]["page"]
@@ -357,7 +377,8 @@ def booklet(tmp_path):
                 "el_1",
                 0,
                 (10, 10, 300, 60),
-                paragraph(run("Reading at home", font="SassoonPrimaryInfant")),
+                # Ends in Publisher's paragraph mark, as the reader leaves it.
+                paragraph(run("Reading at home\r", font="SassoonPrimaryInfant")),
             ),
             image("el_2", 1, (300, 10, 100, 100), "logo"),
         ],
@@ -397,6 +418,9 @@ def test_a_publication_is_built_page_by_page_and_checked(tmp_path, monkeypatch):
     assert report["url"] == "https://docs.google.com/presentation/d/pres-1/edit"
     assert report["verification"] == "objects_page_size_and_text_checked"
     assert fake.presentations == 1
+    # Made by importing an empty deck of the publication's own size.
+    presentation = zipfile.ZipFile(io.BytesIO(fake.deck)).read("ppt/presentation.xml").decode()
+    assert '<p:sldSz cx="5346000" cy="7560000"/>' in presentation
     assert fake.order == ["wmt_page_0001", "wmt_page_0002"]  # Google's own slide removed
     assert fake.slides["wmt_page_0001"] == ["wmt_el_1", "wmt_el_2"]  # paint order
     assert fake.objects["wmt_el_1"]["text"] == "Reading at home"
@@ -507,3 +531,18 @@ def test_the_worker_plans_a_parsed_bundle(tmp_path):
     from workspace_toolkit.publisher_slides import Plan
 
     assert check(Plan.from_dict(data, tmp_path)) == []
+
+
+# ------------------------------------------------------------------ the blank deck
+
+
+def test_the_blank_deck_is_a_valid_package_of_the_right_size():
+    from defusedxml.ElementTree import fromstring
+    from workspace_toolkit.publisher_deck import MAX_EMU, blank_deck
+
+    package = zipfile.ZipFile(io.BytesIO(blank_deck(420.944882, 595.275591)))
+    for name in package.namelist():
+        fromstring(package.read(name))  # every part is well-formed XML
+    assert '<p:sldSz cx="5346000" cy="7560000"/>' in package.read("ppt/presentation.xml").decode()
+    huge = zipfile.ZipFile(io.BytesIO(blank_deck(99999, 99999)))
+    assert f'cx="{MAX_EMU}"' in huge.read("ppt/presentation.xml").decode()  # PowerPoint's limit
