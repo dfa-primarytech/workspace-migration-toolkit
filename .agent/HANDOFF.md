@@ -2,6 +2,35 @@
 
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-29
+- Branch: `feat/publisher-tables`, based on main `bc0a4be` (#99 merged)
+- Objective: PUB-002's tables: grid lines and the book covers missing from their cells.
+- Files changed:
+  - `publisher_slides.py` (`grid_borders`; `_inline`, `_with_room`, `rough_height`; U+FFFC dropped from text);
+  - `publisher_inline.py` (new), `publisher_art.py` (`Prepared.inline`), `publisher.py`;
+  - parser: `main.cpp`, `model.h`, `collector.h`, `bundle.cpp` write `drawing-pictures.bin` (EscherDelayStm); `tests/test_bundle.cpp`;
+  - tests: `test_publisher_inline.py` (new, 6), `test_publisher_slides.py`;
+  - `docs/publisher-parser.md`, `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - Grid: no record in either booklet holds a border (dumped with a debug libmspub build), yet all print a thin black grid (the owner's print previews). Tables get 0.75 pt black on every cell.
+  - Covers: all 7 recovered (inline pictures; libmspub drops shapes not on a page) and placed over their cells.
+  - Verified live on PUB-002: pages 11, 12 and 14 match the Publisher screenshots.
+- Checks: 502 platform tests passed, 12 skipped; Ruff and mypy clean; the app image builds with the parser's C++ tests passing.
+- Known failures: none.
+- Unresolved:
+  - Page 3's table runs off the page: table rows aren't fitted to their text as text boxes are (next task).
+  - Page 18's bullets sit tight against centred text.
+  - The on-screen summaries show the reader's internal notes.
+  - The debug libmspub patch (table dumps) is only in `/root/wmt-test/dbg` on CT 203, never in the repo.
+- Decisions: DECISIONS.md, 2026-09-29 (table grids, and pictures set in text).
+- Next task: fit table rows to the page (page 3); the bullet gap; hide internal notes from staff.
+- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 20:42 UTC). `wmt-test-live` runs `wmt-test/app:pub14`. Parsed PUB-002 bundles are under `/root/wmt-test/private`; never commit them.
+
+---
+
+## Previous handoff
+
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
 - Branch: `feat/publisher-lists`, based on main `077c206` (#98 merged)
 - Objective: Publisher lists (route A: a patched libmspub), and PUB-002's "took too long to analyse".
 - Files changed:
@@ -44,34 +73,4 @@
 - Decisions: DECISIONS.md, 2026-09-29 (XLSX extent/index/cleanup and live native import).
 - Next task: visually compare the generated workbook against its Expected results sheet, then add targeted regression work only for observed fidelity losses.
 - Warnings: the downloaded conversion report contains private Drive file and folder IDs and must not be committed. No school document or OAuth token is in this branch.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code / QuietHeron (Publisher)
-- Date: 2026-09-29
-- Branch: `feat/publisher-wordart`, based on main `58d1915` (#97 merged)
-- Objective: recover WordArt. PUB-001's title "Early Reading at St.Vincent's" came through as two purple lines, as the human's screenshot from Publisher showed.
-- Files changed:
-  - `publisher_wordart.py` (new: read the WordArt properties, match to the outline layer, report unplaced);
-  - `publisher_slides.py` (`_wordart`, `wordart_size`, outlines left out, the grouping pass skips WordArt);
-  - `publisher_art.py` (`Prepared.wordart`) and `publisher.py` (reads it in the worker);
-  - `tests/platform/test_publisher_wordart.py` (new, 4);
-  - `docs/publisher-renderer.md`, DECISIONS.md, this file.
-- Completed:
-  - On PUB-001 the title is a text box: "Early Reading" / "at St.Vincent's", Andika bold 31.5 pt, #8064a2, centred, where the WordArt was. No purple lines.
-  - The human's Publisher screenshots of all four pages also confirmed all five crops.
-- Checks:
-  - Linux (host): platform and parser suites with the binary and PUB-001, 548 passed.
-  - Ruff and mypy clean.
-  - Not yet seen in Google: the picture token expired at 14:01 UTC.
-- Known failures: none.
-- Unresolved:
-  - **Lists:** Publisher numbers PUB-001's table items and "Books to take home" (1., 2., 3.). libmspub never passes lists on, so the numbers are lost.
-  - **Table borders:** the original table has black borders, so the no-borders default (#95) is wrong for PUB-001. Both are probably in the Contents stream; that needs investigating.
-  - **Two sessions worked in this checkout at once.** The other session's uncommitted "join mid-sentence breaks" work is a local WIP commit, `7bf1f6c` on `feat/publisher-join-breaks`, awaiting the human's decision on joining breaks.
-- Decisions: DECISIONS.md, 2026-09-29 (WordArt).
-- Next task: a live run with a fresh token to see the title in Google; then lists and table borders.
-- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and an expired picture token. The container `wmt-test-live` and this machine's SSH tunnel on port 8080 are still up. The image `wmt-test/app:pub8` has this branch.
 
