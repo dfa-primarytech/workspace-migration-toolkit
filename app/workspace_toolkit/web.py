@@ -165,7 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "signedIn": True,
                 "csrfToken": data["csrf"],
                 "maxUploadBytes": settings.max_upload_bytes,
-                "formats": describe(),
+                "formats": describe(settings),
                 "pickerEnabled": settings.picker_ready,
                 "pickerApiKey": settings.picker_api_key if settings.picker_ready else "",
                 "pickerAppId": settings.picker_app_id if settings.picker_ready else "",
@@ -175,7 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "signedIn": False,
                 "configured": settings.oauth_ready,
                 "maxUploadBytes": settings.max_upload_bytes,
-                "formats": describe(),
+                "formats": describe(settings),
                 "pickerEnabled": settings.picker_ready,
                 "pickerApiKey": "",
                 "pickerAppId": "",
@@ -246,11 +246,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         filename = unquote(request.headers.get("x-upload-filename", ""))
         pipeline = resolve(filename)
         validate_upload_name(filename, request.headers.get("content-type", ""), pipeline.fmt)
-        if do_convert and not pipeline.convertible:
+        if do_convert and not pipeline.convertible(settings):
             raise ToolkitError(
                 "not_convertible",
                 f"{pipeline.fmt.noun.capitalize()} files can be checked, but converting them "
-                f"to {pipeline.destination} is not available yet.",
+                f"to {pipeline.destination} is not set up on this server.",
                 501,
             )
         # A file picked from Drive (see the picker-token route and app.js)
@@ -258,7 +258,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # is shared between the two sources.
         drive_file_id = request.headers.get("x-drive-file-id") or None
         # Opt-in, and only for a conversion: checking a file never changes it.
-        smaller = do_convert and request.headers.get("x-compress-pictures") == "1"
+        # Only a PowerPoint or Word file sent to Google can be made smaller:
+        # Publisher pictures go to Slides one by one, by link.
+        smaller = (
+            do_convert
+            and request.headers.get("x-compress-pictures") == "1"
+            and pipeline.fmt.key in {"pptx", "docx"}
+        )
         if drive_file_id and not settings.picker_ready:
             raise ToolkitError(
                 "picker_unavailable", "Adding a file from Drive is not available.", 503
@@ -348,6 +354,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 google,
                                 progress,
                                 original_name=Path(filename).stem,
+                                **({"settings": settings} if pipeline.needs_settings else {}),
                             )
                             # Added here rather than in each pipeline, so every
                             # format reports what happened in Drive the same way.

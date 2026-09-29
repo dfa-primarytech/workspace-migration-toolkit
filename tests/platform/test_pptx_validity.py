@@ -17,6 +17,7 @@ stay fast; CI installs both, and fails the job if anything here is skipped.
 
 from __future__ import annotations
 
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -24,7 +25,12 @@ from pathlib import Path
 from workspace_toolkit.config import Settings
 from workspace_toolkit.pptx import render_path
 
-from .test_docx_validity import needs_pdftotext, rendered_page_texts, soffice_convert
+from .test_docx_validity import (
+    needs_pdftotext,
+    needs_soffice,
+    rendered_page_texts,
+    soffice_convert,
+)
 
 DECK = Path(__file__).parents[1] / "fixtures" / "pptx" / "video-deck.pptx"
 
@@ -76,3 +82,18 @@ def test_libreoffice_opens_a_deck_whose_pictures_were_made_smaller(tmp_path):
     stripped = slide_texts(converted, tmp_path / "smaller")
     assert len(stripped) == 2, f"LibreOffice laid out {len(stripped)} slides, not 2"
     assert "Volcanoes" in stripped[0] and "Hello school" in stripped[1], stripped
+
+
+@needs_soffice
+def test_libreoffice_lays_out_the_blank_deck_at_a5(tmp_path):
+    """A Publisher conversion starts from this deck (publisher_deck.py): Google
+    keeps an imported deck's page size, where the Slides API ignores one."""
+    from workspace_toolkit.publisher_deck import blank_deck
+
+    deck = tmp_path / "blank.pptx"
+    deck.write_bytes(blank_deck(420.944882, 595.275591))
+    pdf = soffice_convert(deck, "pdf", tmp_path / "out").read_bytes()
+    boxes = re.findall(rb"/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]", pdf)
+    assert boxes, "no page in LibreOffice's rendering"
+    width, height = map(float, boxes[0])
+    assert (round(width), round(height)) == (421, 595)

@@ -774,29 +774,40 @@ async def convert(
         report["verification"] = "page_size_count_and_text_checked"
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:
-        report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
-        report["warnings"].append(
-            warning(exc.code, exc.message, classification=C.UNSUPPORTED, detail=exc.detail)
-            if exc.detail
-            else warning(exc.code, exc.message, classification=C.UNSUPPORTED)
-        )
-        report["verification"] = "incomplete"
-    if report.get("folderUrl"):
-        report_path = root / "conversion-report.json"
-        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        try:
-            saved = await google.upload(
-                report_path,
-                "Conversion report.json",
-                "application/json",
-                report["folderUrl"].rsplit("/", 1)[-1],
-            )
-            report["reportUrl"] = "https://drive.google.com/file/d/" + saved["id"] + "/view"
-        except ToolkitError:
-            report["warnings"].append(
-                warning(
-                    "report_upload_failed",
-                    "The report could not be saved to Drive. Download it from this page.",
-                )
-            )
+        failed(report, exc)
+    await save_report(root, report, google)
     return report
+
+
+def failed(report: dict, exc: ToolkitError) -> None:
+    """Records why a conversion stopped, keeping whatever it already made."""
+    report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
+    report.setdefault("warnings", []).append(
+        warning(exc.code, exc.message, classification=C.UNSUPPORTED, detail=exc.detail)
+        if exc.detail
+        else warning(exc.code, exc.message, classification=C.UNSUPPORTED)
+    )
+    report["verification"] = "incomplete"
+
+
+async def save_report(root: Path, report: dict, google: Google) -> None:
+    """Saves the report beside the conversion, once there is a folder for it."""
+    if not report.get("folderUrl"):
+        return
+    report_path = root / "conversion-report.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    try:
+        saved = await google.upload(
+            report_path,
+            "Conversion report.json",
+            "application/json",
+            report["folderUrl"].rsplit("/", 1)[-1],
+        )
+        report["reportUrl"] = "https://drive.google.com/file/d/" + saved["id"] + "/view"
+    except ToolkitError:
+        report["warnings"].append(
+            warning(
+                "report_upload_failed",
+                "The report could not be saved to Drive. Download it from this page.",
+            )
+        )

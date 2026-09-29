@@ -71,6 +71,8 @@ Register the exact redirect URI `PUBLIC_BASE_URL/auth/callback`. Configure:
   limit** (issue #36), and the page shows none. Set it only if a deployment
   needs a cap. Also optional: `TEMP_DIR` (existing writable directory), `PORT`,
   `LOG_LEVEL`.
+- Optional `PUBLISHER_BUCKET` and `PUBLISHER_SIGNER`: turn on Publisher
+  conversion. Set up as in `docs/publisher-storage.md`.
 - Optional `GOOGLE_PICKER_API_KEY`: a Cloud Console API key, restricted to the
   Google Picker API, with the Picker API enabled. Adds an "Add from Drive"
   option beside the local file chooser. Unlike the OAuth client secret, this
@@ -206,14 +208,17 @@ Saved copies are named `<deck> – slide NN – <name>`, where `<name>` is the
 object's own name when PowerPoint gave it a meaningful one (it names an
 inserted video or sound after its file) and `video 1`, `audio 2` and so on
 otherwise. PowerPoint's defaults such as "Picture 3" count as no name.
-**Publisher `.pub` files can be checked, not yet converted** (DECISIONS.md,
-2026-09-28). The app image builds `native/pub-parser` in a Debian stage (its
+**Publisher `.pub` files can be checked, and converted to Google Slides where
+a picture bucket is set up** (DECISIONS.md, 2026-09-28). The app image builds `native/pub-parser` in a Debian stage (its
 C++ tests run during the build) and ships it as `/usr/local/bin/publisher-parser`;
 elsewhere set `PUBLISHER_PARSER_BIN`. The worker runs it with a hard timeout --
 its own `--max-seconds` cannot stop a hang inside libmspub -- and limits scaled
-with the file, and `publisher.analysis_report` summarises the bundle. A
-conversion is refused before the upload (`not_convertible`, 501) until the
-Slides renderer lands.
+with the file, and `publisher.analysis_report` summarises the bundle. The same
+worker then draws the pictures and plans the Slides requests
+(`publisher.render_path`, docs/publisher-renderer.md); `publisher_convert` sends
+them, handing pictures to Slides through `PUBLISHER_BUCKET`
+(docs/publisher-storage.md). Without a bucket, a conversion is refused before
+the upload (`not_convertible`, 501) and the page offers only Check.
 
 **"Make pictures smaller" is opt-in** (issue #36, step 3): a checkbox beside
 Convert, off by default, sent as `X-Compress-Pictures: 1` and honoured only on
