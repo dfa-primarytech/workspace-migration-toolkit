@@ -18,11 +18,72 @@ from .config import Settings
 from .errors import ToolkitError
 from .google import Google
 from .jobs import preflight, workspace
+from .model import Compatibility as C
+from .model import warning
 from .package import validate_upload_name
 from .pipelines import describe, resolve
 
 logger = logging.getLogger("workspace_toolkit")
 STATIC = Path(__file__).parent / "static"
+
+
+# Google's published conversion limits (support.google.com/drive/answer/37603),
+# checked 2026-09-28 and not yet observed live. They are Google's, not ours:
+# nothing is refused here, but a person should know before converting.
+IMPORT_LIMITS = {
+    "docx": ("Google Docs", 50_000_000),
+    "pptx": ("Google Slides", 100_000_000),
+    "xlsx": ("Google Sheets", 100_000_000),
+}
+
+
+def import_limit_warning(key: str, size: int) -> list[dict]:
+    if key not in IMPORT_LIMITS or size <= IMPORT_LIMITS[key][1]:
+        return []
+    product, limit = IMPORT_LIMITS[key]
+    return [
+        warning(
+            "beyond_import_limit",
+            f"The file sent to Google would be {size / 1_000_000:,.0f} MB. Google's published limit for "
+            f"converting a file to {product} is {limit // 1_000_000} MB, so Google is "
+            'likely to refuse it. If it holds photographs, converting with "Make '
+            'pictures smaller" may bring it under.',
+            classification=C.UNSUPPORTED,
+            sizeBytes=size,
+            limitBytes=limit,
+        )
+    ]
+
+
+def pictures_report(path: Path) -> tuple[dict, dict] | None:
+    """What "Make pictures smaller" did: the details, and a note for a person."""
+    if not path.exists():
+        return None
+    result = json.loads(path.read_text(encoding="utf-8"))
+    done = result.get("picturesCompressed") or []
+    if result.get("failed"):
+        note = warning(
+            "pictures_not_compressed",
+            "The pictures could not be made smaller, so they were converted at full size.",
+            classification=C.IGNORED,
+        )
+    elif not done:
+        note = warning(
+            "pictures_already_small",
+            "No pictures needed making smaller: none was larger than the size it is shown at.",
+            classification=C.IGNORED,
+        )
+    else:
+        before, after = result["bytesBefore"], result["bytesAfter"]
+        note = warning(
+            "pictures_compressed",
+            f"{len(done)} picture{'s' if len(done) != 1 else ''} made smaller for Google, "
+            f"reducing the file from {before / 1_000_000:,.1f} MB to {after / 1_000_000:,.1f} MB. "
+            "Your original file is unchanged.",
+            classification=C.SUBSTITUTED,
+            count=len(done),
+        )
+    return result, note
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -58,8 +119,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        # Google Picker needs its own script and iframe origins, so the
+        # default stays maximally strict and only loosens when the operator
+        # has actually configured the feature (settings.picker_ready).
+        # Verified live against a real GCP project (2026-09-28): gapi's own
+        # picker widget sets inline style="..." attributes on elements it
+        # creates in this page (not just inside its iframe), which needed
+        # style-src 'unsafe-inline' -- there is no hash/nonce we can apply to
+        # markup a third party generates. frame-src/script-src/connect-src
+        # were confirmed sufficient as originally written.
+        script_src = "'self'" + (" https://apis.google.com" if settings.picker_ready else "")
+        # PrimaryTech brand.css @imports Source Sans 3 from Google Fonts
+        # (see brand.css's own header) -- unconditional, unlike the Picker
+        # additions below, since it isn't gated by any feature flag.
+        style_src = "'self' https://fonts.googleapis.com" + (
+            " 'unsafe-inline'" if settings.picker_ready else ""
+        )
+        frame_src = " frame-src https://docs.google.com;" if settings.picker_ready else ""
+        connect_src = (
+            " connect-src 'self' https://www.googleapis.com;" if settings.picker_ready else ""
+        )
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            f"default-src 'self'; script-src {script_src}; style-src {style_src}; "
+            f"font-src 'self' https://fonts.gstatic.com; img-src 'self';"
+            f"{frame_src}{connect_src} frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'self'"
         )
         if settings.secure_cookies:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
@@ -82,6 +166,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "csrfToken": data["csrf"],
                 "maxUploadBytes": settings.max_upload_bytes,
                 "formats": describe(),
+                "pickerEnabled": settings.picker_ready,
+                "pickerApiKey": settings.picker_api_key if settings.picker_ready else "",
+                "pickerAppId": settings.picker_app_id if settings.picker_ready else "",
             }
         except ToolkitError:
             return {
@@ -89,7 +176,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "configured": settings.oauth_ready,
                 "maxUploadBytes": settings.max_upload_bytes,
                 "formats": describe(),
+                "pickerEnabled": settings.picker_ready,
+                "pickerApiKey": "",
+                "pickerAppId": "",
             }
+
+    @app.get("/api/picker-token")
+    async def picker_token(request: Request):
+        # A read, not a state change, so no CSRF check -- same as
+        # /api/session. Fetched fresh only when the picker is actually
+        # opened, rather than embedded in the page on load, so it sits in
+        # browser memory for as little time as possible.
+        if not settings.picker_ready:
+            raise ToolkitError(
+                "picker_unavailable", "Adding a file from Drive is not available.", 503
+            )
+        data = auth.session(request)
+        return {"accessToken": data["access_token"]}
 
     @app.get("/auth/start")
     async def start():
@@ -123,31 +226,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.delete_cookie(SESSION)
         return response
 
-    async def run(request: Request, do_convert: bool):
-        session = auth.session(request, csrf=True)
-        # Google's token lasts an hour and a conversion can take job_timeout.
-        # Refuse up front rather than lose the token halfway through the
-        # uploads and hand back a partial conversion.
-        if do_convert and float(session["expires"]) - time.time() < settings.job_timeout:
+    def over_limit(size: int) -> bool:
+        return settings.max_upload_bytes is not None and size > settings.max_upload_bytes
+
+    def require_time(session: dict, do_convert: bool, allowed: int) -> None:
+        # Google's token lasts an hour, and a conversion is allowed `allowed`
+        # seconds. Refuse up front rather than lose the token halfway through
+        # the uploads and hand back a partial conversion.
+        if do_convert and float(session["expires"]) - time.time() < allowed:
             raise ToolkitError(
                 "session_expiring",
                 "Your Google sign-in expires before a conversion could finish. "
                 "Please sign out, sign in again, and convert.",
                 401,
             )
+
+    async def run(request: Request, do_convert: bool):
+        session = auth.session(request, csrf=True)
         filename = unquote(request.headers.get("x-upload-filename", ""))
         pipeline = resolve(filename)
         validate_upload_name(filename, request.headers.get("content-type", ""), pipeline.fmt)
-        length = request.headers.get("content-length")
-        if length:
-            try:
-                declared = int(length)
-            except ValueError as exc:
-                raise ToolkitError("invalid_size", "Invalid upload size.") from exc
-            if declared < 0 or declared > settings.max_upload_bytes:
-                raise ToolkitError(
-                    "upload_too_large", "This file exceeds the upload size limit.", 413
-                )
+        if do_convert and not pipeline.convertible:
+            raise ToolkitError(
+                "not_convertible",
+                f"{pipeline.fmt.noun.capitalize()} files can be checked, but converting them "
+                f"to {pipeline.destination} is not available yet.",
+                501,
+            )
+        # A file picked from Drive (see the picker-token route and app.js)
+        # arrives by id instead of a request body -- everything from here on
+        # is shared between the two sources.
+        drive_file_id = request.headers.get("x-drive-file-id") or None
+        # Opt-in, and only for a conversion: checking a file never changes it.
+        smaller = do_convert and request.headers.get("x-compress-pictures") == "1"
+        if drive_file_id and not settings.picker_ready:
+            raise ToolkitError(
+                "picker_unavailable", "Adding a file from Drive is not available.", 503
+            )
+        declared = 0
+        if drive_file_id is None:
+            length = request.headers.get("content-length")
+            if length:
+                try:
+                    declared = int(length)
+                except ValueError as exc:
+                    raise ToolkitError("invalid_size", "Invalid upload size.") from exc
+                if declared < 0 or over_limit(declared):
+                    raise ToolkitError(
+                        "upload_too_large", "This file exceeds the upload size limit.", 413
+                    )
+        # A Drive file's size is unknown until it is fetched, so this is
+        # checked again once it is on disk.
+        require_time(session, do_convert, settings.job_timeout_for(declared))
         if gate.locked():
             raise ToolkitError("busy", "The converter is busy. Please try again shortly.", 503)
         async with gate:
@@ -155,39 +285,78 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 began = time.monotonic()
                 progress: dict = {}
                 try:
-                    async with asyncio.timeout(settings.job_timeout):
-                        size = 0
-                        with (root / pipeline.source_name).open("xb") as stream:
-                            async for chunk in request.stream():
-                                size += len(chunk)
-                                if size > settings.max_upload_bytes:
-                                    raise ToolkitError(
-                                        "upload_too_large",
-                                        "This file exceeds the upload size limit.",
-                                        413,
-                                    )
-                                stream.write(chunk)
-                        if not size:
-                            raise ToolkitError(
-                                "empty_upload", "Please choose a file that is not empty."
-                            )
-                        manifest = await preflight(root, settings, pipeline.fmt)
-                        if not do_convert:
-                            return pipeline.analysis_report(manifest)
-                        if request.headers.get("x-source-sha256") != manifest["source"]["sha256"]:
-                            raise ToolkitError(
-                                "source_changed",
-                                "Please analyse this file before converting it.",
-                                409,
-                            )
+                    async with asyncio.timeout(settings.job_timeout_for(declared)) as deadline:
+                        # Constructed unconditionally now rather than only at
+                        # convert time: a Drive-sourced file needs it just to
+                        # be fetched, even for an analyse-only request.
                         async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-                            return await pipeline.convert(
+                            google = Google(session["access_token"], client)
+
+                            destination = root / pipeline.source_name
+                            if drive_file_id:
+                                size = await google.download(
+                                    drive_file_id, destination, settings.max_upload_bytes
+                                )
+                                allowed = settings.job_timeout_for(size)
+                                require_time(session, do_convert, allowed)
+                                deadline.reschedule(
+                                    asyncio.get_running_loop().time()
+                                    + allowed
+                                    - (time.monotonic() - began)
+                                )
+                            else:
+                                size = 0
+                                with destination.open("xb") as stream:
+                                    async for chunk in request.stream():
+                                        size += len(chunk)
+                                        if over_limit(size):
+                                            raise ToolkitError(
+                                                "upload_too_large",
+                                                "This file exceeds the upload size limit.",
+                                                413,
+                                            )
+                                        stream.write(chunk)
+                            if not size:
+                                raise ToolkitError(
+                                    "empty_upload", "Please choose a file that is not empty."
+                                )
+
+                            manifest = await preflight(
+                                root, settings, pipeline.fmt, compress_pictures=smaller
+                            )
+                            # What Google receives: for a deck, without its video.
+                            sent = root / "result" / ("converted" + pipeline.fmt.suffix)
+                            beyond = import_limit_warning(
+                                pipeline.fmt.key, sent.stat().st_size if sent.exists() else size
+                            )
+                            if not do_convert:
+                                analysis = pipeline.analysis_report(manifest)
+                                analysis.setdefault("warnings", []).extend(beyond)
+                                return analysis
+                            if (
+                                request.headers.get("x-source-sha256")
+                                != manifest["source"]["sha256"]
+                            ):
+                                raise ToolkitError(
+                                    "source_changed",
+                                    "Please analyse this file before converting it.",
+                                    409,
+                                )
+                            report = await pipeline.convert(
                                 root,
                                 manifest,
-                                Google(session["access_token"], client),
+                                google,
                                 progress,
                                 original_name=Path(filename).stem,
                             )
+                            # Added here rather than in each pipeline, so every
+                            # format reports what happened in Drive the same way.
+                            report.setdefault("warnings", []).extend(beyond + google.warnings)
+                            outcome = pictures_report(root / "result" / "pictures.json")
+                            if smaller and outcome:
+                                report["pictures"], note = outcome
+                                report["warnings"].append(note)
+                            return report
                 except TimeoutError:
                     if progress.get("folderUrl"):
                         progress.update(

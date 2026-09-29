@@ -46,23 +46,36 @@ def workspace(settings: Settings):
         yield uuid4().hex, root
 
 
-async def preflight(root: Path, settings: Settings, fmt: Format = PPTX) -> dict:
+async def preflight(
+    root: Path, settings: Settings, fmt: Format = PPTX, *, compress_pictures: bool = False
+) -> dict:
     output = root / "result"
     output.mkdir()
     # Worker receives limits only, never OAuth credentials or session keys.
     config = root / "limits.json"
+    source = root / ("source" + fmt.suffix)
+    # A larger file gets proportionally longer; the worker's own CPU limit is
+    # set from the same figure, so the two cannot disagree.
+    timeout = settings.parser_timeout_for(source.stat().st_size if source.exists() else 0)
+    if compress_pictures:
+        timeout *= 2  # decoding and re-encoding photographs roughly doubles the work
     limits = {
-        k: v for k, v in asdict(settings).items() if k.startswith("max_") or k == "parser_timeout"
+        k: v
+        for k, v in asdict(settings).items()
+        if k.startswith(("max_", "worker_memory_"))
+        or k in {"entry_scale", "expanded_scale", "publisher_parser"}
     }
+    limits["parser_timeout"] = timeout
     config.write_text(json.dumps(limits), encoding="utf-8")
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
         "workspace_toolkit.worker",
-        str(root / ("source" + fmt.suffix)),
+        str(source),
         str(output),
         str(config),
         fmt.key,
+        *(["compress-pictures"] if compress_pictures else []),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         env={
@@ -72,7 +85,7 @@ async def preflight(root: Path, settings: Settings, fmt: Format = PPTX) -> dict:
         },
     )
     try:
-        await asyncio.wait_for(process.wait(), timeout=settings.parser_timeout)
+        await asyncio.wait_for(process.wait(), timeout=timeout)
     except TimeoutError:
         if process.returncode is None:
             process.kill()

@@ -171,6 +171,156 @@ PUB-001's acceptance test asserts its one layer is a wrapper, and it must be re-
 locally. If that layer reclassifies, it is a finding to record deliberately, not a
 number to edit.
 
+## 2026-09-28: Add-from-Drive uses Google Picker, briefly exposing the OAuth
+## access token to browser JS
+
+The user asked for the tool to accept a file already in Drive, not only a
+local upload. Google Picker is the standard way to do that, and Picker's own
+integration model requires an OAuth access token in client-side JavaScript
+to authenticate the picker iframe -- there is no server-side-only way to
+drive it.
+
+This is a real change from the existing posture (the OAuth access token has
+never left this process before now, sealed in an encrypted HttpOnly cookie
+-- see the 2026-09-22 "First shared application" decision). The scope is
+kept as narrow as the tradeoff allows:
+
+- The token is fetched fresh, on demand, only when "Add from Drive" is
+  clicked (`GET /api/picker-token`), rather than embedded in the page on
+  load. It sits in browser memory for as short a time as possible.
+- It is still the same `drive.file`-scoped token the server already holds;
+  Picker grants nothing broader, and picking a file grants per-file access
+  under the same scope. No refresh token exists to leak (per the original
+  decision) and nothing new is stored anywhere.
+- The feature is opt-in per deployment via `GOOGLE_PICKER_API_KEY`
+  (`config.py`'s `picker_ready`). Left unset -- true for every deployment
+  today, since none has been created -- nothing about this is reachable:
+  the button is hidden, the CSP stays maximally strict, and
+  `/api/picker-token` refuses with `picker_unavailable`.
+- The Content-Security-Policy only loosens (`script-src`, `frame-src`,
+  `connect-src`) when the feature is actually configured, for the reason
+  above.
+
+**Not verified against a live deployment.** No GCP project exists in this
+environment to test Picker against; the exact CSP origins Picker needs are
+reasoned from Google's own documented integration, not observed. See the
+warning in `docs/platform.md`.
+
+## 2026-09-28: Add-from-Drive and the drive.file scope spike, verified live
+
+The human provided access to the project's real GCP project
+(`workspace-migration-toolkit`) and a Web application OAuth client
+(`wmt-local-dev-web`, redirect `http://localhost:8080/auth/callback`) was
+created for this. Superseding the "not verified against a live deployment"
+caveat on the entry above and unblocking #53/#54's own live-scope-spike
+requirement (CURRENT.md, "First run against live Google"), both run and
+confirmed against real Google APIs, not reasoned from documentation:
+
+- The full OAuth + PKCE + state sign-in flow works end to end against a real
+  account.
+- Add from Drive (this session's feature) works end to end -- Picker file
+  selection, server-side download by id, preflight and native conversion --
+  for both a `.docx` and a `.pptx`, once two bugs the design got wrong were
+  fixed: a Website-restricted Picker API key breaks Picker (restrict to the
+  Google Picker API only, not by referrer), and a `drive.file` per-file grant
+  needs `PickerBuilder.setAppId()` with the OAuth client's Cloud project
+  number, or a picked file downloads as unavailable even though Picker
+  itself works. Both fixed; see `docs/platform.md` and `config.py`'s
+  `picker_app_id`.
+- The Content-Security-Policy needed `style-src 'unsafe-inline'`, not just
+  the `script-src`/`frame-src`/`connect-src` already reasoned out: gapi's
+  picker widget sets inline styles directly on this page, not only inside
+  its iframe.
+- **`documents.get` and `files.export` (PDF) both succeed under `drive.file`
+  scope on a Google Doc this app itself created** -- confirmed directly
+  against the Docs and Drive APIs with a real access token, on a real
+  converted document. This is the exact question #53's "post-import checks"
+  design and #54's "post-import repair" design were both blocked on. Neither
+  is implemented yet; this only removes the reason they couldn't be started.
+
+A temporary local OAuth client and API key were used for this, both created
+in the GCP Console by the human, never entered as plain text by the
+assistant -- the client secret was read from a downloaded JSON file, and the
+short-lived access token used for the two API calls above was pasted by the
+human from their own already-authenticated browser session, not obtained by
+the assistant signing in. See CURRENT.md for what to do next.
+
+## 2026-09-28: Remove the legacy Apps Script DOCX fixer, superseding its freeze
+The Apps Script DOCX fixer (`src/`, previously frozen as a reference/fallback
+per the 2026-09-22 decision above) is now removed from the repo entirely,
+along with its Node regression suite (`tests/regression.test.cjs`) and every
+doc reference to it (README.md, AGENTS.md, PROJECT.md, CONTRIBUTING.md,
+docs/platform.md, docs/publisher-parser.md).
+
+Rationale, from the user directly: keeping a second, worse DOCX converter
+around only makes sense if someone would actually prefer it -- e.g. an
+Apps-Script-only user who doesn't want to stand up the platform app. But the
+Apps Script version had a known, already-diagnosed regression (it always
+flattens floating text boxes to inline tables, losing position entirely,
+even though the platform's own probe-document work confirmed Google Docs
+honours OOXML floating-table positioning (`w:tblpPr`) and that fix was never
+ported back). Given that gap, and that all further DOCX effort was already
+committed to the platform per the 2026-09-22 decision, the user chose to
+remove it rather than maintain it as a permanently-inferior parallel tool.
+
+`Code.gs`'s git history (including the `feat/docx-floating-tables` reference
+branch) still exists in this repo if the Apps Script approach is ever wanted
+back; nothing was force-deleted from git history, only the working tree.
+Any live Apps Script deployment already running at the trust is unaffected
+by this repo change -- this removes the maintained source, not a running
+service.
+
+## 2026-09-28: Publisher → Google Slides, approved (PROJECT.md §38)
+The human reviewed `docs/publisher-renderer-readiness.md` and made its open
+decisions:
+
+- **Route: build slides through the Slides API**, not IR → `.pptx` → native
+  import. Chosen against the assistant's recommendation (which favoured
+  reusing the import path), for the precise control over each element.
+- **Images: a private Cloud Storage bucket and V4 signed URLs.** The Slides
+  API's `createImage` accepts only "a publicly accessible URL" (checked in
+  Google's reference and add-image guide, 2026-09-28), with no exception for
+  Drive files; Google's own guide recommends Cloud Storage with signed URLs
+  that expire in 15 minutes. Each image is uploaded, fetched once by Slides
+  through a signed link, and deleted straight after; the bucket also carries a
+  one-day delete rule as a backstop. Nothing is ever shared publicly in Drive.
+  The bucket and the signing permission are the human's to create -- they are
+  billable GCP resources -- and are documented, not created, by this repo.
+- **Border art: composed into one image per border**, reported as FLATTENED
+  (readiness §7.4).
+- **Sassoon Primary → Andika**, applied automatically and reported. Andika is
+  a Google font designed for early literacy (single-storey a and g). Owned by
+  the shared font service; recorded here because the human made the call.
+- **Master content: reported, not stripped** (readiness §7.5, the default).
+- **Evidence: PUB-001 only for now.** Anything verified on that one file is
+  labelled as such until PUB-002 onwards exist.
+
+Build order: (1) accept `.pub` in the app with a working "Check file";
+(2) the renderer, as pure IR → Slides requests, tested offline; (3) image
+delivery and conversion; (4) a live run by the human with PUB-001.
+
+## 2026-09-28: Publisher renderer defaults (step 2)
+Judgement calls made while mapping the IR to Slides requests. Each one is
+reported per element, and none is verified against Google until step 4.
+
+- **Straight strokes with no filled area become editable lines**, one per
+  segment, grouped. Pictures are kept for filled or curved drawings.
+  PUB-001's only drawings are two ruled lines, and staff can edit a line;
+  they can't edit a picture of one.
+- **Pictures are stretched to their frames**, which is what Publisher's
+  bitmap fill (`style:repeat: stretch`) and LibreOffice both do. The reader
+  drops crops, so a heavily stretched picture is reported rather than
+  guessed at.
+- **A picture that can't be read leaves a dashed box saying so**, in its
+  place on the slide, as well as the report line (§16). A gap in the layout
+  would be missed.
+- **Empty trailing paragraphs are dropped**; an empty paragraph in the
+  middle keeps its font size so the spacing stays.
+- **The first page's size is the presentation's**, and differing page sizes
+  are reported, because Slides has one size per presentation.
+- **Requests are grouped per page** so step 3 can sign picture links a page
+  at a time within their 15-minute life.
+
 ## 2026-09-28: Excel source format and non-worksheet sheets (#51)
 
 Keep the worker package byte-for-byte in its source format. A macro-enabled

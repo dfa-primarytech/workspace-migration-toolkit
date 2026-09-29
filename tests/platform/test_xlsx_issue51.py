@@ -93,6 +93,7 @@ class RecordingGoogle:
         )
         self.uploads = []
         self.folders = []
+        self.warnings = []
 
     async def folder(self, name="Conversion"):
         self.folders.append(name)

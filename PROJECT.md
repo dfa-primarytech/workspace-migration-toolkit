@@ -36,11 +36,13 @@ Publisher-first sequencing. Planning and review precede implementation.
 
 The current implementation milestone is the shared application foundation plus
 PPTX preflight and native Google conversion. Agents must read `AGENTS.md`,
-`CLAUDE.md` and `.agent/` before work, preserve `src/`, use temporary bounded
-processing for untrusted files, and report detected content that cannot be
-verified. Deployment and billable GCP resources require explicit instruction.
+`CLAUDE.md` and `.agent/` before work, use temporary bounded processing for
+untrusted files, and report detected content that cannot be verified.
+Deployment and billable GCP resources require explicit instruction.
 
-The existing working DOCX migration/fixer functionality in this repository must be preserved.
+The DOCX migration/fixer functionality now lives entirely on the shared
+platform (`app/workspace_toolkit/`); the earlier standalone Apps Script
+fixer has been removed (see DECISIONS.md, 2026-09-28).
 
 Do not refactor or break existing working functionality while developing the Publisher MVP.
 

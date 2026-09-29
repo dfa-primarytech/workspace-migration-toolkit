@@ -7,7 +7,14 @@ import httpx
 import pytest
 from workspace_toolkit.config import Settings
 from workspace_toolkit.errors import ToolkitError
-from workspace_toolkit.google import Google, asset_names, convert, google_text, verify
+from workspace_toolkit.google import (
+    LIBRARY,
+    Google,
+    asset_names,
+    convert,
+    google_text,
+    verify,
+)
 from workspace_toolkit.package import PPTX_MIME
 from workspace_toolkit.pptx import analyse, render_path
 
@@ -208,6 +215,56 @@ def test_upload_does_not_follow_untrusted_location(tmp_path):
     assert len(requests) == 1
 
 
+def test_download_writes_the_file_and_returns_its_size(tmp_path):
+    destination = tmp_path / "picked.docx"
+
+    def handler(request):
+        assert request.url.path == "/drive/v3/files/file123"
+        assert request.url.params["alt"] == "media"
+        return httpx.Response(200, content=b"a real docx body" * 100)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await Google("private-token", client).download(
+                "file123", destination, max_bytes=1_000_000
+            )
+
+    size = asyncio.run(run())
+    assert size == len(b"a real docx body" * 100)
+    assert destination.read_bytes() == b"a real docx body" * 100
+
+
+def test_download_stops_at_the_size_limit(tmp_path):
+    destination = tmp_path / "picked.docx"
+
+    def handler(request):
+        return httpx.Response(200, content=b"x" * 1000)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await Google("private-token", client).download("file123", destination, max_bytes=10)
+
+    with pytest.raises(ToolkitError) as excinfo:
+        asyncio.run(run())
+    assert excinfo.value.code == "upload_too_large"
+
+
+def test_download_reports_an_unavailable_file(tmp_path):
+    destination = tmp_path / "picked.docx"
+
+    def handler(request):
+        return httpx.Response(404)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await Google("private-token", client).download("gone", destination, max_bytes=1000)
+
+    with pytest.raises(ToolkitError) as excinfo:
+        asyncio.run(run())
+    assert excinfo.value.code == "drive_file_unavailable"
+    assert not destination.exists()
+
+
 def test_google_rejects_malformed_success_responses(tmp_path):
     path = tmp_path / "asset"
     path.write_bytes(b"data")
@@ -293,6 +350,8 @@ def test_the_library_folder_is_created_once_when_it_is_missing():
     first_run = [
         lambda r: httpx.Response(200, json={"files": []}),
         lambda r: httpx.Response(200, json={"id": "library-new"}),
+        # The search again, after creating it: only ours is there.
+        lambda r: httpx.Response(200, json={"files": [{"id": "library-new"}]}),
         lambda r: httpx.Response(200, json={"id": "job-1"}),
     ]
 
@@ -306,6 +365,91 @@ def test_the_library_folder_is_created_once_when_it_is_missing():
         assert created[1]["parents"] == ["library-new"]
 
     asyncio.run(run())
+
+
+class Drive:
+    """A stateful Drive stand-in for folders. Every call yields to the event
+    loop first, the way a real network call does, so concurrent jobs
+    interleave between the search and the create."""
+
+    def __init__(self, elsewhere=None):
+        self.folders = []  # (id, name, parent), oldest first
+        self.calls = []
+        # Another instance creating a library just as this one does.
+        self.elsewhere = elsewhere
+
+    async def handler(self, request):
+        await asyncio.sleep(0)
+        self.calls.append(request)
+        if request.method == "GET":
+            size = int(request.url.params["pageSize"])
+            ids = [f[0] for f in self.folders if f[1] == LIBRARY and f[2] is None]
+            return httpx.Response(200, json={"files": [{"id": i} for i in ids[:size]]})
+        body = json_body(request)
+        parent = (body.get("parents") or [None])[0]
+        if parent is None and self.elsewhere:
+            self.folders.append((self.elsewhere, LIBRARY, None))
+            self.elsewhere = None
+        folder_id = f"folder-{len(self.folders) + 1}"
+        self.folders.append((folder_id, body["name"], parent))
+        return httpx.Response(200, json={"id": folder_id})
+
+    def libraries(self):
+        return [f[0] for f in self.folders if f[1] == LIBRARY and f[2] is None]
+
+
+def test_two_conversions_at_once_share_one_library_folder():
+    """Issue #70: both jobs searched, both missed, and both created a library."""
+    drive = Drive()
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(drive.handler)) as client:
+            one, two = Google("test-token", client), Google("test-token", client)
+            jobs = await asyncio.gather(one.folder("First"), two.folder("Second"))
+        return jobs, one.warnings + two.warnings
+
+    jobs, warnings = asyncio.run(run())
+    assert len(drive.libraries()) == 1, drive.folders
+    parents = {f[2] for f in drive.folders if f[0] in jobs}
+    assert parents == set(drive.libraries()), "both jobs belong in the one library"
+    assert warnings == []
+
+
+def test_a_library_made_elsewhere_at_the_same_moment_wins_and_is_reported():
+    """The lock cannot reach another instance, so the re-check is what finds it."""
+    drive = Drive(elsewhere="library-older")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(drive.handler)) as client:
+            google = Google("test-token", client)
+            job = await google.folder("Worksheet")
+        return job, google.warnings
+
+    job, warnings = asyncio.run(run())
+    assert drive.libraries() == ["library-older", "folder-2"]
+    assert next(f[2] for f in drive.folders if f[0] == job) == "library-older"
+    assert [w["code"] for w in warnings] == ["library_duplicated"]
+    assert all(c.method in {"GET", "POST"} for c in drive.calls), "nothing moved or deleted"
+
+
+def test_a_failed_recheck_keeps_the_folder_it_made():
+    responses = [
+        lambda r: httpx.Response(200, json={"files": []}),
+        lambda r: httpx.Response(200, json={"id": "library-new"}),
+        lambda r: httpx.Response(500),
+        lambda r: httpx.Response(200, json={"id": "job-1"}),
+    ]
+
+    async def run():
+        calls, transport = transport_calls(responses)
+        async with httpx.AsyncClient(transport=transport) as client:
+            google = Google("test-token", client)
+            await google.folder("Worksheet")
+        return calls, google.warnings
+
+    calls, warnings = asyncio.run(run())
+    assert json_body(calls[-1])["parents"] == ["library-new"]
+    assert warnings == []
 
 
 def test_a_throttled_asset_copy_is_retried_until_it_lands(tmp_path, monkeypatch):
@@ -393,7 +537,13 @@ def deck(*slides: list[str], assets: dict[str, str] | None = None) -> dict:
         "pages": [
             {
                 "index": index,
-                "elements": [{"assetIds": [asset_id]} for asset_id in ids],
+                # An id, or (id, the object's own name).
+                "elements": [
+                    {"assetIds": [i[0]], "name": i[1]}
+                    if isinstance(i, tuple)
+                    else {"assetIds": [i]}
+                    for i in ids
+                ],
             }
             for index, ids in enumerate(slides)
         ],
@@ -489,3 +639,43 @@ def test_an_unknown_type_is_named_without_inventing_a_suffix():
 def test_without_a_source_name_an_asset_is_still_named_usefully():
     manifest = deck([], ["sha1"], assets={"sha1": "image/png"})
     assert asset_names(manifest, "")["sha1"] == "slide 2 – image 1.png"
+
+
+# --------------------------------------------- media keeps its own name
+
+
+def test_media_is_named_after_the_file_the_teacher_inserted():
+    # PowerPoint names an inserted video or sound after its file.
+    manifest = deck([], [("v1", "Volcano eruption")], assets={"v1": "video/mp4"})
+    assert asset_names(manifest, "Science")["v1"] == "Science – slide 2 – Volcano eruption.mp4"
+
+
+def test_the_files_own_extension_is_not_doubled():
+    manifest = deck([("a1", "Class song.m4a")], assets={"a1": "audio/mpeg"})
+    assert asset_names(manifest, "Music")["a1"] == "Music – slide 1 – Class song.mp3"
+
+
+def test_powerpoints_default_names_fall_back_to_the_number():
+    manifest = deck(
+        [("v1", "Video 2"), ("a1", "Recorded Sound"), ("p1", "Picture 3"), ("x1", "")],
+        assets={"v1": "video/mp4", "a1": "audio/wav", "p1": "image/x-emf", "x1": "video/mp4"},
+    )
+    names = asset_names(manifest, "Topic")
+    assert names["v1"] == "Topic – slide 1 – video 1.mp4"
+    assert names["a1"] == "Topic – slide 1 – audio 1.wav"
+    assert names["p1"] == "Topic – slide 1 – image 1.emf"
+    assert names["x1"] == "Topic – slide 1 – video 2.mp4"
+
+
+def test_two_files_with_one_name_stay_apart():
+    manifest = deck(
+        [("v1", "Intro")], [("v2", "Intro")], assets={"v1": "video/mp4", "v2": "video/mp4"}
+    )
+    names = asset_names(manifest, "Topic")
+    assert names["v1"] == "Topic – slide 1 – Intro.mp4"
+    assert names["v2"] == "Topic – slide 2 – Intro (2).mp4"
+
+
+def test_an_unsafe_object_name_is_cleaned():
+    manifest = deck([("v1", 'Week 3/4: "tides"')], assets={"v1": "video/mp4"})
+    assert asset_names(manifest, "Topic")["v1"] == "Topic – slide 1 – Week 3 4 tides.mp4"

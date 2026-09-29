@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
+from weakref import WeakKeyDictionary
 
 import httpx
 
@@ -27,6 +28,21 @@ LIBRARY = "Workspace conversions"
 # waiting out; anything else is a real refusal and retrying only hides it.
 TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
 UPLOAD_ATTEMPTS = 4
+
+
+# One lock per event loop -- in production, one per process. It is shared by
+# every person's jobs, which is fine: it covers a single search, and a create
+# only on someone's very first conversion. Keyed by loop because an
+# asyncio.Lock belongs to the loop that first waits on it.
+_library_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
+
+
+def _library_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _library_locks.get(loop)
+    if lock is None:
+        lock = _library_locks[loop] = asyncio.Lock()
+    return lock
 
 
 def http_status(exc: BaseException) -> int | None:
@@ -52,6 +68,9 @@ class Google:
     def __init__(self, token: str, client: httpx.AsyncClient):
         self.client = client
         self.headers = {"Authorization": "Bearer " + token}
+        # Things worth telling the person that happened in Drive itself rather
+        # than in the conversion; the caller adds them to the report.
+        self.warnings: list[dict] = []
 
     async def request(self, method: str, url: str, **kwargs) -> dict:
         try:
@@ -66,6 +85,46 @@ class Google:
                 "google_failed",
                 "Google could not complete this operation. Check the report before retrying.",
                 502,
+                detail=failure_detail(exc),
+            ) from exc
+
+    async def download(self, file_id: str, destination: Path, max_bytes: int | None) -> int:
+        """Downloads a Drive file (picked, not one this app made) into
+        `destination`, chunked, and stopped at `max_bytes` if a deployment set
+        one. Returns the byte count written, so the caller can apply the same
+        "not empty" check it already applies to a browser upload.
+
+        A browser upload is already bounded by the same limit as it streams
+        (see web.py); a file picked from Drive has no such limit until it is
+        checked here, so the same guard applies mid-download rather than
+        after the whole thing has been pulled into the temp workspace.
+        """
+        try:
+            async with self.client.stream(
+                "GET",
+                DRIVE + f"/files/{file_id}",
+                headers=self.headers,
+                params={"alt": "media"},
+            ) as response:
+                response.raise_for_status()
+                size = 0
+                with destination.open("xb") as stream:
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if max_bytes is not None and size > max_bytes:
+                            raise ToolkitError(
+                                "upload_too_large",
+                                "This file exceeds the upload size limit.",
+                                413,
+                            )
+                        stream.write(chunk)
+                return size
+        except httpx.HTTPError as exc:
+            raise ToolkitError(
+                "drive_file_unavailable",
+                "This file could not be read from Drive. It may have been "
+                "moved, deleted, or is not shared with this app.",
+                404,
                 detail=failure_detail(exc),
             ) from exc
 
@@ -89,7 +148,41 @@ class Google:
         Under the `drive.file` scope a search only ever returns files this app
         created, so this can never adopt a folder of the person's own that
         happens to share the name.
+
+        Drive has no create-if-absent, so the search and the create are two
+        calls. Two jobs in this process take turns through a lock, so the
+        second finds the first's folder (issue #70). The lock cannot reach
+        another instance, so after creating a folder the search is repeated:
+        if an older library exists after all, that one is used -- the one
+        every later job will pick -- and the person is told a second folder
+        was made. Nothing is moved or deleted.
         """
+        async with _library_lock():
+            existing = await self._libraries(1)
+            if existing:
+                return existing[0]
+            made = await self.make_folder(LIBRARY)
+            try:
+                found = await self._libraries(2)
+            except ToolkitError:
+                # The folder exists and works; failing to double-check it is
+                # no reason to fail the conversion.
+                return made
+            if found and found[0] != made:
+                self.warnings.append(
+                    warning(
+                        "library_duplicated",
+                        f'Two "{LIBRARY}" folders were created in your Drive at the same '
+                        "moment. This conversion is in the older one, where later "
+                        "conversions will go too. If the other is empty, it can be deleted.",
+                        classification=C.IGNORED,
+                    )
+                )
+                return found[0]
+            return made
+
+    async def _libraries(self, limit: int) -> list[str]:
+        """Library folder ids, oldest first."""
         found = await self.request(
             "GET",
             DRIVE + "/files",
@@ -97,14 +190,15 @@ class Google:
                 "q": f"mimeType='{FOLDER_MIME}' and name='{LIBRARY}' and trashed=false",
                 "fields": "files(id)",
                 "orderBy": "createdTime",
-                "pageSize": 1,
+                "pageSize": limit,
                 "spaces": "drive",
             },
         )
-        existing = found.get("files") or []
-        if existing and isinstance(existing[0].get("id"), str):
-            return existing[0]["id"]
-        return await self.make_folder(LIBRARY)
+        return [
+            f["id"]
+            for f in found.get("files") or []
+            if isinstance(f, dict) and isinstance(f.get("id"), str) and f["id"]
+        ]
 
     async def folder(self, job_name: str = "Conversion") -> str:
         """A fresh subfolder for this job, inside the shared library folder."""
@@ -418,6 +512,42 @@ def _placements(manifest: dict) -> dict[str, list[int]]:
     return placed
 
 
+# Names PowerPoint gives an object by default, which say nothing about it.
+DEFAULT_SHAPE_NAME = re.compile(
+    r"(?:picture|image|video|audio|media|movie|sound|online media|recorded sound|"
+    r"screen recording|content placeholder|placeholder|object|graphic)?\s*\d*",
+    re.IGNORECASE,
+)
+MEDIA_SUFFIX = re.compile(
+    r"\.(?:mp4|m4v|mov|wmv|avi|mpe?g|mp3|m4a|wav|wma|aac|ogg|png|jpe?g|gif|bmp|emf|wmf|tiff?)$",
+    re.IGNORECASE,
+)
+
+
+def _own_names(manifest: dict) -> dict[str, str]:
+    """Each asset's own name, from the first object on a slide that uses it.
+
+    Only a meaningful name counts: "Picture 3" or "Video 2" is PowerPoint's
+    default and would only repeat what the numbered name already says.
+    """
+    if manifest.get("source", {}).get("type") != "pptx":
+        return {}
+    kinds = {a["id"]: a.get("kind") for a in manifest.get("assets", {}).values()}
+    names: dict[str, str] = {}
+    for page in manifest.get("pages") or []:
+        for element in page.get("elements") or []:
+            own = clean_name(MEDIA_SUFFIX.sub("", (element.get("name") or "").strip()))
+            if not own or DEFAULT_SHAPE_NAME.fullmatch(own):
+                continue
+            ids = element.get("assetIds") or []
+            # A video or sound object also carries its still image; the name
+            # describes the media, so the still image does not take it.
+            media = [i for i in ids if kinds.get(i) in {"audio", "video"}]
+            for asset_id in media or ids:
+                names.setdefault(asset_id, own)
+    return names
+
+
 def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     """A name for every asset that says where it came from, keyed by asset id.
 
@@ -425,8 +555,14 @@ def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     follows the deck rather than the order the archive happened to store them
     in. An asset nothing placed -- one used only by a layout or a master --
     keeps a name without a slide rather than being given a misleading one.
+
+    Where the object carrying it has a name of its own -- PowerPoint names an
+    inserted video or sound after its file -- that name replaces the number,
+    so a teacher putting it back finds "Volcano eruption", not "video 3".
     """
     placed = _placements(manifest)
+    own = _own_names(manifest)
+    used: Counter[str] = Counter()
     width = len(str(max((slides[-1] for slides in placed.values()), default=0)))
     deck = clean_name(original_name)
     assets = list(manifest.get("assets", {}).values())
@@ -440,12 +576,16 @@ def asset_names(manifest: dict, original_name: str = "") -> dict[str, str]:
     for _, asset in ranked:
         kind = asset.get("kind") or "file"
         counts[kind] += 1
+        label = own.get(asset["id"]) or f"{kind} {counts[kind]}"
+        used[label.casefold()] += 1
+        if used[label.casefold()] > 1:  # two different files, one name
+            label = f"{label} ({used[label.casefold()]})"
         parts = [
             part
             for part in (
                 deck,
                 _slide_phrase(placed.get(asset["id"], []), width),
-                f"{kind} {counts[kind]}",
+                label,
             )
             if part
         ]
@@ -535,6 +675,55 @@ async def save_assets(
         )
 
 
+def videos_removed_warnings(videos: list[dict], manifest: dict, report: dict) -> list[dict]:
+    """What to tell a person about videos taken out before upload (issue #36).
+
+    Once a video is taken out, its copy in the conversion folder is the only
+    one the conversion made -- so a copy that failed is not a missed safety
+    net, as for other assets, but a video the person must fetch themselves.
+    """
+    if not videos:
+        return []
+    by_part = {
+        part: asset["id"] for asset in manifest["assets"].values() for part in asset["sourceParts"]
+    }
+    saved = {output["assetId"] for output in report.get("assetOutputs", [])}
+    missing = [video["part"] for video in videos if by_part.get(video["part"]) not in saved]
+    total = sum(video["bytes"] for video in videos)
+    plural = len(videos) != 1
+    where = (
+        ""
+        if missing
+        else f", and {'the videos are' if plural else 'the video is'} in the conversion folder"
+    )
+    notes = [
+        warning(
+            "videos_removed",
+            f"{len(videos)} embedded video{'s' if plural else ''} "
+            f"({total / 1_000_000:,.1f} MB) {'were' if plural else 'was'} not sent "
+            "to Google, which does not import embedded video. "
+            f"{'Each slide shows its' if plural else 'The slide shows the'} video's still image"
+            f"{where}.",
+            classification=C.IGNORED,
+            count=len(videos),
+            bytes=total,
+        )
+    ]
+    if missing:
+        notes.append(
+            warning(
+                "removed_video_not_saved",
+                f"{len(missing)} video{'s' if len(missing) != 1 else ''} could not be saved "
+                "to the conversion folder, so the converted presentation has only "
+                f"{'their' if len(missing) != 1 else 'its'} still image. The video is still "
+                "in your original file.",
+                classification=C.UNSUPPORTED,
+                parts=missing,
+            )
+        )
+    return notes
+
+
 async def convert(
     root: Path,
     manifest: dict,
@@ -576,9 +765,12 @@ async def convert(
         render_report = root / "result" / "render.json"
         if render_report.exists():
             rendered_details = json.loads(render_report.read_text(encoding="utf-8"))
+            videos = rendered_details.get("videosRemoved", [])
             report["conversion"] = {
-                "fontSubstitutions": rendered_details.get("fontSubstitutions", [])
+                "fontSubstitutions": rendered_details.get("fontSubstitutions", []),
+                "videosRemoved": videos,
             }
+            report["warnings"].extend(videos_removed_warnings(videos, manifest, report))
         report["verification"] = "page_size_count_and_text_checked"
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:

@@ -3,8 +3,8 @@
 ## XLSX update — 28 September 2026
 
 Issue #51's .xlsm upload crash, chart-sheet rejection and main conflict are fixed
-on `rescue/xlsx-sheets-mvp`, pending draft review. Main's CLI behaviour is retained.
-Review the inherited XLSX MVP together with the fixes before approving a merge.
+on `rescue/xlsx-sheets-mvp`, reconciled with main at `4c6d655`. Main's CLI,
+Publisher and platform behaviour is retained. PR #72 is ready to merge.
 The manifest privacy boundary is now documented accurately. Follow-ups still
 include dimension-based limit overestimation, index consistency and the unused
 workspace sweeper. Live Sheets import remains unverified.
@@ -47,9 +47,10 @@ workspace sweeper. Live Sheets import remains unverified.
 10. Empty `<w:drawing>` residue left by every converted anchor (issue #20).
    Recorded only: no cleanup until a before/after rendering case shows an
    effect.
-11. Library folder race (#70): two conversions at once can each create a
-   "Workspace conversions" folder. Option 1 in the issue (lock plus re-check)
-   is platform-only and writes nothing extra to Drive.
+11. Library folder race (#70): option 1 (lock plus re-check) is in PR
+   `fix/library-folder-race`. Left open after it: cross-instance duplicates
+   are reported, not prevented (option 2 would narrow that), and the
+   warning is not yet in the report copy saved to Drive.
 12. DOCX analysis counts anchors in `document.xml` only, while `render` also
    transforms headers and footers, so the pre-conversion report can
    under-count. Split out of #52; SilverDog's (`docx.py`).

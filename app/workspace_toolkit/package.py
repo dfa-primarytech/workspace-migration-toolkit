@@ -46,6 +46,7 @@ class Format:
     main_mime: str
     noun: str  # used in user-facing messages, e.g. "PowerPoint presentation"
     chooser: str  # e.g. "a PowerPoint .pptx file"
+    aliases: tuple[str, ...] = ()  # other MIME types browsers send for it
     allow_macros: bool = False
 
 
@@ -90,6 +91,19 @@ XLSM = Format(
     allow_macros=True,
 )
 
+# Not an OOXML package at all: an OLE compound file read by publisher-parser.
+# The zip-specific fields are empty; nothing opens a .pub as a Package.
+PUB = Format(
+    key="pub",
+    suffix=".pub",
+    mime="application/x-mspublisher",
+    main_part="",
+    main_mime="",
+    noun="publication",
+    chooser="a Publisher .pub file",
+    aliases=("application/vnd.ms-publisher",),
+)
+
 FORMATS = {fmt.suffix: fmt for fmt in (PPTX, DOCX, XLSX, XLSM)}
 
 
@@ -103,7 +117,8 @@ def validate_upload_name(filename: str, mime: str, fmt: Format = PPTX) -> None:
         raise ToolkitError("invalid_filename", f"Please choose {fmt.chooser}.")
     if not filename.lower().endswith(fmt.suffix):
         raise ToolkitError("unsupported_type", f"Only {fmt.chooser} files are supported here.")
-    if mime.split(";", 1)[0].lower() not in {fmt.mime.lower(), "application/octet-stream"}:
+    accepted_mimes = {fmt.mime.lower(), *(alias.lower() for alias in fmt.aliases)}
+    if mime.split(";", 1)[0].lower() not in {*accepted_mimes, "application/octet-stream"}:
         raise ToolkitError("invalid_mime", f"This file does not have a supported {fmt.key} type.")
 
 
@@ -111,8 +126,12 @@ class Package:
     def __init__(self, path: Path, settings: Settings, fmt: Format = PPTX):
         self.settings = settings
         self.format = fmt
-        if path.stat().st_size > settings.max_upload_bytes:
+        size = path.stat().st_size
+        if settings.max_upload_bytes is not None and size > settings.max_upload_bytes:
             raise ToolkitError("upload_too_large", "This file exceeds the upload size limit.", 413)
+        # In proportion to this file, never below the configured floors.
+        self.entry_limit = settings.entry_limit(size)
+        self.expanded_limit = settings.expanded_limit(size)
         with path.open("rb") as stream:
             signature = stream.read(8)
             if signature == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
@@ -165,8 +184,8 @@ class Package:
                 )
             total += info.file_size
             if (
-                info.file_size > self.settings.max_entry_bytes
-                or total > self.settings.max_expanded_bytes
+                info.file_size > self.entry_limit
+                or total > self.expanded_limit
                 or info.file_size > max(info.compress_size, 1) * self.settings.max_compression_ratio
             ):
                 raise ToolkitError("zip_limits", "The expanded file exceeds processing limits.")
@@ -209,7 +228,7 @@ class Package:
     def read(self, name: str, limit: int | None = None) -> bytes:
         if name not in self.names:
             raise ToolkitError("missing_part", "The file is missing a required component.")
-        bound = limit or self.settings.max_entry_bytes
+        bound = limit or self.entry_limit
         if self.zip.getinfo(name).file_size > bound:
             raise ToolkitError("part_limit", "A file component exceeds processing limits.")
         try:

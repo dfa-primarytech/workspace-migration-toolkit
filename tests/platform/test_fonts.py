@@ -135,6 +135,9 @@ def test_worker_writes_pptx_font_report(pptx, tmp_path, monkeypatch):
     config = tmp_path / "limits.json"
     config.write_text("{}", encoding="utf-8")
     monkeypatch.setattr("sys.argv", ["worker", str(pptx), str(output), str(config), "pptx"])
+    # In-process, so the worker's OS limits would cap the test runner itself
+    # -- permanently, and every worker started after it (issue #36, PR #89).
+    monkeypatch.setattr(worker, "limit", lambda name, value: None)
     worker.main()
 
     assert (output / "converted.pptx").exists()

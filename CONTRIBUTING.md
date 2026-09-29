@@ -30,38 +30,17 @@ unzip -o sample.docx -d sample/
 grep -o '<wp:anchor' sample/word/document.xml | wc -l
 ```
 
-## Apps Script gotchas
-
-These cost real time. Worth knowing before you touch `Code.gs`:
-
-- **`XmlService.Element` has no `indexOf()`.** Use the `_contentIndex` /
-  `_childIndex` helpers.
-- **Element wrappers can't be compared with `===`.** Two reads of the same node
-  return different JavaScript objects, so `indexOf` on an array of elements
-  silently fails rather than throwing. Identity goes through the `_MARK`
-  attribute helpers — see `_markKey`.
-- **`Utilities.unzip()` rejects any blob not typed `application/zip`**, including
-  a correctly-typed `.docx`. Retype a copy first.
-- **File names are case-sensitive.** `createHtmlOutputFromFile('Index')` will not
-  find `index.html`.
-- **The manifest is `appsscript.json`** — two s's — and is edited in place via
-  Project Settings, not added as a new file.
-
 ## Testing
 
-Run the dependency-free regression tests with Node.js 20 or newer:
+See [docs/platform.md](docs/platform.md#checks) for the full check suite
+(`ruff`, `mypy`, `pytest`, `bandit`, `pip-audit`, the secret scanner). At
+minimum:
 
 ```bash
-node --test tests/*.test.cjs
+pip install -r requirements-dev.lock
+pip install --no-deps -e .
+pytest -q
 ```
-
-These execute the Apps Script and browser JavaScript with focused runtime stubs.
-They cover unsupported-anchor preservation, upload guards and browser error
-handling. They do not emulate XmlService or validate complete OOXML documents.
-A full XML fixture suite remains valuable work (issue #2).
-
-Before deploying, also convert known files in Apps Script and compare in Docs,
-including charts, grouped shapes, canvases and the original worksheet layouts.
 
 ## Style
 

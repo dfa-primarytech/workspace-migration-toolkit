@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 import zipfile
 from dataclasses import replace
@@ -117,8 +118,9 @@ def test_duplicate_paths_rejected(pptx):
     "change, code",
     [
         ({"max_entries": 2}, "zip_entries"),
-        ({"max_entry_bytes": 20}, "zip_limits"),
-        ({"max_expanded_bytes": 50}, "zip_limits"),
+        # The floors, with the in-proportion allowance switched off.
+        ({"max_entry_bytes": 20, "entry_scale": 0}, "zip_limits"),
+        ({"max_expanded_bytes": 50, "expanded_scale": 0}, "zip_limits"),
         ({"max_compression_ratio": 1}, "zip_limits"),
         ({"max_xml_bytes": 20}, "part_limit"),
         ({"max_xml_elements": 2}, "xml_limit"),
@@ -320,3 +322,89 @@ def test_group_children_are_placed_in_slide_coordinates(tmp_path):
     # 50 x 50 there -> 100 x 50; its child fills it.
     assert bounds[2] == {"x": 100.0, "y": 250.0, "width": 100.0, "height": 50.0}
     assert bounds[3] == {"x": 100.0, "y": 250.0, "width": 100.0, "height": 50.0}
+
+
+# ------------------------------------------------ no fixed size limit (#36)
+
+
+def test_there_is_no_upload_limit_by_default():
+    assert Settings().max_upload_bytes is None
+
+
+def test_a_large_part_is_allowed_in_proportion_to_a_large_file(tmp_path):
+    # Real media barely compresses: a part about the size of the whole file
+    # is normal, and was refused whenever it passed the fixed 50 MiB.
+    parts = fixture_parts()
+    parts["ppt/media/video.mp4"] = os.urandom(200_000)
+    path = write_pptx(tmp_path / "big.pptx", parts)
+    tight = replace(Settings(), max_entry_bytes=1000, max_expanded_bytes=1000)
+    Package(path, tight).close()  # does not raise
+
+
+def test_a_small_file_that_expands_hugely_is_still_refused(tmp_path):
+    # The allowance is in proportion to the file, so a zip bomb -- tiny on
+    # disk, enormous expanded -- meets the floor exactly as before.
+    parts = fixture_parts()
+    parts["ppt/media/video.mp4"] = bytes(5_000_000)
+    path = write_pptx(tmp_path / "bomb.pptx", parts)
+    settings = replace(Settings(), max_entry_bytes=1_000_000, max_compression_ratio=10**9)
+    with pytest.raises(ToolkitError) as error:
+        Package(path, settings)
+    assert error.value.code == "zip_limits"
+
+
+def test_time_and_memory_allowances_grow_with_the_file():
+    settings = Settings()
+    mib = 1024 * 1024
+    assert settings.parser_timeout_for(0) == 30
+    assert settings.parser_timeout_for(400 * mib) == 130
+    assert settings.job_timeout_for(0) == 240
+    assert settings.job_timeout_for(100 * mib) == 440
+    assert settings.job_timeout_for(10_000 * mib) == 3300, "stays under Cloud Run's hour"
+    assert settings.worker_memory_for(300 * mib) == 1368 * mib
+
+
+def test_max_upload_size_is_optional(monkeypatch):
+    monkeypatch.delenv("MAX_UPLOAD_SIZE", raising=False)
+    assert Settings.from_env().max_upload_bytes is None
+    monkeypatch.setenv("MAX_UPLOAD_SIZE", str(500 * 1024 * 1024))
+    assert Settings.from_env().max_upload_bytes == 500 * 1024 * 1024
+    monkeypatch.setenv("MAX_UPLOAD_SIZE", "0")
+    with pytest.raises(ValueError):
+        Settings.from_env()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="OS resource limits are Linux-only")
+def test_a_worker_under_a_stricter_inherited_limit_still_runs(pptx, tmp_path):
+    # A process cannot raise a hard limit it inherited. The worker's memory cap
+    # grows with the file, so it must settle for the stricter cap, not fail.
+    import resource
+    import subprocess
+
+    output = tmp_path / "result"
+    output.mkdir()
+    config = tmp_path / "limits.json"
+    config.write_text("{}", encoding="utf-8")
+    ceiling = 700 * 1024 * 1024  # below the worker's own 768 MiB
+
+    def tighter():
+        resource.setrlimit(resource.RLIMIT_AS, (ceiling, ceiling))
+
+    run = subprocess.run(  # noqa: S603 -- fixed argv
+        [
+            sys.executable,
+            "-m",
+            "workspace_toolkit.worker",
+            str(pptx),
+            str(output),
+            str(config),
+            "pptx",
+        ],
+        preexec_fn=tighter,  # noqa: PLW1509 -- test-only, no threads
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    assert run.returncode == 0, (
+        (output / "error.json").read_text() if (output / "error.json").exists() else run.stderr
+    )

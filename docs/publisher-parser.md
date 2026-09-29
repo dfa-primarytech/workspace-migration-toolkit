@@ -313,5 +313,5 @@ its one layer is a wrapper.
 ## Scope
 
 Explicitly **not** in this milestone: Google Slides rendering, Google API
-calls, OAuth, bulk migration, changes to the Apps Script DOCX fixer
-(`src/`), and changes to the shared platform (`app/`, `tests/platform/`).
+calls, OAuth, bulk migration, and changes to the shared platform (`app/`,
+`tests/platform/`).

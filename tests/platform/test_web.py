@@ -243,3 +243,282 @@ def test_convert_refuses_a_sign_in_that_would_expire_mid_job(pptx):
     assert (
         client.post("/api/analyse", content=pptx.read_bytes(), headers=headers).status_code == 200
     )
+
+
+def test_what_happened_in_drive_reaches_the_report(monkeypatch, pptx):
+    """Issue #70: a duplicate library folder is reported whichever format ran."""
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    async def analysed(root, settings, fmt, **options):
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        google.warnings.append({"code": "library_duplicated", "message": "two folders"})
+        return {"status": "completed", "warnings": [{"code": "own"}]}
+
+    pipeline = replace(resolve("x.pptx"), convert=converted)
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: pipeline)
+    client = signed_client(configured())
+    response = client.post(
+        "/api/convert",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Source-SHA256": "abc",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert [w["code"] for w in response.json()["warnings"]] == ["own", "library_duplicated"]
+
+
+def test_session_advertises_picker_availability():
+    signed_in = signed_client(configured(picker_api_key="test-picker-key"))
+    body = signed_in.get("/api/session").json()
+    assert body["pickerEnabled"] is True
+    key = body["pickerApiKey"]
+    assert key == "test-picker-key"  # pragma: allowlist secret -- synthetic fixture
+    # A drive.file-scoped file grant via Picker needs setAppId(), verified
+    # live against a real GCP project on 2026-09-28 -- without it, a picked
+    # file downloads as "drive_file_unavailable" even though Picker itself
+    # works. Google always builds a client ID as "<project number>-...", so
+    # this is derived rather than configured separately.
+    assert body["pickerAppId"] == "test"
+    not_configured = signed_client(configured())
+    body = not_configured.get("/api/session").json()
+    assert body["pickerEnabled"] is False
+    assert body["pickerApiKey"] == ""
+    assert body["pickerAppId"] == ""
+
+
+def test_the_csp_allows_what_picker_actually_needs():
+    """Verified live against a real GCP project (2026-09-28). gapi's own
+    picker widget sets inline style="..." attributes on elements it creates
+    in this page, not just inside its iframe -- style-src needed
+    'unsafe-inline' too, which the original (reasoned-not-observed) version
+    of this CSP was missing."""
+    signed_in = signed_client(configured(picker_api_key="test-picker-key"))
+    csp = signed_in.get("/api/session").headers["content-security-policy"]
+    assert "script-src 'self' https://apis.google.com" in csp
+    assert "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'" in csp
+    assert "frame-src https://docs.google.com" in csp
+    assert "connect-src 'self' https://www.googleapis.com" in csp
+    not_configured = signed_client(configured())
+    csp = not_configured.get("/api/session").headers["content-security-policy"]
+    assert csp == (
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; img-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    )
+
+
+def test_picker_token_route_is_unavailable_without_configuration():
+    client = signed_client(configured())
+    response = client.get("/api/picker-token")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "picker_unavailable"
+
+
+def test_picker_token_route_returns_the_session_access_token():
+    client = signed_client(configured(picker_api_key="test-picker-key"))
+    response = client.get("/api/picker-token")
+    assert response.status_code == 200
+    assert response.json() == {"accessToken": "not-a-real-token"}
+
+
+def test_a_drive_file_id_is_refused_when_picker_is_not_configured():
+    client = signed_client(configured())
+    response = client.post(
+        "/api/analyse",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "picker_unavailable"
+
+
+def test_convert_downloads_a_drive_picked_file_instead_of_the_request_body(monkeypatch, pptx):
+    """A Drive pick sends no body at all -- the server fetches the bytes
+    itself by id (see Google.download), so nothing about the source ever
+    passes through the browser twice."""
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    seen = {}
+
+    async def fake_download(self, file_id, destination, max_bytes):
+        seen["file_id"] = file_id
+        seen["max_bytes"] = max_bytes
+        destination.write_bytes(pptx.read_bytes())
+        return destination.stat().st_size
+
+    async def analysed(root, settings, fmt, **options):
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        return {"status": "completed"}
+
+    pipeline = replace(resolve("x.pptx"), convert=converted)
+    monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: pipeline)
+    client = signed_client(configured(picker_api_key="test-picker-key"))
+    response = client.post(
+        "/api/convert",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+            "X-Source-SHA256": "abc",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert seen["file_id"] == "drive123"
+
+
+def test_an_empty_drive_file_is_refused_the_same_way_as_an_empty_upload(monkeypatch):
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    async def fake_download(self, file_id, destination, max_bytes):
+        destination.touch()
+        return 0
+
+    monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web, "resolve", lambda name: resolve("x.pptx"))
+    client = signed_client(configured(picker_api_key="test-picker-key"))
+    response = client.post(
+        "/api/analyse",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "empty_upload"
+
+
+# ------------------------------------------------ no fixed size limit (#36)
+
+
+def test_the_browser_is_told_there_is_no_limit():
+    body = TestClient(create_app(configured()), base_url="http://localhost:8080")
+    assert body.get("/api/session").json()["maxUploadBytes"] is None
+
+
+def test_a_file_beyond_googles_import_limit_is_warned_about_not_refused(monkeypatch, pptx):
+    from workspace_toolkit import web
+
+    monkeypatch.setitem(web.IMPORT_LIMITS, "pptx", ("Google Slides", 100))
+    client = signed_client(configured())
+    response = client.post(
+        "/api/analyse",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+        },
+    )
+    assert response.status_code == 200, response.text
+    codes = [w["code"] for w in response.json()["warnings"]]
+    assert "beyond_import_limit" in codes
+
+
+def test_a_file_within_googles_import_limit_gets_no_such_warning(pptx):
+    client = signed_client(configured())
+    response = client.post(
+        "/api/analyse",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+        },
+    )
+    assert "beyond_import_limit" not in [w["code"] for w in response.json()["warnings"]]
+
+
+def _drive_convert(monkeypatch, reported_size, expires_in):
+    """A Drive pick whose download reports `reported_size` bytes."""
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    async def fake_download(self, file_id, destination, max_bytes):
+        destination.write_bytes(b"x")
+        return reported_size
+
+    async def analysed(root, settings, fmt, **options):
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        return {"status": "completed"}
+
+    monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: replace(resolve("x.pptx"), convert=converted))
+    settings = configured(picker_api_key="test-picker-key")
+    app = create_app(settings)
+    client = TestClient(app, base_url=settings.base_url)
+    data = {"access_token": "t", "expires": time.time() + expires_in, "csrf": "test-csrf"}
+    client.cookies.set(SESSION, app.state.auth.seal(data))
+    return client.post(
+        "/api/convert",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+            "X-Source-SHA256": "abc",
+        },
+    )
+
+
+def test_a_large_drive_file_is_checked_against_the_sign_in_once_its_size_is_known(monkeypatch):
+    # A Drive file's size is unknown until it is fetched; a 1 GiB file is
+    # allowed about 38 minutes, which a sign-in with 16 minutes left cannot cover.
+    response = _drive_convert(monkeypatch, 1024 * 1024 * 1024, expires_in=1000)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "session_expiring"
+
+
+def test_a_small_drive_file_converts_with_the_same_sign_in(monkeypatch):
+    response = _drive_convert(monkeypatch, 1000, expires_in=1000)
+    assert response.status_code == 200, response.text
+
+
+def test_the_import_limit_is_judged_on_what_google_receives(monkeypatch, pptx):
+    # A deck over the limit only because of its video is fine: the video is
+    # taken out before upload (issue #36, step 2).
+    from workspace_toolkit import web
+
+    monkeypatch.setitem(web.IMPORT_LIMITS, "pptx", ("Google Slides", pptx.stat().st_size - 1))
+    client = signed_client(configured())
+    response = client.post(
+        "/api/analyse",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert "beyond_import_limit" not in [w["code"] for w in response.json()["warnings"]]
