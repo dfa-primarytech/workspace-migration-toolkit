@@ -306,6 +306,10 @@ struct Document {
   // reads each picture's crop from it and drops it, so it is kept as it is
   // for a consumer to recover what the callback stream leaves out.
   std::string drawingData;
+  // The raw Escher/EscherDelayStm stream: the stored pictures themselves.
+  // libmspub takes from it only the pictures it places; a picture set inline
+  // in text (PUB-002's book covers in table cells) is left there.
+  std::string drawingDelayData;
 };
 
 } // namespace pubir

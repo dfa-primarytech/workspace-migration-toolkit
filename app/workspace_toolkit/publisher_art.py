@@ -64,6 +64,9 @@ class Prepared:
     # WordArt recovered from the drawing records, by the layer libmspub drew
     # its outline in: (publisher_wordart.WordArt, its box on the page).
     wordart: dict[str, tuple] = field(default_factory=dict)
+    # Pictures set inline in text (publisher_inline), by the mark they replace:
+    # (element id, row, column, paragraph index) -> [(Picture, Inline)].
+    inline: dict[tuple, list] = field(default_factory=dict)
     notes: list[dict] = field(default_factory=list)  # about the document as a whole
 
 

@@ -580,3 +580,31 @@ archive rather than growing this one further.
 - Decisions: DECISIONS.md, 2026-09-29 (wrap with indents).
 - Next task: merge on approval.
 - Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 14:01 UTC). The container `wmt-test-live` runs `wmt-test/app:pub7`. Remove them when live testing ends.
+
+---
+
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
+- Branch: `feat/publisher-wordart`, based on main `58d1915` (#97 merged)
+- Objective: recover WordArt. PUB-001's title "Early Reading at St.Vincent's" came through as two purple lines, as the human's screenshot from Publisher showed.
+- Files changed:
+  - `publisher_wordart.py` (new: read the WordArt properties, match to the outline layer, report unplaced);
+  - `publisher_slides.py` (`_wordart`, `wordart_size`, outlines left out, the grouping pass skips WordArt);
+  - `publisher_art.py` (`Prepared.wordart`) and `publisher.py` (reads it in the worker);
+  - `tests/platform/test_publisher_wordart.py` (new, 4);
+  - `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - On PUB-001 the title is a text box: "Early Reading" / "at St.Vincent's", Andika bold 31.5 pt, #8064a2, centred, where the WordArt was. No purple lines.
+  - The human's Publisher screenshots of all four pages also confirmed all five crops.
+- Checks:
+  - Linux (host): platform and parser suites with the binary and PUB-001, 548 passed.
+  - Ruff and mypy clean.
+  - Not yet seen in Google: the picture token expired at 14:01 UTC.
+- Known failures: none.
+- Unresolved:
+  - **Lists:** Publisher numbers PUB-001's table items and "Books to take home" (1., 2., 3.). libmspub never passes lists on, so the numbers are lost.
+  - **Table borders:** the original table has black borders, so the no-borders default (#95) is wrong for PUB-001. Both are probably in the Contents stream; that needs investigating.
+  - **Two sessions worked in this checkout at once.** The other session's uncommitted "join mid-sentence breaks" work is a local WIP commit, `7bf1f6c` on `feat/publisher-join-breaks`, awaiting the human's decision on joining breaks.
+- Decisions: DECISIONS.md, 2026-09-29 (WordArt).
+- Next task: a live run with a fresh token to see the title in Google; then lists and table borders.
+- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and an expired picture token. The container `wmt-test-live` and this machine's SSH tunnel on port 8080 are still up. The image `wmt-test/app:pub8` has this branch.

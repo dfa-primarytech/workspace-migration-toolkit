@@ -24,6 +24,7 @@ measured result, and the report says so.
 from __future__ import annotations
 
 import copy
+import math
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable
@@ -56,6 +57,8 @@ from .publisher_fit import (
     fit,
     measurable,
 )
+from .publisher_fit import height as laid_height
+from .publisher_inline import MARK, Inline
 from .publisher_wrap import Obstacle, wrap
 from .units import Frame, length_points, percentage, size
 
@@ -274,6 +277,51 @@ def run_style(style: dict, props: dict, fonts: dict[str, dict]) -> tuple[dict, l
     return result, fields
 
 
+def _with_room(paragraph: dict, room: float) -> dict:
+    """A paragraph with a picture set in it, as Slides gets it: the mark
+    gone, and that much more space above it for the picture to be put in.
+    A line that held only the picture is made as small as it can be."""
+    paragraph = copy.deepcopy(paragraph)
+    for run in paragraph.get("runs", []):
+        if run.get("items"):
+            for item in run["items"]:
+                if item.get("kind") == "text":
+                    item["value"] = item.get("value", "").replace(MARK, " ")
+        elif "text" in run:
+            run["text"] = run["text"].replace(MARK, " ")
+    if not "".join(t for t, _ in paragraph_text(paragraph)).strip():
+        for run in paragraph.get("runs", []):
+            run.setdefault("style", {})["fontSizePoints"] = 1
+    props = dict(paragraph.get("sourceProperties") or {})
+    above = length_points(props.get("fo:margin-top")) or 0.0
+    props["fo:margin-top"] = f"{above + room:.4f}pt"
+    paragraph["sourceProperties"] = props
+    return paragraph
+
+
+def rough_height(paras: list[Para], width: float) -> float:
+    """Text's height in a font with no measurements: half an em a character,
+    Google's line height, and each paragraph's own space above and below."""
+    total = 0.0
+    for para in paras:
+        biggest = max((s.size for _, s in para.runs), default=12.0)
+        ems = sum(len(text) * 0.5 * s.size for text, s in para.runs)
+        room = max(width - para.indent_start - para.indent_end, 1.0)
+        spacing = (para.line_spacing or 100.0) / 100
+        lines = max(1, math.ceil(ems / room))
+        total += para.space_above + para.space_below + lines * biggest * LINE * spacing
+    return total
+
+
+def _only_room(paragraph: dict) -> dict:
+    """The line of a paragraph with room above it, without that room."""
+    paragraph = copy.deepcopy(paragraph)
+    props = dict(paragraph.get("sourceProperties") or {})
+    props.pop("fo:margin-top", None)
+    paragraph["sourceProperties"] = props
+    return paragraph
+
+
 def paragraph_style(paragraph: dict) -> tuple[dict, list[str], list[dict]]:
     props = paragraph.get("sourceProperties") or {}
     result: dict = {}
@@ -317,7 +365,8 @@ def paragraph_style(paragraph: dict) -> tuple[dict, list[str], list[dict]]:
 # carriage return) at the end of each paragraph's text: found by the first live
 # run, where Google refused every page because the ranges overran the text.
 # Tabs stay, and line breaks inside a paragraph are written as vertical tabs.
-DROPPED = {chr(c) for c in range(32) if chr(c) not in "\t\u000b"} | {"\u007f"}
+# U+FFFC marks a picture set in the text (publisher_inline): placed apart, or lost.
+DROPPED = {chr(c) for c in range(32) if chr(c) not in "\t\u000b"} | {"\u007f", MARK}
 
 
 def clean(text: str) -> str:
@@ -750,16 +799,23 @@ def placed(object_id: str, page: str, frame: Frame) -> dict:
 # ------------------------------------------------------------------ elements
 
 
-def hidden_borders(object_id: str) -> dict:
-    """Every border of a table, made invisible."""
+# Publisher's default table grid: every cell edged in a thin black line. The
+# width is an estimate from print previews; the file doesn't store it.
+GRID_WEIGHT = 0.75  # points
+
+
+def grid_borders(object_id: str) -> dict:
+    """Every border of a table, as Publisher's default grid."""
     return {
         "updateTableBorderProperties": {
             "objectId": object_id,
             "borderPosition": "ALL",
             "tableBorderProperties": {
-                "tableBorderFill": {"solidFill": {"color": rgb((0, 0, 0)), "alpha": 0}}
+                "tableBorderFill": {"solidFill": {"color": rgb((0, 0, 0)), "alpha": 1}},
+                "weight": {"magnitude": GRID_WEIGHT, "unit": "PT"},
+                "dashStyle": "SOLID",
             },
-            "fields": "tableBorderFill",
+            "fields": "tableBorderFill,weight,dashStyle",
         }
     }
 
@@ -1123,11 +1179,11 @@ class PageBuilder:
                 }
             }
         )
-        # libmspub 0.1.4 passes on no table borders at all (its TableInfo holds
-        # only sizes and spans), so the table is drawn without them, as
-        # LibreOffice draws it, rather than with Google's default grey grid.
-        # Slides has no "no border": the border is made fully transparent.
-        self.requests.append(hidden_borders(object_id))
+        # No table in PUB-001 or PUB-002 stores a border setting anywhere (the
+        # table, cell, text and drawing records were all dumped), yet every
+        # one prints a thin black grid: Publisher's default, drawn here rather
+        # than Google's grey one.
+        self.requests.append(grid_borders(object_id))
         for index, column in enumerate(columns):
             width = (column.get("width") or {}).get("points")
             if not width:
@@ -1149,10 +1205,12 @@ class PageBuilder:
                     }
                 }
             )
+        minimums: list[float] = []
         for row in rows:
             height = (row.get("height") or {}).get("points") or length_points(
                 (row.get("sourceProperties") or {}).get("librevenge:row-height")
             )
+            minimums.append(height or 0.0)
             if height:
                 self.requests.append(
                     {
@@ -1166,6 +1224,7 @@ class PageBuilder:
                         }
                     }
                 )
+        texts, placed_inline = self._inline(element, frame, rows, columns, minimums)
         for row in rows:
             for cell in row.get("cells", []):
                 if cell.get("covered"):
@@ -1199,19 +1258,105 @@ class PageBuilder:
                         }
                     )
                 text, more = text_requests(
-                    object_id, cell.get("paragraphs", []), self.fonts, location
+                    object_id, texts[(cell["row"], cell["column"])], self.fonts, location
                 )
                 self.requests += text
                 notes += more
+        # Over the table, so after it: Slides can't hold a picture in a cell.
+        self.requests += placed_inline
+        if placed_inline:
+            notes.append(
+                note(
+                    "inline-picture-over-table",
+                    "A picture set in the table's text is placed over its cell: Slides can't "
+                    "hold pictures inside a table.",
+                )
+            )
         notes.append(
             note(
                 "table-borders",
-                "The table is drawn without borders: the reader can't see whether the "
-                "original had any. If it did, add them in Slides.",
+                "The table is drawn with thin black lines round every cell, Publisher's "
+                "usual grid. If the original's lines were different, change them in Slides.",
             )
         )
         entry = self.line(element, C.SUBSTITUTED, *_unique(notes))
         self.made(element, entry, object_id)
+
+    def _inline(
+        self, element: dict, frame: Frame, rows: list, columns: list, minimums: list[float]
+    ) -> tuple[dict[tuple[int, int], list[dict]], list[dict]]:
+        """Each cell's paragraphs, with room left for the pictures set in them,
+        and those pictures placed where that room will be.
+
+        Each row is as tall as its tallest cell's text, or its own height if
+        more, as Slides grows it; a picture goes in the room its paragraph
+        leaves above its line, aligned as the paragraph is.
+        """
+        texts: dict[tuple[int, int], list[dict]] = {}
+        room: dict[tuple[int, int, int], list[tuple[Picture, Inline]]] = {}
+        for row in rows:
+            for cell in row.get("cells", []):
+                paragraphs = list(cell.get("paragraphs", []))
+                for index, paragraph in enumerate(paragraphs):
+                    found = self.prepared.inline.get(
+                        (element["id"], cell["row"], cell["column"], index)
+                    )
+                    if found:
+                        room[(cell["row"], cell["column"], index)] = found
+                        tallest = max(shape.height for _, shape in found)
+                        paragraphs[index] = _with_room(paragraph, tallest)
+                texts[(cell["row"], cell["column"])] = paragraphs
+        if not room:
+            return texts, []
+        widths = [
+            max((c.get("width") or {}).get("points") or MIN_COLUMN_WIDTH, MIN_COLUMN_WIDTH)
+            for c in columns
+        ]
+        scale = frame.width / sum(widths)
+        widths = [w * scale for w in widths]
+
+        def text_height(paragraphs: list[dict], width: float) -> float:
+            paras = measured(paragraphs, self.fonts)
+            if paras and all(measurable(s.family) for p in paras for _, s in p.runs):
+                return laid_height(paras, width - 2 * INSET_X, None, 1.0)
+            return rough_height(paras, width - 2 * INSET_X)
+
+        heights = list(minimums)
+        cells = {(c["row"], c["column"]): c for r in rows for c in r.get("cells", [])}
+        for (row_index, column), cell in cells.items():
+            if cell.get("covered") or cell.get("rowSpan", 1) > 1:
+                continue
+            span = widths[column : column + cell.get("columnSpan", 1)]
+            content = text_height(texts[(row_index, column)], sum(span))
+            if content:
+                heights[row_index] = max(heights[row_index], content + 2 * INSET_Y)
+        top = frame.cy - frame.height / 2
+        left = frame.cx - frame.width / 2
+        requests: list[dict] = []
+        for (row_index, column, index), found in sorted(room.items()):
+            span = widths[column : column + cells[(row_index, column)].get("columnSpan", 1)]
+            paragraphs = texts[(row_index, column)]
+            # The text above the picture's line, with the room left for it.
+            above = text_height(paragraphs[: index + 1], sum(span))
+            line = text_height([_only_room(paragraphs[index])], sum(span))
+            tallest = max(shape.height for _, shape in found)
+            y = top + sum(heights[:row_index]) + INSET_Y + above - line - tallest
+            total = sum(shape.width for _, shape in found)
+            align = str(paragraphs[index].get("style", {}).get("alignment") or "").lower()
+            x = left + sum(widths[:column])
+            if align in {"center", "centre"}:
+                x += (sum(span) - total) / 2
+            elif align in {"right", "end"}:
+                x += sum(span) - INSET_X - total
+            else:
+                x += INSET_X
+            for number, (picture, shape) in enumerate(found):
+                object_id = oid(element["id"], "inline", row_index, column, index, number)
+                box = Frame.from_bounds(x, y, shape.width, shape.height)
+                requests.append(image_request(object_id, self.slide, picture, box))
+                self.pictures[picture.key] = picture
+                x += shape.width
+        return texts, requests
 
     def _wrapper(self, element: dict) -> None:
         # Only a container: its contents are drawn in their own right.

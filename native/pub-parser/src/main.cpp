@@ -238,21 +238,28 @@ int main(int argc, char **argv) {
   // Keep the records as they are: the app reads the crops from them. They
   // come from the same OLE container libmspub has just accepted, through
   // librevenge, and are held to the per-asset size limit.
-  stream.seek(0, librevenge::RVNG_SEEK_SET);
-  std::unique_ptr<librevenge::RVNGInputStream> drawing(
-      stream.isStructured() ? stream.getSubStreamByName("Escher/EscherStm") : nullptr);
-  if (drawing) {
+  // The stored pictures are kept too (Escher/EscherDelayStm): libmspub takes
+  // from them only the pictures it places, and leaves those set inline in
+  // text. They are held to the limit on all assets together.
+  const auto substream = [&stream](const char *name, long long limit) {
     std::string data;
-    while (!drawing->isEnd() && static_cast<long long>(data.size()) <= limits.maxAssetBytes) {
+    stream.seek(0, librevenge::RVNG_SEEK_SET);
+    std::unique_ptr<librevenge::RVNGInputStream> sub(
+        stream.isStructured() ? stream.getSubStreamByName(name) : nullptr);
+    if (!sub) return data;
+    while (!sub->isEnd() && static_cast<long long>(data.size()) <= limit) {
       unsigned long got = 0;
-      const unsigned char *chunk = drawing->read(64 * 1024, got);
+      const unsigned char *chunk = sub->read(64 * 1024, got);
       if (chunk == nullptr || got == 0) break;
       data.append(reinterpret_cast<const char *>(chunk), got);
     }
-    if (!data.empty() && static_cast<long long>(data.size()) <= limits.maxAssetBytes) {
-      collector.setDrawingData(std::move(data));
-    }
-  }
+    if (static_cast<long long>(data.size()) > limit) data.clear();
+    return data;
+  };
+  std::string drawing = substream("Escher/EscherStm", limits.maxAssetBytes);
+  if (!drawing.empty()) collector.setDrawingData(std::move(drawing));
+  std::string pictures = substream("Escher/EscherDelayStm", limits.maxTotalAssetBytes);
+  if (!pictures.empty()) collector.setDrawingDelayData(std::move(pictures));
 
   const std::string status = model.truncated ? "truncated" : "ok";
   const pubir::WriteResult written = pubir::writeBundle(model, limits, outputDir, status, force);
