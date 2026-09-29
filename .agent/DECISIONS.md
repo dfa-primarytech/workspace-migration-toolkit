@@ -410,3 +410,15 @@ before the requests are written.
   repository.
 - **Hand-made line breaks are kept**, even where the new font leaves a word
   on its own line: they are the author's.
+
+## 2026-09-29: Publisher tables are drawn without borders
+libmspub 0.1.4 passes on no table borders at all: its `TableInfo` holds row
+heights, column widths and cell spans, and it writes nothing else per cell
+(`MSPUBCollector.cpp`, checked in the 0.1.4 source). So whether a Publisher
+table had lines can't be known from the reader. The renderer makes every
+border transparent (Slides has no "no border"), which is how LibreOffice
+draws such tables and how PUB-001 looks, instead of leaving Google's default
+grey grid. The report says so and tells staff to add borders if the original
+had them. Reading real borders from the `.pub` belongs with the picture-crop
+investigation, which needs the same direct reading of the file. Verified live
+on PUB-001.
