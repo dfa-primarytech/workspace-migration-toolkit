@@ -128,13 +128,22 @@ to read one; a key file is a long-lived secret on disk.
 
 Restart the app. **Convert** then appears for `.pub` files.
 
+## Verified so far
+
+Set up exactly as above in the project on 2026-09-29, with no key created:
+
+- a link signed as `SIGNER` for 15 minutes fetched a test picture (HTTP 200);
+- the same object's plain URL was refused (HTTP 403), so the bucket is private.
+
+`gcloud storage sign-url` needed `--region europe-west2`, because it looks up
+the bucket's region and `SIGNER` rightly has no bucket-level read. The app
+does not: it signs with the `auto` region, as Google's published signing
+examples do.
+
 ## Not yet verified against Google
 
-The app has been tested against a stand-in for Google, and its link signing
-against Google's own published signing examples. Until the first live run
-(Publisher step 4), these are unconfirmed:
+Until the first live run (Publisher step 4):
 
-- that Slides fetches pictures through these links from a bucket with public
-  access prevention enforced;
+- that Slides itself fetches pictures through these links;
 - that `presentations.create` keeps an A5 page size;
 - that a gcloud login with Token Creator can sign as `SIGNER`.
