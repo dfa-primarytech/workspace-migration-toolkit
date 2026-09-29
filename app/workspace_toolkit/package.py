@@ -22,6 +22,10 @@ PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presen
 MAIN_MIME = PPTX_MIME + ".main+xml"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 DOCX_MAIN_MIME = DOCX_MIME + ".main+xml"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+XLSX_MAIN_MIME = XLSX_MIME + ".main+xml"
+XLSM_MIME = "application/vnd.ms-excel.sheet.macroEnabled.12"
+XLSM_MAIN_MIME = "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
 CONTENT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
@@ -43,6 +47,7 @@ class Format:
     noun: str  # used in user-facing messages, e.g. "PowerPoint presentation"
     chooser: str  # e.g. "a PowerPoint .pptx file"
     aliases: tuple[str, ...] = ()  # other MIME types browsers send for it
+    allow_macros: bool = False
 
 
 PPTX = Format(
@@ -65,6 +70,27 @@ DOCX = Format(
     chooser="a Word .docx file",
 )
 
+XLSX = Format(
+    key="xlsx",
+    suffix=".xlsx",
+    mime=XLSX_MIME,
+    main_part="xl/workbook.xml",
+    main_mime=XLSX_MAIN_MIME,
+    noun="workbook",
+    chooser="an Excel .xlsx file",
+)
+
+XLSM = Format(
+    key="xlsm",
+    suffix=".xlsm",
+    mime=XLSM_MIME,
+    main_part="xl/workbook.xml",
+    main_mime=XLSM_MAIN_MIME,
+    noun="macro-enabled workbook",
+    chooser="an Excel .xlsm file",
+    allow_macros=True,
+)
+
 # Not an OOXML package at all: an OLE compound file read by publisher-parser.
 # The zip-specific fields are empty; nothing opens a .pub as a Package.
 PUB = Format(
@@ -78,7 +104,7 @@ PUB = Format(
     aliases=("application/vnd.ms-publisher",),
 )
 
-FORMATS = {fmt.suffix: fmt for fmt in (PPTX, DOCX)}
+FORMATS = {fmt.suffix: fmt for fmt in (PPTX, DOCX, XLSX, XLSM)}
 
 
 def validate_upload_name(filename: str, mime: str, fmt: Format = PPTX) -> None:
@@ -91,7 +117,8 @@ def validate_upload_name(filename: str, mime: str, fmt: Format = PPTX) -> None:
         raise ToolkitError("invalid_filename", f"Please choose {fmt.chooser}.")
     if not filename.lower().endswith(fmt.suffix):
         raise ToolkitError("unsupported_type", f"Only {fmt.chooser} files are supported here.")
-    if mime.split(";", 1)[0].lower() not in {fmt.mime, *fmt.aliases, "application/octet-stream"}:
+    accepted_mimes = {fmt.mime.lower(), *(alias.lower() for alias in fmt.aliases)}
+    if mime.split(";", 1)[0].lower() not in {*accepted_mimes, "application/octet-stream"}:
         raise ToolkitError("invalid_mime", f"This file does not have a supported {fmt.key} type.")
 
 
@@ -106,7 +133,10 @@ class Package:
         self.entry_limit = settings.entry_limit(size)
         self.expanded_limit = settings.expanded_limit(size)
         with path.open("rb") as stream:
-            if stream.read(4) != b"PK\x03\x04":
+            signature = stream.read(8)
+            if signature == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+                raise ToolkitError("encrypted_package", "Encrypted Office files cannot be read.")
+            if signature[:4] != b"PK\x03\x04":
                 raise ToolkitError("invalid_signature", f"This is not a valid {fmt.suffix} file.")
         try:
             self.zip = zipfile.ZipFile(path)
@@ -181,10 +211,11 @@ class Package:
             raise ToolkitError(
                 "unsupported_type", f"Only macro-free {fmt.suffix} files are supported."
             )
-        if any("vbaproject" in n.lower() for n in self.names) or any(
+        has_macros = any("vbaproject" in n.lower() for n in self.names) or any(
             "macroenabled" in t.lower() or "vbaproject" in t.lower()
             for t in [*self.defaults.values(), *self.overrides.values()]
-        ):
+        )
+        if has_macros and not fmt.allow_macros:
             raise ToolkitError(
                 "macros_rejected", f"A {fmt.noun} containing macros is not supported."
             )

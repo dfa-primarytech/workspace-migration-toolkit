@@ -14,6 +14,7 @@ from .pictures import compress
 from .pptx import analyse as analyse_pptx
 from .pptx import render_path as render_pptx
 from .publisher import analyse as analyse_pub
+from .xlsx import analyse as analyse_xlsx
 
 # Deliberately not importing the pipelines registry: that pulls in the Google
 # client, and this subprocess must never hold credentials or reach the network.
@@ -21,6 +22,8 @@ ANALYSERS: dict[str, Callable[..., object]] = {
     "pptx": analyse_pptx,
     "docx": analyse_docx,
     "pub": analyse_pub,
+    "xlsx": analyse_xlsx,
+    "xlsm": analyse_xlsx,
 }
 
 

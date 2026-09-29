@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sys
+import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -13,6 +16,27 @@ from uuid import uuid4
 from .config import Settings
 from .errors import ToolkitError
 from .package import PPTX, Format
+
+
+def sweep_stale_workspaces(
+    settings: Settings, older_than_seconds: int = 24 * 60 * 60, now: float | None = None
+) -> int:
+    """Remove abandoned job directories after an interrupted process.
+
+    This is an explicit startup/scheduled hook, not a background thread. It
+    only considers directories with TemporaryDirectory's ``wmt-`` prefix
+    directly beneath the configured temporary root.
+    """
+    base = Path(settings.temp_dir or tempfile.gettempdir()).resolve()
+    cutoff = (time.time() if now is None else now) - older_than_seconds
+    removed = 0
+    for candidate in base.glob("wmt-*"):
+        resolved = candidate.resolve()
+        if resolved.parent != base or not resolved.is_dir() or resolved.stat().st_mtime > cutoff:
+            continue
+        shutil.rmtree(resolved)
+        removed += 1
+    return removed
 
 
 @contextmanager

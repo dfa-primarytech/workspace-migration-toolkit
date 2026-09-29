@@ -1,5 +1,10 @@
 # Current state
 
+Issue #51 is implemented on `rescue/xlsx-sheets-mvp` and reconciled with
+`main` at `4c6d655`. The XLSX/XLSM pipeline accepts macro-enabled containers,
+reports actual VBA as unsupported for native import, and inventories chart,
+dialog and macro sheets explicitly. Local checks pass; PR #72 is ready to merge.
+
 A snapshot, not a log. Rewritten 28 September 2026 -- the previous version
 was a narrative changelog back to 22 September that had mostly gone stale
 (every item in it is now merged, superseded or answered). For the history

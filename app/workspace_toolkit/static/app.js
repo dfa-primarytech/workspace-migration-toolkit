@@ -102,7 +102,7 @@ async function perform(convert) {
   try {
     const report = await upload(convert);
     const parent = convert ? $('result') : $('summary'); parent.replaceChildren();
-    const unit = chosen && chosen.kind === 'document' ? 'sections' : chosen && chosen.extension === '.pub' ? 'pages' : 'slides';
+    const unit = chosen && chosen.kind === 'document' ? 'sections' : chosen && chosen.kind === 'spreadsheet' ? 'worksheets' : chosen && chosen.extension === '.pub' ? 'pages' : 'slides';
     const p = document.createElement('p'); p.textContent = `${report.pages} ${unit} · ${Object.values(report.assetCounts).reduce((a,b)=>a+b,0)} recovered files · ${report.warnings.length} items to review`; parent.append(p);
     const list = document.createElement('ul');
     for (const message of [...new Set(report.warnings.map(w=>w.message))]) { const li = document.createElement('li'); li.textContent = message; list.append(li); }
