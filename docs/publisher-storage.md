@@ -153,10 +153,12 @@ the bucket's region and `SIGNER` rightly has no bucket-level read. The app
 does not: it signs with the `auto` region, as Google's published signing
 examples do.
 
-## Not yet verified against Google
+**Live run with PUB-001, 2026-09-29** (the app on the test host, signed in
+as a real staff account, with a one-hour `PUBLISHER_STORAGE_TOKEN`):
 
-Until the first live run (Publisher step 4):
+- Slides fetched all 12 pictures through their signed links;
+- every copy was deleted, and the bucket held 0 objects afterwards;
+- the token for `SIGNER` signed its own links through `signBlob`.
 
-- that Slides itself fetches pictures through these links;
-- that `presentations.create` keeps an A5 page size;
-- that a gcloud login with Token Creator can sign as `SIGNER`.
+Not yet exercised: Cloud Run's metadata-server account, and a gcloud user
+login (`application-default login`) signing as `SIGNER`.

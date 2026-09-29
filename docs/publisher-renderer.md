@@ -73,9 +73,29 @@ draws them the same way. Publisher probably cropped them, and libmspub
 - **Text insets**: the Slides API has no setting for the space inside a text box, so text may wrap slightly differently.
 - **Table borders** are not described by the reader, so Google's default borders are used.
 - **Exact line spacing** has no Slides equivalent; percentage spacing is kept.
-- **Page size** is requested in `presentations.create`. Whether Google keeps an A5 size must be checked in step 4 (§14), and step 3 will read the size back rather than assume it.
+- **Page size (§14), settled live.** `presentations.create` accepts a `pageSize` and ignores it: A5 came back as 720 × 405 pt. The presentation is therefore made by importing an empty PowerPoint deck of the publication's size (`publisher_deck.py`), which Google keeps. The size is still read back and reported if it differs.
+- **Text flows differently.** Andika is more compact than Sassoon Primary, and Google adds its own space inside text boxes. So lines break in slightly different places, and text can slide under a picture that Publisher's layout kept it clear of. On PUB-001 the frog on page 2 covers the end of two lines.
 
 ## Evidence
+
+**Live run, PUB-001, 2026-09-29.** Converted through the app on the test host into a real staff account's Drive:
+
+- 4 A5 portrait slides, in order;
+- all 22 items on the right slides, and every text box's text as planned (read back and checked);
+- Sassoon shown as Andika;
+- the two rules as editable lines;
+- the table with its text;
+- all 12 pictures, including a scannable QR code;
+- the bucket empty afterwards.
+
+It took two fixes to get there, both found only by Google:
+- the page size (above);
+- Publisher's paragraph marks. The reader leaves a carriage return at the end of each paragraph, and Slides drops it on insert, so every later text range overran and Google refused every page. They are now stripped, the checker refuses them, and the fake Google in the tests drops them as Google does.
+
+Seen on the slides, and reported:
+- Google's default table borders (Publisher's table had none);
+- four stretched pictures;
+- text flowing slightly differently from the original.
 
 - Offline tests: `tests/platform/test_publisher_slides.py`, 38 tests. Every document in them is built in the test. They check the geometry by applying each transform as Slides does.
 - **PUB-001** (4 pages; parsed in the app image on the test host, never committed):

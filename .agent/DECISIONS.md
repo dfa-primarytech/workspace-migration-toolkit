@@ -342,3 +342,14 @@ How the approved bucket-and-signed-link route is built:
 - **Convert appears only where a bucket is configured.** `describe()`
   now takes the settings, so a deployment without one still offers Check.
 
+## 2026-09-29: A Publisher conversion starts from an imported deck
+PROJECT.md §14 asked how Slides can be made at a publication's own size.
+The live run answered it. `presentations.create` accepts a `pageSize` and
+ignores it: A5 came back as 720 × 405 pt, Slides' default. Google's
+PowerPoint import does keep a deck's own size. So the converter uploads an
+empty one-slide `.pptx` of the publication's size (`publisher_deck.py`,
+written by hand, so nothing in it comes from a template), with conversion to
+Slides. It then builds the pages into that presentation through the API as
+before, and deletes the deck's own slide. Verified live with PUB-001: A5
+portrait kept.
+

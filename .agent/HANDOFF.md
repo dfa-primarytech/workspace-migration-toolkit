@@ -29,15 +29,19 @@
   - Ruff, mypy, bandit and the secret scan are clean.
   - **PUB-001 rehearsal** (real parser and worker in the app image, then the fake Google): worker 0.77 s; 4 slides with every object present and its text matching; 12 picture copies stored and all deleted; no signed link in the report.
 - Known failures: none.
-- Unresolved: nothing has touched real Google yet. Step 4 must confirm:
-  - A5 page size;
-  - that Slides fetches from a bucket with public access prevention enforced;
-  - that a gcloud login can sign as the service account;
-  - that `presentations.create` and `batchUpdate` work under `drive.file`;
-  - the text insets and table borders from step 2.
-- Decisions: DECISIONS.md, 2026-09-28 (Publisher picture delivery).
-- Next task: step 4. The human creates the bucket as in `docs/publisher-storage.md`, then does a live run with PUB-001. The parser only exists in the Linux image, so the run needs the container: locally in Docker, or on the test host through an SSH tunnel to `localhost:8080`, so the OAuth redirect still matches.
-- Warnings: the test host still holds `/root/wmt-test/private/pub-001.pub`, its bundle, and `/root/wmt-test/repo`. Remove them when the Publisher work is finished.
+- **Step 4, live run with PUB-001 (2026-09-29): converted correctly.** The human ran the app image on the test host through an SSH tunnel from VM 210, signed in to a real staff account, with a one-hour token for `wmt-pictures` rather than any personal gcloud login.
+  - The result: 4 A5 portrait slides; all 22 items read back on the right slides with their text; Sassoon shown as Andika; both rules as lines; the table; all 12 pictures, including a scannable QR code. The bucket was empty afterwards (0 objects).
+  - The first two runs failed, and fixing them is in this PR:
+    - `presentations.create` ignores `pageSize` (720 × 405 came back), so the presentation now comes from importing an empty A5 deck (`publisher_deck.py`);
+    - the reader's `\r` paragraph marks, which Slides drops on insert, broke every text range. They are now stripped, `check()` refuses them, and the fake Google drops them.
+  - Confirmed live: Slides fetches through signed links from a bucket with public access prevention; `batchUpdate` and Drive import work under `drive.file`; a service-account token signs its own links.
+- Unresolved:
+  - **Follow-ups seen on the slides:** Google's default table borders (the original had none); text flows a little differently (Andika metrics and Google's text insets), so the frog on page 2 overlaps two lines; four pictures stretched (crops lost upstream).
+  - **Not yet exercised:** Cloud Run's own account, and a gcloud user login signing.
+  - **To delete in Drive:** the two blank test presentations from the first two runs.
+- Decisions: DECISIONS.md, 2026-09-28 (Publisher picture delivery) and 2026-09-29 (page size by import).
+- Next task: merge #92 on the human's approval. Then decide on the follow-ups: borders, and line spacing for Andika.
+- Warnings: the test host still holds `/root/wmt-test/private/pub-001.pub`, its bundle, `/root/wmt-test/repo`, `/root/wmt-test/live` (the OAuth client secret and the picture token, root-only) and the running container `wmt-test-live`. Stop the container and remove `live` as soon as testing ends; remove the rest when the Publisher work is finished.
 
 ---
 
