@@ -428,6 +428,39 @@ property into a map and never looks those four up (checked in its source).
   place to look next for anything the reader loses (not table borders,
   which live in the Contents stream).
 
+## 2026-09-29: Wrap text around pictures with paragraph indents
+Google Slides has no text wrapping. The human chose, from three options,
+per-paragraph indents over splitting text into several boxes (which breaks
+the flow for editing) or leaving the overlaps.
+
+- **What wraps:** a picture or shape drawn in front of a text frame and
+  overlapping it. This is Publisher's default, and what PUB-001 shows. The
+  reader doesn't pass on each object's wrap setting, and objects behind the
+  text are left alone.
+- **How:** each paragraph level with it gets a start or end indent (on the
+  picture's side) that clears it by 3.6 pt, computed with the fitting layout.
+  Indents and fitting are repeated until stable, and an author's own indent
+  is never added to.
+- **Limits, reported:** the whole paragraph moves; text keeps to one side;
+  a picture across more than 60% of the line stays over the text.
+- Verified live on PUB-001, pages 2 and 3.
+
+## 2026-09-29: XLSX extent, indexes and abandoned workspace cleanup
+
+Google's workbook cell-limit preflight uses the bounding extent of actual `<c>`
+cell references, not SpreadsheetML's cached `<dimension>`. Some exporters leave
+that cache at the full Excel grid after cells are removed, causing a false hard
+block. Keep the declared extent as a separate diagnostic: when it alone exceeds
+Google's limit, report `declared_extent_needs_review` and allow native import.
+
+XLSX sheet indexes are zero-based, matching other toolkit manifests and list/API
+positions. User-facing messages may describe ordinal sheet numbers separately.
+
+Remove the uncalled stale-workspace sweeper. The context manager still removes
+normal request workspaces. Cleanup after process or host termination belongs to
+the deployment's ephemeral-storage lifecycle; an application helper that no
+startup or scheduler invokes creates a false cleanup guarantee.
+
 ## 2026-09-29: XLSX native import verified live
 
 A generated five-sheet XLSX was analysed and converted through the running app

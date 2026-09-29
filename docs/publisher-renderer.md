@@ -109,6 +109,14 @@ reported (`picture-stretched`).
   - everything else fits as it is.
 
   In Google, page 2's text ends at 554 pt and page 3's at 548 pt, both inside their 591 pt boxes on a 595 pt page.
+- **Text wraps around pictures by indenting** (`publisher_wrap.py`). Slides can't wrap text: it runs straight under a picture. Publisher wraps text around any object in front of its frame, so each paragraph level with such a picture is indented on the picture's side, just far enough to clear it plus 3.6 pt. The text stays one editable box, with ordinary paragraph indents. An author's own indent is kept, and only a shortfall is made up.
+
+  Positions come from the fitting layout. Indenting and fitting are repeated until they settle, so wrapped text still fits (on PUB-001, pages 2 and 3 go to 11 pt). Limits, each reported:
+  - a whole paragraph is indented, even if only part of it is level with the picture;
+  - text keeps to the wider side of a picture in the middle;
+  - a picture across more than 60% of the line can't be kept clear and stays over the text.
+
+  Verified live on PUB-001: the frog, the letter cards and the book pictures on pages 2 and 3 no longer cover any text.
 - **Hand-made line breaks.** Where an author pressed Enter mid-sentence to steer text around a picture, the break was placed for the original font. In Andika the last word can land on a line of its own (PUB-001 page 3). These breaks are part of the document, so they're kept.
 
 ## Evidence
