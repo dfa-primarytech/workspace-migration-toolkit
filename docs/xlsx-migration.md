@@ -10,10 +10,12 @@ against that format's MIME type, which is also used for upload. This
 preserves formulas and workbook structures for the native importer rather than
 attempting to reinterpret them in Python.
 
-The implementation has not been tested against a live Google tenant. Offline
-tests use a mocked Drive and Sheets API boundary. Read-back verifies worksheet
-count, names, grid type and visibility only. Formula results, formatting,
-charts, pivots, validation and protection still require review.
+Live native import was verified on 29 September 2026 with a generated five-sheet
+workbook: Drive created the Google Sheet and Sheets read-back confirmed all five
+sheet names, grid types and visibility states. The source contained 227 populated
+cells and 47 formulas with no source formula errors. Formula results, formatting,
+charts, pivots, validation and protection still require human visual review; this
+single synthetic import is deployment evidence, not a general fidelity claim.
 
 ## Batch model and dependencies
 

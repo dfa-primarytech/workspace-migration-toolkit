@@ -2,6 +2,23 @@
 
 - Agent: Codex (XLSX)
 - Date: 2026-09-29
+- Branch: `codex/xlsx-live-followups`, based on main `77e08cb`; PR #94
+- Objective: Finish the XLSX follow-ups left after #72 and verify native Google Sheets import live.
+- Files changed: `xlsx.py`, `jobs.py`, `tests/platform/test_xlsx.py`, `tests/platform/test_xlsx_issue51.py`, `docs/xlsx-migration.md`, and coordination files.
+- Completed: cell-limit checks use observed cell extent and separately report stale declared extents; sheet indexes are zero-based; the uncalled stale-workspace sweeper and test are removed; a generated five-sheet workbook converted through real Drive and Sheets APIs, with five sheets confirmed by read-back.
+- Checks: 440 passed, 13 skipped; Ruff check and format clean; mypy clean for 25 source files; Bandit and secret scan clean. Live report: 5 sheets, 227 populated cells, 47 formulas, 0 formula errors, native spreadsheet created and structurally verified.
+- Known failures: none.
+- Unresolved: formula results, charts, formatting, validation and protection still need human visual comparison in the imported Google Sheet. One synthetic live import does not establish broad fidelity.
+- Decisions: DECISIONS.md, 2026-09-29 (XLSX extent/index/cleanup and live native import).
+- Next task: visually compare the generated workbook against its Expected results sheet, then add targeted regression work only for observed fidelity losses.
+- Warnings: the downloaded conversion report contains private Drive file and folder IDs and must not be committed. No school document or OAuth token is in this branch.
+
+---
+
+## Previous handoff
+
+- Agent: Codex (XLSX)
+- Date: 2026-09-29
 - Branch: `rescue/xlsx-sheets-mvp`, merged with main `4c6d655`
 - Objective: Fix issue #51: the `.xlsm` crash, chart-sheet rejection and conflicts with main.
 - Files changed: XLSX pipeline modules and tests; shared package, pipeline, worker and web format registration; generated XLSX fixtures and documentation; coordination files. Main's Publisher/platform changes were retained by the merge. The pipeline-selection integration assertion in `tests/platform/test_docx.py` was updated only to recognise main's existing Publisher support.
