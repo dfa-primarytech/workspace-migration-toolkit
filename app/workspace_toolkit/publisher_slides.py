@@ -67,6 +67,7 @@ PICTURE = "wmt-picture:"
 PREFIX = "wmt_"
 OBJECT_ID = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_\-:]{4,49}$")
 MIN_COLUMN_WIDTH = 32.0  # points; narrower columns are refused (unverified)
+LIST_GAP = 18.0  # points from bullet to text when a list item gives none: 0.25 in
 # Of the room a table's text is estimated to need, as for a text box. With
 # TABLE_INSET_Y, the estimate of PUB-002's eight tables came within 13 pt of
 # Google's own drawing of them, over and under (measured in the editor).
@@ -353,6 +354,11 @@ def paragraph_style(paragraph: dict) -> tuple[dict, list[str], list[dict]]:
         fields.append("alignment")
     start = length_points(props.get("fo:margin-left")) or 0.0
     first = start + (length_points(props.get("fo:text-indent")) or 0.0)
+    if props.get("librevenge:list-type") and props.get("fo:text-indent") is None:
+        # A list item's indent is Publisher's gap from bullet to text: the
+        # bullet at the edge, the text at the indent (PUB-002 page 18). Slides
+        # sets the text straight after the bullet unless the indent hangs.
+        start, first = (start or LIST_GAP), 0.0
     if start or first:
         result["indentStart"] = {"magnitude": round(max(0.0, start), 4), "unit": "PT"}
         result["indentFirstLine"] = {"magnitude": round(max(0.0, first), 4), "unit": "PT"}

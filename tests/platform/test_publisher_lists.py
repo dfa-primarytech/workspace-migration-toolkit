@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from workspace_toolkit.publisher_slides import KNOWN, list_requests
+from workspace_toolkit.publisher_slides import KNOWN, list_requests, paragraph_style
 
 WHERE = {"objectId": "box"}
 
@@ -92,3 +92,27 @@ def test_what_slides_cannot_show_is_reported():
 def test_a_paragraph_that_is_not_a_list_is_left_alone():
     requests, notes = run(para("Plain"), para("Text"))
     assert requests == [] and notes == []
+
+
+def styled(**props: object) -> dict:
+    paragraph, _ = para("Item", **props)
+    style, _, _ = paragraph_style({**paragraph, "style": {"alignment": "center"}})
+    return {k: v["magnitude"] for k, v in style.items() if k.startswith("indent")}
+
+
+def test_a_list_items_indent_is_the_gap_from_bullet_to_text():
+    # PUB-002 page 18: a 0.25 in margin and no hanging indent. Publisher sets
+    # the bullet at the edge and the text at the margin; so must Slides.
+    assert styled(librevenge_list_type="unordered", fo_margin_left="0.25in") == {
+        "indentStart": 18.0,
+        "indentFirstLine": 0.0,
+    }
+    # With no margin at all, the text still stands clear of its bullet.
+    assert styled(librevenge_list_type="unordered")["indentStart"] > 0
+    # A hanging indent the author set is kept as it is.
+    hanging = styled(
+        librevenge_list_type="unordered", fo_margin_left="0.5in", fo_text_indent="-0.25in"
+    )
+    assert hanging == {"indentStart": 36.0, "indentFirstLine": 18.0}
+    # Not a list: a margin is a margin.
+    assert styled(fo_margin_left="0.25in") == {"indentStart": 18.0, "indentFirstLine": 18.0}

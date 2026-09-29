@@ -83,7 +83,7 @@ reported (`picture-stretched`).
 
 ## Known limits
 
-- **Lists** come from the patched libmspub (docs/publisher-parser.md); the stock 0.1.4 never passes them on. Each run of consecutive list paragraphs of one kind becomes one `createParagraphBullets`, sent before the paragraph styles so Publisher's own hanging indents are the ones kept. Numbering maps to the nearest Slides preset (1. and 1), I., A.); anything else is shown as 1, 2, 3 and reported, and so is a bullet other than a dot and a list that started past 1, which Slides can't do. Verified live on PUB-002's 12 bulleted lists.
+- **Lists** come from the patched libmspub (docs/publisher-parser.md); the stock 0.1.4 never passes them on. Each run of consecutive list paragraphs of one kind becomes one `createParagraphBullets`, sent before the paragraph styles so Publisher's own hanging indents are the ones kept. Numbering maps to the nearest Slides preset (1. and 1), I., A.); anything else is shown as 1, 2, 3 and reported, and so is a bullet other than a dot and a list that started past 1, which Slides can't do. Verified live on PUB-002's 12 bulleted lists. A list item with a margin but no hanging indent (PUB-002 page 18) has its margin taken as the gap from bullet to text, as Publisher draws it: the bullet at the edge, the text at the margin (0.25 in when there is none). Slides would otherwise set the text straight after the bullet.
 
 - **Crops** are applied only when they fit their frame (see above). An outward crop (padding), which Publisher allows, is not handled and leaves the picture uncropped.
 - **Mirrored pictures** are reported, not flipped (the reader can't tell which way).
