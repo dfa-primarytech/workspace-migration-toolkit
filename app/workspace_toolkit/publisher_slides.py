@@ -44,6 +44,7 @@ from .publisher_art import (
     paint,
     subpaths,
 )
+from .publisher_fit import Fit, Para, Style, fit
 from .units import Frame, length_points, percentage, size
 
 PICTURE = "wmt-picture:"
@@ -334,17 +335,62 @@ def paragraph_text(paragraph: dict) -> list[tuple[str, dict]]:
     return pieces
 
 
+def _laid(paragraphs: list[dict]) -> tuple[list[dict], list[list[tuple[str, dict]]]]:
+    laid = [paragraph_text(p) for p in paragraphs]
+    while laid and not "".join(t for t, _ in laid[-1]):
+        laid.pop()  # a trailing empty paragraph adds nothing Slides can show
+    return paragraphs[: len(laid)], laid
+
+
+def measured(paragraphs: list[dict], fonts: dict[str, dict]) -> list[Para]:
+    """The text as publisher_fit lays it out: in the fonts Slides will use."""
+    paragraphs, laid = _laid(paragraphs)
+    result = []
+    for paragraph, pieces in zip(paragraphs, laid, strict=True):
+        style, _, _ = paragraph_style(paragraph)
+        points = {k: float(v["magnitude"]) for k, v in style.items() if isinstance(v, dict)}
+
+        runs = [
+            (
+                text,
+                Style(
+                    resolve_font(run["style"].get("fontFamily"), fonts),
+                    float(run["style"].get("fontSizePoints") or 12),
+                    bool(run["style"].get("bold")),
+                    bool(run["style"].get("italic")),
+                ),
+            )
+            for text, run in pieces
+        ]
+        result.append(
+            Para(
+                runs,
+                points.get("indentStart", 0.0),
+                points.get("indentFirstLine", 0.0),
+                points.get("indentEnd", 0.0),
+                points.get("spaceAbove", 0.0),
+                points.get("spaceBelow", 0.0),
+                style.get("lineSpacing"),
+            )
+        )
+    return result
+
+
 def text_requests(
     object_id: str,
     paragraphs: list[dict],
     fonts: dict[str, dict],
     cell: dict | None = None,
+    fitted: Fit | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Insert the text, then style each run and paragraph by its range."""
-    laid = [paragraph_text(p) for p in paragraphs]
-    while laid and not "".join(t for t, _ in laid[-1]):
-        laid.pop()  # a trailing empty paragraph adds nothing Slides can show
-    paragraphs = paragraphs[: len(laid)]
+    """Insert the text, then style each run and paragraph by its range.
+
+    `fitted` (publisher_fit) makes the text fit its box: its scale applies to
+    every font size, and its line spacing to every paragraph.
+    """
+    paragraphs, laid = _laid(paragraphs)
+    scale = fitted.scale if fitted else 1.0
+    spacing = fitted.line_spacing if fitted else None
     whole = "\n".join("".join(t for t, _ in pieces) for pieces in laid)
     notes: list[dict] = []
     if any(i.get("kind") == "field" for p in paragraphs for r in p["runs"] for i in r["items"]):
@@ -363,15 +409,21 @@ def text_requests(
             length = utf16(text)
             if length:
                 style, fields = run_style(run["style"], run.get("sourceProperties") or {}, fonts)
-                requests.append(_styled(where, position, position + length, style, fields))
+                requests.append(
+                    _styled(where, position, position + length, _scaled(style, scale), fields)
+                )
             position += length
         if position == start and start < total and pieces:
             # An empty paragraph is as tall as its font: style its line break.
             _, run = pieces[0]
             style, fields = run_style(run["style"], run.get("sourceProperties") or {}, fonts)
-            requests.append(_styled(where, start, start + 1, style, fields))
+            requests.append(_styled(where, start, start + 1, _scaled(style, scale), fields))
         style, fields, more = paragraph_style(paragraph)
         notes += more
+        if spacing is not None and spacing < style.get("lineSpacing", 100):
+            style["lineSpacing"] = spacing
+            if "lineSpacing" not in fields:
+                fields.append("lineSpacing")
         if fields:
             end = position if position > start else min(start + 1, total)
             requests.append(
@@ -386,6 +438,14 @@ def text_requests(
             )
         position += 1  # the paragraph break
     return requests, _unique(notes)
+
+
+def _scaled(style: dict, scale: float) -> dict:
+    """Font sizes times `scale`, to the nearest half point."""
+    if scale == 1.0 or "fontSize" not in style:
+        return style
+    size = style["fontSize"]["magnitude"]
+    return {**style, "fontSize": {"magnitude": round(size * scale * 2) / 2, "unit": "PT"}}
 
 
 def _styled(where: dict[str, object], start: int, end: int, style: dict, fields: list[str]) -> dict:
@@ -654,8 +714,12 @@ class PageBuilder:
         )
         style, notes = box_style(object_id, element["source"]["styleProperties"], text=True)
         self.requests += style
-        text, more = text_requests(object_id, element.get("paragraphs", []), self.fonts)
+        paragraphs = element.get("paragraphs", [])
+        fitted = fit(measured(paragraphs, self.fonts), frame.width, frame.height)
+        text, more = text_requests(object_id, paragraphs, self.fonts, fitted=fitted)
         self.requests += text
+        if fitted:
+            notes = [*notes, *fitted.notes]
         substituted = any(
             self.fonts[f]["status"] != FontStatus.AVAILABLE
             for f in _families(element.get("paragraphs", []))

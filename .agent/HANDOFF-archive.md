@@ -7,6 +7,38 @@ PR descriptions have the same detail in full.
 
 ---
 
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-28
+- Branch: `feat/publisher-renderer`, based on main `bb9cd61` (#90 merged)
+- Objective: Publisher step 2 of 4. The renderer: IR → Google Slides API requests, offline.
+- Files changed:
+  - `app/workspace_toolkit/units.py` (new: lengths, frames, the Slides transform);
+  - `publisher_art.py` (new: pictures Slides can take, drawn paths, composed border art);
+  - `publisher_slides.py` (new: `plan`, `bind`, `check`);
+  - `tests/platform/test_publisher_slides.py` (new, 38 tests);
+  - `docs/publisher-renderer.md` (new), DECISIONS.md, this file, HANDOFF-archive.md.
+- Completed:
+  - Every IR element type has a mapping and a report line. See the table in `docs/publisher-renderer.md`.
+  - Pictures carry a key until `bind()`; `keys_for(page)` lets step 3 sign links a page at a time.
+  - `check()` refuses a plan Google would refuse: unknown requests, bad or duplicate IDs, use before creation, text ranges outside the text, unbound pictures.
+- Checks:
+  - Windows: 418 passed, 13 skipped. Linux (the human's Docker host, as the app user, with PUB-001 supplied): 421 passed, 10 skipped, including the PUB-001 plan test.
+  - Ruff, mypy, bandit and the secret scan are clean.
+  - **PUB-001:** 272 requests, no `check()` problems, pictures within 0.0001 pt of their frames. Status counts: 13 NATIVE, 7 SUBSTITUTED, 2 IGNORED. An offline drawing of the plan matched LibreOffice's rendering of the file.
+- Known failures: none.
+- Unresolved (all for step 3 or 4, and all unverified against Google):
+  - whether `presentations.create` keeps an A5 page size (§14);
+  - Google's text insets;
+  - default table borders;
+  - whether a 0.01 pt-tall line is accepted.
+- Decisions: DECISIONS.md, 2026-09-28 (renderer defaults).
+- Next task: step 3. Upload each page's pictures to the bucket, sign 15-minute links, `bind`, send, delete, then read the presentation back and report. The human creates the bucket and the signing permission; document the steps for them.
+- Warnings:
+  - Four PUB-001 pictures are heavily stretched. The reader drops Publisher's crops, and LibreOffice shows the same stretching. They are reported, not fixed.
+  - The test host holds `/root/wmt-test/private/pub-001.pub` (the real booklet, mode 644 so the container user can read it) and its parsed bundle. Remove both when the Publisher work is finished.
+
+---
+
 - Agent: Claude Code / QuietHeron (Publisher and platform)
 - Date: 2026-09-28
 - Branch: `feat/publisher-check-file`, based on main `c687cd2`

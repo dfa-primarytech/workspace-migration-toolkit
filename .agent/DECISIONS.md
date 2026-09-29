@@ -371,3 +371,27 @@ for verification/dependency matching. Web workspaces are temporary; CLI output
 retains the manifest and must be treated as document data. Reports omit those
 names, values, formula expressions and macro source. The earlier content-free,
 ephemeral-only manifest wording was inaccurate and is superseded here.
+
+## 2026-09-29: Fit substituted text to its frame: spacing first, then size
+The live run showed Andika text running off PUB-001's pages. Andika's
+letters are wider than Sassoon's, so the same text wraps onto more lines.
+Each text frame is now laid out offline with Andika's real advance widths
+before the requests are written.
+
+- **Google's own geometry, measured, not the font's.** On the live slides,
+  Google spaced lines 1.2 times the font size apart at 100% (Andika's
+  metrics say 1.61), and kept 7.2 pt inside the box at the sides. A first
+  version used the font's 1.61 and overcorrected. The first version was
+  measured, fixed and re-run the same day: page 2's last line then landed
+  within 2 pt of the estimate.
+- **Line spacing is tightened first**, to no less than 90%, then **the text
+  is made smaller**, evenly, to no less than 75%, rounded to half points.
+  Young readers need the letters large more than the lines far apart.
+- **Every change is reported per frame**, and so is text that still won't fit.
+  A font without shipped measurements is left untouched.
+- **Measurements, not fonts.** `scripts/font_metrics.py` extracts advance
+  widths from Google Fonts' files into JSON. No font binary enters the
+  repository.
+- **Hand-made line breaks are kept**, even where the new font leaves a word
+  on its own line: they are the author's.
+
