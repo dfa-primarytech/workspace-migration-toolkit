@@ -25,6 +25,7 @@ from .fonts import catalogue
 from .model import Compatibility as C
 from .model import warning
 from .publisher_art import prepare
+from .publisher_crop import crops
 from .publisher_slides import plan
 
 # What the parser's failure codes mean, in words a member of staff can act on.
@@ -165,7 +166,9 @@ def render_path(output: Path) -> dict:
     bundle = output / "bundle"
     document = json.loads((bundle / "document.json").read_text(encoding="utf-8"))
     assets = json.loads((bundle / "assets.json").read_text(encoding="utf-8"))
-    prepared = prepare(document, assets, bundle, output / "art")
+    found, notes = crops(bundle, document, assets)
+    prepared = prepare(document, assets, bundle, output / "art", crops=found)
+    prepared.notes += notes
     result = plan(document, prepared, title="Converted publication")
     data = result.as_dict(output)
     (output / "plan.json").write_text(json.dumps(data), encoding="utf-8")

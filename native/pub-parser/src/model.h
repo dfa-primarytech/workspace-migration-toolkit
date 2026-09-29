@@ -301,6 +301,11 @@ struct Document {
 
   bool truncated = false;
   std::string truncationReason;
+
+  // The raw Escher/EscherStm stream: Publisher's drawing records. libmspub
+  // reads each picture's crop from it and drops it, so it is kept as it is
+  // for a consumer to recover what the callback stream leaves out.
+  std::string drawingData;
 };
 
 } // namespace pubir

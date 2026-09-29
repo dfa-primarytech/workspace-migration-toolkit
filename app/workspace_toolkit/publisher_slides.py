@@ -747,7 +747,8 @@ class PageBuilder:
     def _image(self, element: dict) -> None:
         frame = frame_of(element)
         asset = (element.get("image") or {}).get("assetId")
-        picture = self.prepared.pictures.get(asset or "")
+        cropped = self.prepared.cropped.get(element["id"])
+        picture = cropped or self.prepared.pictures.get(asset or "")
         if frame is None:
             self.line(element, C.UNSUPPORTED, note("no-position", "It has no position."))
             return
@@ -760,13 +761,15 @@ class PageBuilder:
         self.pictures[picture.key] = picture
         status = element["compatibility"]["status"]
         entry = self.line(element, C.NATIVE if status == C.NATIVE else status, *picture.notes)
+        if cropped:
+            entry.notes.append(note("picture-cropped", "Cropped as in the original."))
         shape = frame.width / frame.height
         if abs(picture.width / picture.height - shape) > 0.02 * shape:
             entry.notes.append(
                 note(
                     "picture-stretched",
-                    "The picture is stretched to its frame, as in the original. If it looks "
-                    "squashed, the original may have been cropped.",
+                    "The picture is stretched to fit its frame. If it looks squashed, check it "
+                    "against the original.",
                 )
             )
         self.made(element, entry, object_id)
@@ -1220,6 +1223,7 @@ def plan(document: dict, prepared: Prepared, *, title: str, delete: Iterable[str
         "statusCounts": dict(Counter(str(line.status) for line in lines)),
         "fonts": catalogue(families),
         "warnings": warnings
+        + prepared.notes
         + [
             note(
                 "text-insets",
