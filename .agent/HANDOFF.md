@@ -1,5 +1,22 @@
 # Handoff
 
+- Agent: Codex (XLSX)
+- Date: 2026-09-29
+- Branch: `rescue/xlsx-sheets-mvp`, merged with main `4c6d655`
+- Objective: Fix issue #51: the `.xlsm` crash, chart-sheet rejection and conflicts with main.
+- Files changed: XLSX pipeline modules and tests; shared package, pipeline, worker and web format registration; generated XLSX fixtures and documentation; coordination files. Main's Publisher/platform changes were retained by the merge. The pipeline-selection integration assertion in `tests/platform/test_docx.py` was updated only to recognise main's existing Publisher support.
+- Completed: `.xlsm` keeps its source extension and MIME through native import; real VBA is reported as unsupported; chart sheets are retained and reported UNSUPPORTED; dialog and macro sheets require manual migration; generated fixtures cover both issue regressions; current main conflicts are resolved.
+- Checks: 440 passed, 13 skipped; Ruff check passed; Ruff format checked 47 files; mypy passed 25 source files; Bandit passed; secret scan passed; JavaScript syntax passed.
+- Known failures: none.
+- Unresolved: live Google Sheets import remains unverified; cell-limit estimation, one-based sheet-index consistency and the unused sweeper remain follow-ups outside issue #51.
+- Decisions: DECISIONS.md, 2026-09-28 (Excel source format and non-worksheet sheets).
+- Next task: merge PR #72 after GitHub checks pass, then verify a synthetic workbook against a controlled Google Workspace tenant.
+- Warnings: no real school files were used or committed. No GCP resources or credentials were created. Do not treat retained CLI manifests as content-free; they can contain sheet and external-workbook names.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-28
 - Branch: `feat/publisher-convert`, based on main `4c6d655` (#91 merged)
@@ -76,42 +93,3 @@
 - Warnings:
   - Four PUB-001 pictures are heavily stretched. The reader drops Publisher's crops, and LibreOffice shows the same stretching. They are reported, not fixed.
   - The test host holds `/root/wmt-test/private/pub-001.pub` (the real booklet, mode 644 so the container user can read it) and its parsed bundle. Remove both when the Publisher work is finished.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code / QuietHeron (Publisher and platform)
-- Date: 2026-09-28
-- Branch: `feat/publisher-check-file`, based on main `c687cd2`
-- Objective: Publisher step 1 of 4. The human approved the §38 stop point; decisions are in DECISIONS.md. A `.pub` can now be checked in the app.
-- Files changed:
-  - `Dockerfile` (parser build stage, runtime libs, binary);
-  - `app/workspace_toolkit/publisher.py` (new);
-  - `package.py` (`PUB` format, MIME aliases);
-  - `pipelines.py` (`.pub` entry, `convertible`);
-  - `config.py` (`publisher_parser`);
-  - `jobs.py`, `worker.py`, `web.py` (convert refused up front);
-  - `fonts.py` (run-together Sassoon names → Andika);
-  - `static/index.html`, `app.js`;
-  - `tests/platform/test_publisher_app.py` (new, 15 tests);
-  - `docs/platform.md`, DECISIONS.md, this file.
-- Completed:
-  - The app image builds and ships the parser.
-  - The worker runs the parser under a hard timeout, and "Check file" reports pages, page size, elements, pictures, fonts and warnings.
-  - Each parser refusal is given in plain words.
-  - Convert is hidden for `.pub` and refused before the upload.
-- Checks:
-  - Windows: 381 passed, 12 skipped. Linux (the human's Docker host, non-root, full suite): 383 passed, 10 skipped, including the hang test.
-  - The app image built on the host; the parser's C++ tests passed 107/107 on the Debian base, and `publisher-parser --version` runs in the final image.
-  - In the running image (capped, no network), the real parser refused a plain-text `.pub` and a non-Publisher OLE file as `unsupported_document`. Convert returned 501 `not_convertible`. The container used 48 MiB.
-  - Ruff and mypy clean.
-- Known failures: none.
-- Unresolved:
-  - ~~No real `.pub` has been through the app yet.~~ Done after the PR opened: PUB-001 was checked in the app image on the host. It took 0.56 s through the worker, reported 4 pages, and mapped Sassoon to Andika (see #90).
-  - Parser warnings are technical, parser-facing text. Worth rewording once real files show which ones staff actually see.
-- Decisions: see DECISIONS.md, 2026-09-28 (Publisher).
-- Next task: step 2, the renderer (IR → Slides API requests, tested offline).
-- Warnings:
-  - `pipelines.py` is listed as the DOCX stream's. This change only adds an entry and a `convertible` flag.
-  - The test host keeps `/root/wmt-test` and the `wmt-test/app:pub1` image for the next steps.

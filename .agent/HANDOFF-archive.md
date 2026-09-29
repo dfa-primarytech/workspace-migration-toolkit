@@ -7,6 +7,43 @@ PR descriptions have the same detail in full.
 
 ---
 
+- Agent: Claude Code / QuietHeron (Publisher and platform)
+- Date: 2026-09-28
+- Branch: `feat/publisher-check-file`, based on main `c687cd2`
+- Objective: Publisher step 1 of 4. The human approved the §38 stop point; decisions are in DECISIONS.md. A `.pub` can now be checked in the app.
+- Files changed:
+  - `Dockerfile` (parser build stage, runtime libs, binary);
+  - `app/workspace_toolkit/publisher.py` (new);
+  - `package.py` (`PUB` format, MIME aliases);
+  - `pipelines.py` (`.pub` entry, `convertible`);
+  - `config.py` (`publisher_parser`);
+  - `jobs.py`, `worker.py`, `web.py` (convert refused up front);
+  - `fonts.py` (run-together Sassoon names → Andika);
+  - `static/index.html`, `app.js`;
+  - `tests/platform/test_publisher_app.py` (new, 15 tests);
+  - `docs/platform.md`, DECISIONS.md, this file.
+- Completed:
+  - The app image builds and ships the parser.
+  - The worker runs the parser under a hard timeout, and "Check file" reports pages, page size, elements, pictures, fonts and warnings.
+  - Each parser refusal is given in plain words.
+  - Convert is hidden for `.pub` and refused before the upload.
+- Checks:
+  - Windows: 381 passed, 12 skipped. Linux (the human's Docker host, non-root, full suite): 383 passed, 10 skipped, including the hang test.
+  - The app image built on the host; the parser's C++ tests passed 107/107 on the Debian base, and `publisher-parser --version` runs in the final image.
+  - In the running image (capped, no network), the real parser refused a plain-text `.pub` and a non-Publisher OLE file as `unsupported_document`. Convert returned 501 `not_convertible`. The container used 48 MiB.
+  - Ruff and mypy clean.
+- Known failures: none.
+- Unresolved:
+  - ~~No real `.pub` has been through the app yet.~~ Done after the PR opened: PUB-001 was checked in the app image on the host. It took 0.56 s through the worker, reported 4 pages, and mapped Sassoon to Andika (see #90).
+  - Parser warnings are technical, parser-facing text. Worth rewording once real files show which ones staff actually see.
+- Decisions: see DECISIONS.md, 2026-09-28 (Publisher).
+- Next task: step 2, the renderer (IR → Slides API requests, tested offline).
+- Warnings:
+  - `pipelines.py` is listed as the DOCX stream's. This change only adds an entry and a `convertible` flag.
+  - The test host keeps `/root/wmt-test` and the `wmt-test/app:pub1` image for the next steps.
+
+---
+
 - Agent: Claude Code / QuietHeron (platform)
 - Date: 2026-09-28
 - Branch: `feat/compress-pictures`, based on main `706a84c`

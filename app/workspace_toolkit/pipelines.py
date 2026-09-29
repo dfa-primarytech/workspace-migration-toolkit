@@ -12,12 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import docs, docx, google, pptx, publisher, publisher_convert
+from . import docs, docx, google, pptx, publisher, publisher_convert, sheets, xlsx
 from .config import Settings
 from .errors import ToolkitError
-from .package import DOCX, PPTX, PUB, Format
+from .package import DOCX, PPTX, PUB, XLSM, XLSX, Format
 
-SUPPORTED = ".pptx, .docx and .pub"
+SUPPORTED = ".pptx, .docx, .pub, .xlsx and .xlsm"
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,20 @@ PIPELINES: dict[str, Pipeline] = {
         # Pictures reach Slides through a bucket the deployment must provide.
         ready=lambda settings: settings.publisher_ready,
         needs_settings=True,
+    ),
+    ".xlsx": Pipeline(
+        fmt=XLSX,
+        analysis_report=xlsx.analysis_report,
+        convert=sheets.convert,
+        kind="spreadsheet",
+        destination="Google Sheets",
+    ),
+    ".xlsm": Pipeline(
+        fmt=XLSM,
+        analysis_report=xlsx.analysis_report,
+        convert=sheets.convert,
+        kind="spreadsheet",
+        destination="Google Sheets",
     ),
 }
 
