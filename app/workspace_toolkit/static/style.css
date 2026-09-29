@@ -16,11 +16,11 @@ input{max-width:100%;padding:10px 0}
 .choice .hint{display:block;font-weight:var(--weight-light);font-size:var(--fs-14);color:var(--fg-2);margin-top:2px}
 a{color:var(--fg-link)}
 a:hover{color:var(--fg-link-hover)}
-.note,#limit,#picked{font-size:var(--fs-14);color:var(--fg-2)}
-details{margin-top:16px;font-size:var(--fs-14);color:var(--fg-2)}
-details summary{cursor:pointer;color:var(--fg-link);font-weight:var(--weight-semibold)}
-details summary:hover{color:var(--fg-link-hover)}
-details p{font-size:var(--fs-14);margin:8px 0}
+.note,#limit{font-size:var(--fs-14);color:var(--fg-2)}
+#files{list-style:none;padding:0;margin:8px 0}
+#files li{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 16px;padding:10px 0;border-bottom:1px solid var(--border-1);margin:0}
+#files .name{font-weight:var(--weight-semibold);overflow-wrap:anywhere}
+#files .state{font-size:var(--fs-14);color:var(--fg-2)}
 #status{font-weight:var(--weight-semibold)}
 li{margin-bottom:8px}
 [hidden]{display:none!important}

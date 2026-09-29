@@ -1,6 +1,10 @@
 'use strict';
+// One step, for a teacher whose files did not come across to Google well
+// (DECISIONS.md, 2026-09-29): choose one or more files, press Convert, get
+// the Google files. No notes on screen: every note is in the report saved in
+// each conversion's Drive folder, for whoever supports the app.
 const $ = id => document.getElementById(id);
-let session, sourceHash, selected, reportUrl, source, gapiLoading;
+let session, gapiLoading, chosen = [];
 async function request(url, options = {}) {
   const response = await fetch(url, options);
   // A proxy's 413 or a plain-text server error is not JSON; show our own words, not a parse error.
@@ -8,26 +12,14 @@ async function request(url, options = {}) {
   if (!response.ok || !body) throw new Error(body?.error?.message || 'The request failed. Please try again.');
   return body;
 }
-function busy(value) { for (const id of ['file','pick-drive','analyse','convert','smaller','logout']) $(id).disabled = value; }
-// The on-page summary above this is the report for a person; this is the
-// same data as raw JSON for IT/support to troubleshoot with. Tucked behind
-// <details> so a trial user isn't handed a JSON file as if it were the answer.
-function download(report, parent) {
-  if (reportUrl) URL.revokeObjectURL(reportUrl);
-  reportUrl = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], {type:'application/json'}));
-  const details = document.createElement('details');
-  const summary = document.createElement('summary'); summary.textContent = 'Advanced: full technical report';
-  const note = document.createElement('p'); note.textContent = 'For IT support or troubleshooting — not needed for everyday use.';
-  const a = document.createElement('a'); a.href = reportUrl; a.download = 'conversion-report.json'; a.textContent = 'Download full report (.json)';
-  details.append(summary, note, a);
-  parent.append(details);
-}
-function link(url, label, parent) {
+function busy(value) { for (const id of ['file','pick-drive','convert','smaller','logout']) $(id).disabled = value; }
+function link(url, label) {
   const parsed = new URL(url);
-  if (parsed.protocol !== 'https:' || !['docs.google.com','drive.google.com'].includes(parsed.hostname)) return;
-  const p = document.createElement('p'), a = document.createElement('a'); a.href = url; a.textContent = label; a.target = '_blank'; a.rel = 'noopener noreferrer'; p.append(a); parent.append(p);
+  if (parsed.protocol !== 'https:' || !['docs.google.com','drive.google.com'].includes(parsed.hostname)) return null;
+  const a = document.createElement('a'); a.href = url; a.textContent = label; a.target = '_blank'; a.rel = 'noopener noreferrer';
+  return a;
 }
-// `source` is one shape whichever way a file arrived: a browser upload
+// Each chosen file is one shape whichever way it arrived: a browser upload
 // carries its own File to send as the request body; a Drive pick carries
 // only an id, which the server downloads itself (see /api/picker-token and
 // web.py's x-drive-file-id handling) -- nothing here ever sees its bytes.
@@ -36,10 +28,31 @@ function pipelineFor(src) {
   const ext = dot === -1 ? '' : src.name.slice(dot).toLowerCase();
   return (session.formats || []).find(f => f.extension === ext);
 }
-function resetChoice() {
-  sourceHash = null; selected = null; $('convert').hidden = true; $('smaller-choice').hidden = true; $('smaller').checked = false;
-  $('summary').replaceChildren(); $('result').replaceChildren();
-  $('picked').textContent = source ? `Selected: ${source.name}` : '';
+// Why a file can't be converted here, in plain words, or '' if it can.
+function refusal(src) {
+  const format = pipelineFor(src);
+  if (!format) return 'This kind of file can’t be converted.';
+  if (format.convertible === false) return 'Converting this kind of file isn’t set up here yet.';
+  // No limit unless the deployment sets one (maxUploadBytes is then a number, not null).
+  if (session.maxUploadBytes && src.size && src.size > session.maxUploadBytes) return 'This file is too large.';
+  return '';
+}
+function choose(files) {
+  chosen = files.map(src => ({...src, row: null}));
+  const list = $('files'); list.replaceChildren();
+  for (const src of chosen) {
+    const li = document.createElement('li');
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = src.name;
+    const state = document.createElement('span'); state.className = 'state'; state.textContent = refusal(src);
+    li.append(name, state); list.append(li); src.row = state;
+  }
+  const ready = chosen.filter(src => !refusal(src));
+  $('convert').hidden = !ready.length;
+  $('convert').textContent = ready.length > 1 ? `Convert ${ready.length} files` : 'Convert';
+  // Only a PowerPoint or Word file can have its pictures made smaller (see web.py).
+  $('smaller-choice').hidden = !ready.some(src => ['.pptx','.docx'].includes(pipelineFor(src).extension));
+  $('smaller').checked = false;
+  $('status').textContent = '';
 }
 // One load at a time, shared while it runs or once it worked. A failed load
 // is forgotten, and its script removed, so the next try starts again (#132).
@@ -63,23 +76,25 @@ function loadPicker() {
   return gapiLoading;
 }
 async function openPicker() {
-  if (!session.pickerEnabled) throw new Error('Adding a file from Drive is not available.');
+  if (!session.pickerEnabled) throw new Error('Choosing files from Drive is not available.');
   await loadPicker();
   const {accessToken} = await request('/api/picker-token');
   const mimeTypes = (session.formats || []).map(f => f.mime).join(',');
   await new Promise(resolve => {
-    const view = new google.picker.DocsView().setMimeTypes(mimeTypes).setIncludeFolders(false).setSelectFolderEnabled(false);
+    // Folders can be opened, and every file in one selected at once: that
+    // is how a whole folder is converted under the drive.file scope, which
+    // only lets the app open files the person picked.
+    const view = new google.picker.DocsView().setMimeTypes(mimeTypes).setIncludeFolders(true).setSelectFolderEnabled(false);
     const picker = new google.picker.PickerBuilder()
       .addView(view)
+      .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
       .setOAuthToken(accessToken)
       .setDeveloperKey(session.pickerApiKey)
       .setAppId(session.pickerAppId)
       .setCallback(data => {
         if (data.action === google.picker.Action.PICKED) {
-          const doc = data.docs[0];
-          source = {name: doc.name, size: doc.sizeBytes ? Number(doc.sizeBytes) : 0, driveId: doc.id};
           $('file').value = '';
-          resetChoice();
+          choose(data.docs.map(doc => ({name: doc.name, size: doc.sizeBytes ? Number(doc.sizeBytes) : 0, driveId: doc.id})));
           resolve();
         } else if (data.action === google.picker.Action.CANCEL) {
           resolve();
@@ -89,49 +104,58 @@ async function openPicker() {
     picker.setVisible(true);
   });
 }
-async function upload(convert) {
-  if (!source || !pipelineFor(source)) throw new Error('Please choose a ' + (session.formats || []).map(f => f.extension).join(' or ') + ' file.');
-  // No limit unless the deployment sets one (maxUploadBytes is then a number, not null).
-  if (session.maxUploadBytes && source.size && source.size > session.maxUploadBytes) throw new Error('This file exceeds the upload limit.');
-  if (convert && (source !== selected || !sourceHash)) throw new Error('Please check this file first.');
-  const headers = {'X-Upload-Filename':encodeURIComponent(source.name),'X-CSRF-Token':session.csrfToken};
-  if (convert) headers['X-Source-Sha256'] = sourceHash;
-  // Opt-in: only ever sent with a conversion (see web.py).
-  if (convert && $('smaller').checked) headers['X-Compress-Pictures'] = '1';
-  if (source.driveId) {
+function send(src) {
+  const headers = {'X-Upload-Filename': encodeURIComponent(src.name), 'X-CSRF-Token': session.csrfToken};
+  if ($('smaller').checked) headers['X-Compress-Pictures'] = '1';
+  if (src.driveId) {
     headers['Content-Type'] = 'application/octet-stream';
-    headers['X-Drive-File-Id'] = source.driveId;
-    return request(convert ? '/api/convert' : '/api/analyse', {method:'POST', headers});
+    headers['X-Drive-File-Id'] = src.driveId;
+    return request('/api/convert', {method: 'POST', headers});
   }
-  headers['Content-Type'] = source.file.type || 'application/octet-stream';
-  return request(convert ? '/api/convert' : '/api/analyse', {method:'POST', headers, body:source.file});
+  headers['Content-Type'] = src.file.type || 'application/octet-stream';
+  return request('/api/convert', {method: 'POST', headers, body: src.file});
 }
-async function perform(convert) {
-  const chosen = source && pipelineFor(source);
-  busy(true); $('status').textContent = convert ? 'Converting and checking your file…' : 'Checking your file…';
+async function convertAll() {
+  const queue = chosen.filter(src => !refusal(src));
+  let done = 0, failed = 0;
+  busy(true);
   try {
-    const report = await upload(convert);
-    const parent = convert ? $('result') : $('summary'); parent.replaceChildren();
-    const unit = chosen && chosen.kind === 'document' ? 'sections' : chosen && chosen.kind === 'spreadsheet' ? 'worksheets' : chosen && chosen.extension === '.pub' ? 'pages' : 'slides';
-    const p = document.createElement('p'); p.textContent = `${report.pages} ${unit} · ${Object.values(report.assetCounts).reduce((a,b)=>a+b,0)} recovered files · ${report.warnings.length} items to review`; parent.append(p);
-    const list = document.createElement('ul');
-    for (const message of [...new Set(report.warnings.map(w=>w.message))]) { const li = document.createElement('li'); li.textContent = message; list.append(li); }
-    parent.append(list);
-    // A format that can only be checked so far (Publisher) offers no Convert.
-    if (!convert) { sourceHash = report.sourceSha256; selected = source; const canConvert = !chosen || chosen.convertible !== false; $('convert').hidden = !canConvert; $('smaller-choice').hidden = !canConvert || (chosen && chosen.extension === '.pub'); }
-    else {
-      if (report.url) link(report.url, 'Open in ' + ((chosen && chosen.destination) || 'Google Drive'), parent);
-      if (report.folderUrl) link(report.folderUrl, 'Open recovered files in Drive', parent);
-      $('convert').hidden = true; $('smaller-choice').hidden = true;
+    // One at a time: the server converts one file at once, and a teacher
+    // sees each file finish.
+    for (const [index, src] of queue.entries()) {
+      $('status').textContent = queue.length > 1 ? `Converting ${index + 1} of ${queue.length}…` : 'Converting…';
+      src.row.replaceChildren('Converting…');
+      try {
+        const report = await send(src);
+        const format = pipelineFor(src);
+        const open = report.url && link(report.url, 'Open in ' + (format.destination || 'Google Drive'));
+        const folder = report.folderUrl && link(report.folderUrl, 'Folder');
+        if (report.status && report.status.startsWith('failed')) {
+          failed += 1;
+          src.row.replaceChildren('Didn’t finish. ', ...(folder ? [folder] : []));
+        } else {
+          done += 1;
+          src.row.replaceChildren(...[open, folder].filter(Boolean).flatMap((a, i) => i ? [' · ', a] : [a]));
+        }
+      } catch (error) {
+        failed += 1;
+        src.row.replaceChildren('Couldn’t convert: ' + error.message);
+      }
     }
-    download(report, parent);
-    $('status').textContent = !convert ? (chosen && chosen.convertible === false ? 'Checked. Converting this kind of file is not set up here yet.' : 'Ready to convert. Review the findings above.') : report.status.startsWith('failed') ? 'Conversion did not finish. Check the report and any saved files before retrying.' : 'Conversion finished. Please review the result and report.';
-  } catch (error) { $('status').textContent = error.message; }
-  finally { busy(false); }
+    $('convert').hidden = true;
+    $('smaller-choice').hidden = true;
+    $('status').textContent = failed
+      ? `${done} converted, ${failed} couldn’t be.`
+      : done > 1 ? `All ${done} files converted.` : 'Converted.';
+  } finally { busy(false); }
 }
-$('analyse').addEventListener('click', ()=>perform(false));
-$('convert').addEventListener('click', ()=>perform(true));
-$('pick-drive').addEventListener('click', async ()=>{ try { await openPicker(); } catch (e) { $('status').textContent = e.message; } });
-$('file').addEventListener('change', ()=>{ const file = $('file').files[0]; source = file ? {name:file.name, size:file.size, file} : null; resetChoice(); });
-$('logout').addEventListener('click', async ()=>{try{await request('/auth/logout',{method:'POST',headers:{'X-CSRF-Token':session.csrfToken}});location.reload();}catch(e){$('status').textContent=e.message;}});
-request('/api/session').then(s=>{session=s;$('signin').hidden=s.signedIn;$('logout').hidden=!s.signedIn;$('workspace').hidden=!s.signedIn;$('pick-drive').hidden=!s.pickerEnabled;$('limit').textContent=s.maxUploadBytes?`Upload limit: ${Math.round(s.maxUploadBytes/1024/1024)} MiB.`:'';if(!s.signedIn&&!s.configured)$('status').textContent='Google sign-in needs to be configured by the application owner.';}).catch(e=>{$('status').textContent=e.message;});
+$('convert').addEventListener('click', convertAll);
+$('pick-drive').addEventListener('click', async () => { try { await openPicker(); } catch (e) { $('status').textContent = e.message; } });
+$('file').addEventListener('change', () => choose([...$('file').files].map(file => ({name: file.name, size: file.size, file}))));
+$('logout').addEventListener('click', async () => { try { await request('/auth/logout', {method: 'POST', headers: {'X-CSRF-Token': session.csrfToken}}); location.reload(); } catch (e) { $('status').textContent = e.message; } });
+request('/api/session').then(s => {
+  session = s;
+  $('signin').hidden = s.signedIn; $('logout').hidden = !s.signedIn; $('workspace').hidden = !s.signedIn; $('pick-drive').hidden = !s.pickerEnabled;
+  $('limit').textContent = s.maxUploadBytes ? `Up to ${Math.round(s.maxUploadBytes / 1024 / 1024)} MB each.` : '';
+  if (!s.signedIn && !s.configured) $('status').textContent = 'Google sign-in needs to be configured by the application owner.';
+}).catch(e => { $('status').textContent = e.message; });

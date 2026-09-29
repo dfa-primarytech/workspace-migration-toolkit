@@ -174,8 +174,11 @@ def test_web_preflight_cleanup_and_hash_guard(pptx, tmp_path):
     assert response.status_code == 200, response.text
     assert response.json()["pages"] == 2
     assert not list(work.iterdir())
-    response = client.post("/api/convert", content=pptx.read_bytes(), headers=headers)
+    # A client that checked a file is held to it: a different file is refused.
+    changed = {**headers, "X-Source-Sha256": "0" * 64}
+    response = client.post("/api/convert", content=pptx.read_bytes(), headers=changed)
     assert response.status_code == 409
+    assert response.json()["error"]["code"] == "source_changed"
     assert not list(work.iterdir())
 
 
@@ -587,3 +590,30 @@ def test_the_import_limit_is_judged_on_what_google_receives(monkeypatch, pptx):
     )
     assert response.status_code == 200, response.text
     assert "beyond_import_limit" not in [w["code"] for w in response.json()["warnings"]]
+
+
+def test_a_file_converts_in_one_step_without_being_checked_first(monkeypatch, pptx):
+    """Pick, then Convert (DECISIONS.md, 2026-09-29): no fingerprint from an
+    earlier check is needed."""
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    async def analysed(root, settings, fmt, **options):
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        return {"status": "completed", "url": "https://docs.google.com/presentation/d/x/edit"}
+
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: replace(resolve(name), convert=converted))
+    client = signed_client(configured())
+    headers = {
+        "Content-Type": PPTX_MIME,
+        "X-Upload-Filename": "x.pptx",
+        "X-CSRF-Token": "test-csrf",
+    }
+    response = client.post("/api/convert", content=pptx.read_bytes(), headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "completed"

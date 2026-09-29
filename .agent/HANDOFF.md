@@ -1,5 +1,29 @@
 # Handoff
 
+- Agent: Claude Code / QuietHeron (platform UI)
+- Date: 2026-09-29
+- Branch: `feat/one-step-convert`, based on main `2d80316` (#103 merged)
+- Objective: the owner's direction (DECISIONS.md, 2026-09-29): a teacher picks files, presses Convert, gets Google files; no notes on screen; bulk conversion.
+- Files changed: `static/app.js` (rewritten), `static/index.html`, `static/style.css`, `web.py` (the source fingerprint is optional), `tests/platform/test_web.py`, this file.
+- Completed:
+  - One screen for every format: choose files (several at once, or from Drive with multi-select, folders browsable), then one Convert button.
+  - Files convert one after another, each row showing "Converting…", then "Open in Google Slides/Docs/Sheets · Folder", or "Couldn't convert: <reason>".
+  - No Check file button, no summary, no notes list, no report download on screen: the report is in each conversion's folder.
+  - `/api/convert` no longer needs a prior check. A client that sends `X-Source-Sha256` is still held to it (409 `source_changed`).
+  - `/api/analyse` and the CLI are unchanged.
+- Checks: 510 platform tests passed, 12 skipped; Ruff and mypy clean. The page was previewed in the browser pane with sample files, at desktop and phone width, with no console errors. No real conversion was run through the new page: the picture token had expired and the pane was signed out.
+- Known failures: none.
+- Unresolved:
+  - A live run of several files, one from Drive, through the new page.
+  - Google's sign-in lasts an hour: a long batch may need the teacher to sign in again part-way. Each file checks this before it starts.
+  - "A whole folder" means selecting every file in the picker (drive.file scope), not pointing at a folder.
+- Decisions: DECISIONS.md, 2026-09-29 (built for a frustrated educator).
+- Next task: a live run; then decide whether `/api/analyse` stays at all.
+- Warnings: this changes the screen every format shares. DOCX, PPTX and XLSX conversion code is untouched. CT 203's `wmt-test-live` runs `wmt-test/app:pub19`; its picture token has expired.
+---
+
+## Previous handoff
+
 - Agent: Claude Code (Claude 2, DOCX/platform/parser)
 - Date: 2026-09-30
 - Branch: `fix/docx-straddling-pictures`, based on main `7eaf26a` (PR #167)
@@ -47,19 +71,3 @@
   - #150, stacked on #145 (`fix/publisher-expired-sign-in`): Slides answering a page with 401 or 403 stops the conversion (`session_expired` / `google_forbidden`, detail `stopped_at_page_N`) instead of failing every later page; the partial report and links are kept.
 - Next task: none claimed. Claude 2 is taking the native parser issues (#126-#129) through Linux CI. `pptx.py`/`pictures.py`/`package.py` are Platform-owned: say so if the Platform stream is active.
 - Warnings: in this environment, a heredoc passed through Python can lose a backslash level: after writing a regex that way, search the file for control characters (bytes 1 to 8), or write the edit with the Edit tool instead.
----
-
-## Previous handoff
-
-- Agent: Claude Code (Publisher)
-- Date: 2026-09-30
-- Branch: `fix/publisher-mask-budget`, stacked on `fix/publisher-page-failures` (PR #139, itself on #138): merge #138, then #139, then this
-- Objective: #111, shape drawing's supersampled masks passing any memory bound.
-- Files changed: `publisher_art.py` (`MASK_BUDGET`, `_supersample`); `tests/platform/test_publisher_masks.py` (new, 6); `docs/publisher-renderer.md`; this file.
-- Completed: a coverage mask is drawn at 3x only while it stays within 40M pixels, else 2x, else 1x. The picture's own size is unchanged. A page-sized A5 shape keeps 3x. Mask sizes are tested by recording them, not by allocating a huge one.
-- Checks: 532 platform tests passed, 14 skipped; Ruff clean; mypy only reports `hypercorn` missing locally.
-- Known failures: none.
-- Unresolved: the finished RGBA picture can still be 25M pixels (about 100 MB, and briefly two of them while compositing). That is Slides' own limit and not changed here. No out-of-memory crash was ever reproduced (Codex's qualification).
-- Decisions: none new.
-- Next task: all the Publisher audit issues are now fixed or in PRs. Next, the unclaimed Platform/PPTX ones (#120, #121, #124, #130-#133, #136, #137): claim them first.
-- Warnings: none new.
