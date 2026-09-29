@@ -9,6 +9,38 @@ PR descriptions have the same detail in full.
 
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-29
+- Branch: `feat/publisher-crops`, based on main `e36ddd6` (#95 merged)
+- Objective: stop cropped Publisher pictures being stretched. The crop was in the file; libmspub dropped it.
+- Files changed:
+  - `native/pub-parser/src/main.cpp`, `model.h`, `collector.h`, `bundle.cpp` (write `drawing.bin`);
+  - `tests/test_bundle.cpp` (new test);
+  - `app/workspace_toolkit/publisher_crop.py` (new: read records, match, fit check);
+  - `publisher_art.py` (`crop_picture`, `prepare(crops=)`);
+  - `publisher_slides.py` (uses the cropped picture; "Cropped as in the original");
+  - `publisher.py` (reads crops in the worker);
+  - `tests/platform/test_publisher_crop.py` (new, 7);
+  - `docs/publisher-parser.md`, `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - The parser saves Publisher's drawing records.
+  - The app recovers every picture's crop, matches it, checks it fits its frame, and cuts the picture before upload.
+  - On PUB-001 all five cropped placements fit exactly, including the banner cropped two different ways on pages 1 and 4.
+- Checks:
+  - Linux (host): the image builds, with C++ tests 108/108. Platform and parser suites pass: 503, plus the parser's 59 with the binary and PUB-001 supplied.
+  - Ruff and mypy clean.
+- Known failures: none.
+- Unresolved:
+  - **Not yet seen in Google.** It needs a live run with a fresh picture token.
+  - Outward crops (padding) aren't handled; they're left uncropped and reported.
+- Decisions: DECISIONS.md, 2026-09-29 (picture crops).
+- Next task: a live run to confirm the pictures on pages 1, 2 and 4, then merge.
+- Warnings:
+  - CT 203's `/root/wmt-test/live` holds the OAuth client secret, and a picture token that expired at 13:23 UTC. The container `wmt-test-live` is still running.
+  - The image `wmt-test/app:pub6` has this branch.
+
+---
+
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
 - Branch: `feat/publisher-table-borders`, based on main `03d1980` (#93 merged)
 - Objective: stop Publisher tables showing Google's default grey grid, which the original didn't have.
 - Files changed:

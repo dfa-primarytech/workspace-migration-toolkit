@@ -142,13 +142,12 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
 
     sheets: list[dict] = []
     total_grid_cells = 0
+    declared_grid_cells = 0
     oversized_cells = 0
     formula_types: Counter[str] = Counter()
     error_cells = 0
     workbook_sheets = workbook.find(q("x", "sheets"))
-    for index, sheet in enumerate(
-        list(workbook_sheets) if workbook_sheets is not None else [], start=1
-    ):
+    for index, sheet in enumerate(list(workbook_sheets) if workbook_sheets is not None else []):
         relationship = relationships.get(sheet.get(q("r", "id"), ""))
         if (
             not relationship
@@ -176,7 +175,9 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
             sheets.append(identity)
             continue
         dimension = root.find(q("x", "dimension"))
-        rows, columns = range_size(dimension.get("ref") if dimension is not None else None)
+        declared_rows, declared_columns = range_size(
+            dimension.get("ref") if dimension is not None else None
+        )
         actual_rows = actual_columns = populated = formulas = errors = 0
         for cell in root.iter(q("x", "c")):
             position = cell_position(cell.get("r", ""))
@@ -208,14 +209,17 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
                 length = max(length, len(formula.text or ""))
             if length > GOOGLE_MAX_CELL_CHARS:
                 oversized_cells += 1
-        rows, columns = max(rows, actual_rows), max(columns, actual_columns)
+        rows, columns = actual_rows, actual_columns
         total_grid_cells += rows * columns
+        declared_grid_cells += declared_rows * declared_columns
         error_cells += errors
         sheets.append(
             {
                 **identity,
                 "rows": rows,
                 "columns": columns,
+                "declaredRows": declared_rows,
+                "declaredColumns": declared_columns,
                 "populatedCells": populated,
                 "formulaCells": formulas,
                 "errorCells": errors,
@@ -230,6 +234,7 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
     inventory = {
         "sheetCount": len(sheets),
         "totalGridCells": total_grid_cells,
+        "declaredGridCells": declared_grid_cells,
         "populatedCells": sum(s.get("populatedCells", 0) for s in sheets),
         "formulaCells": sum(s.get("formulaCells", 0) for s in sheets),
         "chartSheets": sum(s["sheetType"] == "chartsheet" for s in sheets),
@@ -306,6 +311,17 @@ def findings(inventory: dict, sheets: list[dict], external_count: int) -> list[d
                 "google_cell_limit",
                 "This workbook exceeds the Google Sheets cell limit and needs to be split before migration.",
                 cellCount=inventory["totalGridCells"],
+                limit=GOOGLE_MAX_CELLS,
+                classification=C.UNSUPPORTED,
+            )
+        )
+    elif inventory["declaredGridCells"] > GOOGLE_MAX_CELLS:
+        result.append(
+            warning(
+                "declared_extent_needs_review",
+                "The workbook declares a grid larger than Google Sheets accepts, but its actual cell extent is within the limit. Review the workbook after import.",
+                declaredCellCount=inventory["declaredGridCells"],
+                observedCellCount=inventory["totalGridCells"],
                 limit=GOOGLE_MAX_CELLS,
                 classification=C.UNSUPPORTED,
             )
@@ -458,6 +474,7 @@ def analysis_report(manifest: dict) -> dict:
             key: inventory[key]
             for key in (
                 "totalGridCells",
+                "declaredGridCells",
                 "populatedCells",
                 "formulaCells",
                 "errorCells",
