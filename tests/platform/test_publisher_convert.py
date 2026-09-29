@@ -138,6 +138,7 @@ def test_credentials_are_the_apps_own_and_never_a_key_file(tmp_path, monkeypatch
             return storage.credentials(client)
 
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("PUBLISHER_STORAGE_TOKEN", raising=False)
     adc = tmp_path / "adc.json"
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
     adc.write_text(
@@ -158,7 +159,11 @@ def test_credentials_are_the_apps_own_and_never_a_key_file(tmp_path, monkeypatch
     with pytest.raises(ToolkitError) as missing:
         asyncio.run(pick())
     assert missing.value.code == "publisher_storage_unavailable"
-    monkeypatch.setenv("K_SERVICE", "workspace-toolkit")
+    monkeypatch.setenv("PUBLISHER_STORAGE_TOKEN", "short-lived")
+    picked = asyncio.run(pick())
+    assert isinstance(picked, storage.StaticCredentials)
+    assert asyncio.run(picked.token()) == "short-lived"
+    monkeypatch.setenv("K_SERVICE", "workspace-toolkit")  # Cloud Run's own account wins
     assert isinstance(asyncio.run(pick()), storage.MetadataCredentials)
 
 

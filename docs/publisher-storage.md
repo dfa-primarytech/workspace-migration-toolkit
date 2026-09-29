@@ -116,6 +116,19 @@ gcloud auth application-default login
 In the Console: go to **IAM & Admin → Service Accounts**, open `SIGNER`, and
 under **Principals with access** grant *Service Account Token Creator*.
 
+**Or, for a test run on a machine that shouldn't hold your login** (such as
+a shared VM): skip `application-default login` there. Instead, on your own
+computer, mint a one-hour token for `SIGNER` itself:
+
+```bash
+gcloud auth print-access-token --impersonate-service-account SIGNER
+```
+
+Set it as `PUBLISHER_STORAGE_TOKEN` on the test machine. It can only do what
+`SIGNER` can (this bucket's objects, and signing its own links), it expires
+within the hour, and nothing on that machine can renew it. Cloud Run ignores
+it and always uses its own account.
+
 **Do not create or download a key** for the service account. The app refuses
 to read one; a key file is a long-lived secret on disk.
 

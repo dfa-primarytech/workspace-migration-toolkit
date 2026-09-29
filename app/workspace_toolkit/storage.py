@@ -11,7 +11,10 @@ No key files. The app acts as its own service account:
 
 - on Cloud Run, with a token from the metadata server;
 - anywhere else (a developer's machine), with the application-default
-  credentials `gcloud auth application-default login` writes.
+  credentials `gcloud auth application-default login` writes;
+- or, for a test run on a machine that should hold nothing lasting, a
+  one-hour token for the signing service account itself, minted elsewhere
+  (`PUBLISHER_STORAGE_TOKEN`; docs/publisher-storage.md).
 
 Links are signed by Google, through the IAM Credentials `signBlob` call. The
 account needs the Service Account Token Creator role on the signing service
@@ -98,6 +101,19 @@ class MetadataCredentials(Credentials):
         return response.text.strip()
 
 
+class StaticCredentials(Credentials):
+    """A token minted elsewhere for the signing account. It expires within the
+    hour and nothing here can renew it: when Google refuses it, pictures fail
+    plainly rather than falling back to anything broader."""
+
+    def __init__(self, client: httpx.AsyncClient, token: str):
+        super().__init__(client)
+        self.value = token
+
+    async def _fetch(self) -> tuple[str, float]:
+        return self.value, 3600.0
+
+
 class UserCredentials(Credentials):
     """`gcloud auth application-default login`, for running the app locally."""
 
@@ -133,6 +149,9 @@ def credentials(client: httpx.AsyncClient) -> Credentials:
     """Cloud Run's service account there; a developer's own login elsewhere."""
     if os.getenv("K_SERVICE"):  # set by Cloud Run
         return MetadataCredentials(client)
+    token = os.getenv("PUBLISHER_STORAGE_TOKEN", "").strip()
+    if token:
+        return StaticCredentials(client, token)
     path = default_credentials_file()
     try:
         info = json.loads(path.read_text(encoding="utf-8"))
