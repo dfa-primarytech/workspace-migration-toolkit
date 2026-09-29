@@ -29,6 +29,7 @@ bundle/ (document.json, assets.json, assets/)
 |---|---|---|
 | Page | A blank slide, in order; the presentation is created at the first page's size | — |
 | Text frame | `TEXT_BOX`, text inserted once, then each run and paragraph styled by UTF-16 range | NATIVE, or SUBSTITUTED if a font was replaced |
+| List paragraphs | `createParagraphBullets`, one per run of the same kind of list | NATIVE, or SUBSTITUTED if the numbering or bullet was approximated |
 | Picture | `createImage`, stretched to its frame as Publisher's bitmap fill is | NATIVE |
 | Turned picture | Placed by its outline polygon, not its bounding box | NATIVE |
 | Rectangle, ellipse | `RECTANGLE` / `ELLIPSE` with fill and outline | NATIVE (SUBSTITUTED if a gradient became one colour) |
@@ -81,7 +82,7 @@ reported (`picture-stretched`).
 
 ## Known limits
 
-- **Numbered and bulleted lists lose their numbers and bullets.** libmspub 0.1.4 never passes lists on. PUB-001's table and its "Books to take home" items are numbered 1., 2., 3. in Publisher.
+- **Lists** come from the patched libmspub (docs/publisher-parser.md); the stock 0.1.4 never passes them on. Each run of consecutive list paragraphs of one kind becomes one `createParagraphBullets`, sent before the paragraph styles so Publisher's own hanging indents are the ones kept. Numbering maps to the nearest Slides preset (1. and 1), I., A.); anything else is shown as 1, 2, 3 and reported, and so is a bullet other than a dot and a list that started past 1, which Slides can't do. Verified live on PUB-002's 12 bulleted lists.
 
 - **Crops** are applied only when they fit their frame (see above). An outward crop (padding), which Publisher allows, is not handled and leaves the picture uncropped.
 - **Mirrored pictures** are reported, not flipped (the reader can't tell which way).

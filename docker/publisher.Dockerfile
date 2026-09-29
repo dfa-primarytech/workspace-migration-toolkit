@@ -4,12 +4,11 @@
 # does not talk to Google and holds no credentials. Point it at a .pub
 # and it writes a bundle.
 #
-# libmspub and librevenge come from the distribution's own packages
-# rather than being vendored. They are stable, LibreOffice-maintained
-# C++ libraries with no reason to carry a private fork, and vendoring
-# them would put a copy of someone else's MPL-2.0 source in this
-# repository for no technical gain. The exact tested versions are pinned
-# in docs/publisher-parser.md.
+# librevenge comes from the distribution. libmspub 0.1.4 is built from
+# LibreOffice's release tarball with this repository's small patch set
+# (native/pub-parser/libmspub): it reads things it never passes on, such as
+# paragraph lists. Only the patches are kept here, never libmspub's source.
+# The exact tested versions are pinned in docs/publisher-parser.md.
 #
 # Ubuntu 24.04 rather than a Debian base so the image and the CI runner
 # (ubuntu-latest) resolve the same package versions -- the parser's
@@ -28,16 +27,27 @@ RUN apt-get update \
       build-essential \
       cmake \
       pkg-config \
-      libmspub-dev \
-      librevenge-dev \
+      patch curl xz-utils ca-certificates \
+      librevenge-dev libicu-dev libboost-dev zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
+
+COPY native/pub-parser/libmspub /libmspub
+RUN sh /libmspub/build.sh /opt/libmspub
+# The packages the patched library needs at run time, found from the library
+# itself (ldd's /lib paths are recorded under /usr/lib by dpkg).
+RUN for lib in $(ldd /opt/libmspub/lib/libmspub-0.1.so.1 | awk '/=> \//{print $3}'); do \
+      dpkg -S "$lib" 2>/dev/null || dpkg -S "/usr$lib" 2>/dev/null || true; \
+    done | cut -d: -f1 | sort -u \
+      | grep -v -e '^libc6' -e '^libgcc' -e '^libstdc' > /opt/libmspub/runtime-packages \
+ && grep -q icu /opt/libmspub/runtime-packages
 
 WORKDIR /src
 COPY native/pub-parser/CMakeLists.txt ./CMakeLists.txt
 COPY native/pub-parser/src ./src
 COPY native/pub-parser/tests ./tests
 
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+RUN PKG_CONFIG_PATH=/opt/libmspub/lib/pkgconfig cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+      -DPUBIR_LIBMSPUB_PATCHES="$(ls /libmspub/patches | sed 's/\.patch$//' | paste -sd, -)" \
  && cmake --build build --parallel
 
 # The unit tests run at build time, so an image that exists is an image
@@ -48,13 +58,14 @@ RUN ./build/pubir-tests
 
 FROM ubuntu:24.04 AS runtime
 
-# Runtime needs the shared libraries only, not the headers or a compiler.
-# librevenge-0.0-0 carries librevenge, librevenge-stream and
-# librevenge-generators; there is no separate stream runtime package.
+# Runtime needs the shared libraries only, not the headers or a compiler:
+# the patched libmspub, found by the parser's run path, and the packages it
+# and librevenge need. librevenge-0.0-0 carries librevenge,
+# librevenge-stream and librevenge-generators.
+COPY --from=build /opt/libmspub/lib /opt/libmspub/lib
+COPY --from=build /opt/libmspub/runtime-packages /opt/libmspub/runtime-packages
 RUN apt-get update \
- && apt-get install --no-install-recommends -y \
-      libmspub-0.1-1 \
-      librevenge-0.0-0 \
+ && xargs apt-get install --no-install-recommends -y librevenge-0.0-0 < /opt/libmspub/runtime-packages \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/publisher-parser /usr/local/bin/publisher-parser

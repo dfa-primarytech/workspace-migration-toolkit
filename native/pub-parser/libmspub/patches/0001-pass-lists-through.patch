@@ -1,0 +1,64 @@
+diff -ru a/src/lib/MSPUBCollector.cpp b/src/lib/MSPUBCollector.cpp
+--- a/src/lib/MSPUBCollector.cpp
++++ b/src/lib/MSPUBCollector.cpp
+@@ -1615,6 +1615,31 @@
+   {
+     ret.insert("style:length", (int)dropCapLetters);
+   }
++  // Workspace Migration Toolkit patch: the paragraph's list, which this
++  // library parsed into m_listInfo but never passed on. Raw values, for the
++  // consumer to interpret: numbering type and delimiter are the NumberingType
++  // and NumberingDelimiter enums, the bullet a Unicode code point.
++  const boost::optional<ListInfo> &list =
++    style.m_listInfo ? style.m_listInfo : defaultStyle.m_listInfo;
++  if (list)
++  {
++    if (list.get().m_listType == UNORDERED)
++    {
++      ret.insert("librevenge:list-type", "unordered");
++      if (list.get().m_bulletChar)
++        ret.insert("librevenge:bullet-codepoint", (int)list.get().m_bulletChar.get());
++    }
++    else
++    {
++      ret.insert("librevenge:list-type", "ordered");
++      if (list.get().m_numberingType)
++        ret.insert("librevenge:numbering-type", (int)list.get().m_numberingType.get());
++      if (list.get().m_numberingDelimiter)
++        ret.insert("librevenge:numbering-delimiter", (int)list.get().m_numberingDelimiter.get());
++      if (list.get().m_numberIfRestarted)
++        ret.insert("text:start-value", (int)list.get().m_numberIfRestarted.get());
++    }
++  }
+   return ret;
+ }
+ 
+diff -ru a/src/lib/MSPUBParser.cpp b/src/lib/MSPUBParser.cpp
+--- a/src/lib/MSPUBParser.cpp
++++ b/src/lib/MSPUBParser.cpp
+@@ -1360,10 +1360,13 @@
+         switch (listSubInfo.id)
+         {
+         case PARAGRAPH_LIST_NUMBERING_TYPE:
+-          numberingType = static_cast<NumberingType>(info.data);
++          numberingType = static_cast<NumberingType>(listSubInfo.data);
+           break;
+         case PARAGRAPH_LIST_BULLET_CHAR:
+-          bulletChar = info.data;
++          bulletChar = listSubInfo.data;
++          break;
++        case PARAGRAPH_LIST_NUMBERING_DELIMITER:
++          numberingDelimiter = static_cast<NumberingDelimiter>(listSubInfo.data);
+           break;
+         default:
+           break;
+@@ -1374,6 +1377,9 @@
+     case PARAGRAPH_LIST_NUMBER_RESTART:
+       numberIfRestarted = info.data;
+       break;
++    case PARAGRAPH_LIST_NUMBERING_DELIMITER:
++      numberingDelimiter = static_cast<NumberingDelimiter>(info.data);
++      break;
+     case PARAGRAPH_DROP_CAP_LINES:
+       ret.m_dropCapLines = info.data;
+       break;

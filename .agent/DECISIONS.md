@@ -491,3 +491,27 @@ This verifies the OAuth scope, Drive import and Sheets structural read-back path
 It does not establish formula, chart, formatting, validation or protection
 fidelity; the report correctly retains `workbook_review_required` for those.
 
+
+## 2026-09-29: No "Check file" button in the final version (owner)
+
+The owner does not want the separate "Check file" step in the version staff
+use: its summary is hard for an end user to understand, and it adds a click
+before the conversion they came for. It stays for now, while the conversions
+are tested with an agent watching. Before release, the app converts in one
+step, and whatever Check told the user (pages, fonts, what will not survive)
+belongs in the conversion report instead. This touches every format, so it is
+done once for all of them, including the source fingerprint check that Convert
+currently takes from Check. Until then, Check must stay cheap: for Publisher
+it should only read the file, not plan the slides.
+
+## 2026-09-29: Build libmspub with our own patches (route A)
+
+libmspub 0.1.4 parses paragraph lists and never passes them on, and has had
+no release since. The owner chose to build it from LibreOffice's release
+tarball (checked by SHA-256) with a small patch set kept in
+`native/pub-parser/libmspub/patches`, installed into a private prefix the
+parser links by run path. Only the patches live here, never libmspub's
+source. Every build (the app image, docker/publisher.Dockerfile, CI) uses
+the same script, and `--version` names the patches applied. Further gaps
+libmspub parses but drops, or never parses (table borders), are to be closed
+the same way, one patch each, rather than by re-reading the file beside it.

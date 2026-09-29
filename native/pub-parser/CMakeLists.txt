@@ -28,6 +28,13 @@ pkg_check_modules(MSPUB REQUIRED libmspub-0.1)
 message(STATUS "librevenge ${REVENGE_VERSION}")
 message(STATUS "libmspub ${MSPUB_VERSION}")
 
+# libmspub is built from source with this repository's patches
+# (libmspub/build.sh), into its own prefix: find it there, and run against it
+# rather than any copy the system has. PUBIR_LIBMSPUB_PATCHES names the patch
+# set the build used, for --version; empty means an unpatched library.
+pkg_get_variable(MSPUB_LIBDIR libmspub-0.1 libdir)
+set(PUBIR_LIBMSPUB_PATCHES "" CACHE STRING "The libmspub patches this build links against")
+
 add_library(pubir STATIC
   src/collector.cpp
   src/image_info.cpp
@@ -59,8 +66,10 @@ target_link_directories(publisher-parser PRIVATE
 )
 target_compile_definitions(publisher-parser PRIVATE
   PUBIR_LIBMSPUB_VERSION="${MSPUB_VERSION}"
+  PUBIR_LIBMSPUB_PATCHES="${PUBIR_LIBMSPUB_PATCHES}"
   PUBIR_LIBREVENGE_VERSION="${REVENGE_VERSION}"
 )
+set_target_properties(publisher-parser PROPERTIES BUILD_RPATH "${MSPUB_LIBDIR}")
 target_compile_options(publisher-parser PRIVATE
   -Wall -Wextra -Wpedantic -Werror
   -fstack-protector-strong -D_FORTIFY_SOURCE=2

@@ -8,6 +8,7 @@ publisher-parser CI job and the app image build.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import stat
@@ -21,6 +22,7 @@ from fastapi.testclient import TestClient
 from workspace_toolkit.config import Settings
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.fonts import compatibility
+from workspace_toolkit.jobs import preflight
 from workspace_toolkit.package import PUB, validate_upload_name
 from workspace_toolkit.pipelines import describe
 from workspace_toolkit.publisher import analyse, analysis_report
@@ -275,3 +277,16 @@ def test_converting_a_pub_is_refused_before_the_upload(tmp_path):
 
 def test_the_setting_reaches_the_worker():
     assert replace(Settings(), publisher_parser="/x").publisher_parser == "/x"
+
+
+@pytest.mark.parametrize("check_only", [True, False])
+def test_checking_a_pub_does_not_plan_its_slides(tmp_path, check_only):
+    # Planning drew PUB-002's 47 shapes in the check too, and the check timed
+    # out: it is done when converting, where the plan is used.
+    root = tmp_path / "job"
+    root.mkdir()
+    (root / "source.pub").write_bytes(source(tmp_path).read_bytes())
+    settings = Settings(publisher_parser=stand_in(tmp_path), temp_dir=str(tmp_path))
+    asyncio.run(preflight(root, settings, PUB, check_only=check_only))
+    planned = {p.name for p in (root / "result").iterdir()} & {"plan.json", "plan-error.json"}
+    assert bool(planned) is not check_only

@@ -1,5 +1,37 @@
 # Handoff
 
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
+- Branch: `feat/publisher-lists`, based on main `077c206` (#98 merged)
+- Objective: Publisher lists (route A: a patched libmspub), and PUB-002's "took too long to analyse".
+- Files changed:
+  - `native/pub-parser/libmspub/` (new: `build.sh`, patches 0000 and 0001), `CMakeLists.txt`, `src/main.cpp` (`--version` names the patches), `.gitattributes`;
+  - `Dockerfile`, `docker/publisher.Dockerfile`, `.github/workflows/publisher.yml` (all build the patched libmspub);
+  - `publisher_slides.py` (`list_requests`), `publisher_art.py` (faster shape drawing);
+  - `worker.py`, `jobs.py`, `web.py` (`check_only`: Check file no longer plans a Publisher file's slides);
+  - tests: `test_publisher_lists.py` (new, 6), `test_publisher_app.py` (+2);
+  - `docs/publisher-parser.md`, `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - Lists: PUB-002's 12 bulleted lists are real Slides lists (verified live).
+  - PUB-002 check 0.6 s (it timed out); its slides plan in 5 s instead of 34. The shapes are drawn as coverage masks averaged down, and the colour is laid on at full size; the result was compared on white against the old drawing (max difference 26/255 on 0.002% of edge pixels).
+  - The human compared all 19 pages with Publisher: most match.
+- Checks: 497 platform tests passed, 12 skipped; Ruff and mypy clean. The Ubuntu parser image builds with the patched library.
+- Known failures: none.
+- Unresolved (all seen on PUB-002 against the human's Publisher screenshots):
+  - Book covers inside table cells (pages 11-14) never reach the IR: the reader drops them, probably as pictures inline in the cells' text.
+  - Table grid lines (pages 3, 7-9, 11-14; PUB-001 too): libmspub never parses borders.
+  - Page 3's table text overflows the page: table rows aren't fitted the way text boxes are.
+  - Page 18's bullets sit tight against centred text; Publisher leaves a gap.
+  - The on-screen summaries show the reader's internal notes ("startLayer/startEmbeddedGraphics is a rendering construct..."): they should stay in the technical report only.
+  - The owner wants no Check file button in the final version (DECISIONS.md).
+- Decisions: DECISIONS.md, 2026-09-29 (Check file button; route A).
+- Next task: tables: borders and in-cell pictures from the Contents stream, as further libmspub patches; then row fitting and the bullet gap.
+- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 19:36 UTC). The container `wmt-test-live` runs `wmt-test/app:pub12` (tagged `pub3`). PUB-002 is at `/root/wmt-test/private/pub-002.pub`; never commit it.
+
+---
+
+## Previous handoff
+
 - Agent: Codex (XLSX)
 - Date: 2026-09-29
 - Branch: `codex/xlsx-live-followups`, based on main `77e08cb`; PR #94
@@ -43,31 +75,3 @@
 - Next task: a live run with a fresh token to see the title in Google; then lists and table borders.
 - Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and an expired picture token. The container `wmt-test-live` and this machine's SSH tunnel on port 8080 are still up. The image `wmt-test/app:pub8` has this branch.
 
----
-
-## Previous handoff
-
-- Agent: Claude Code / QuietHeron (Publisher)
-- Date: 2026-09-29
-- Branch: `feat/publisher-text-wrap`, based on main `d44e17c` (#96 merged)
-- Objective: keep text clear of pictures it wrapped around in Publisher. Slides has no text wrap (the human chose option 1: paragraph indents).
-- Files changed:
-  - `publisher_wrap.py` (new);
-  - `publisher_slides.py` (`in_front_of`, `text_requests(extra=)`, `_indent`, notes);
-  - `tests/platform/test_publisher_wrap.py` (new, 6);
-  - `docs/publisher-renderer.md`, DECISIONS.md, this file.
-- Completed:
-  - Paragraphs level with a picture in front are indented on its side, with an author's own indent kept.
-  - The indents and the text fitting are repeated until stable.
-  - A picture only counts if text is level with it (fixes a false note on page 4).
-  - **Verified live on PUB-001:** pages 2 and 3 have no text under a picture. They drop to 11 pt to fit.
-- Checks:
-  - Linux (host): platform and parser suites, with the binary and PUB-001, 544 passed.
-  - Ruff and mypy clean.
-- Known failures: none.
-- Unresolved:
-  - The author's mid-sentence line breaks (page 3) now leave single words on a line more often. Joining those "soft" breaks is a possible follow-up, awaiting the human's call.
-  - The whole paragraph moves: the page 2 heading "blending" wraps because it's level with the frog.
-- Decisions: DECISIONS.md, 2026-09-29 (wrap with indents).
-- Next task: merge on approval.
-- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 14:01 UTC). The container `wmt-test-live` runs `wmt-test/app:pub7`. Remove them when live testing ends.

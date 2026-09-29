@@ -28,7 +28,7 @@ SLIDES_MAX_PIXELS = 25_000_000
 SLIDES_MAX_BYTES = 50 * 1024 * 1024
 
 PPI = 220  # as for "Make pictures smaller": sharp at print size, no larger
-SUPERSAMPLE = 3  # drawn at 3× and reduced, for smooth edges
+SUPERSAMPLE = 3  # outlines drawn at 3× and averaged down, for smooth edges
 CURVE_STEPS = 24
 DECODE_LIMIT = 60_000_000  # pictures.py's MAX_PIXELS: refuse decompression bombs
 GREY = "#808080"
@@ -283,24 +283,42 @@ def draw_path(key: str, pieces: list[Subpath], style: dict, out: Path) -> Drawn 
     box = (min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad)
     scale, w, h = _canvas(box)
     big = SUPERSAMPLE
-    image = Image.new("RGBA", (w * big, h * big), (0, 0, 0, 0))
-    pen = ImageDraw.Draw(image)
 
     def at(point):
         return ((point[0] - box[0]) * scale * big, (point[1] - box[1]) * scale * big)
 
-    for piece in filled:
-        pen.polygon([at(p) for p in piece.points], fill=fill)
-    if stroke is not None:
+    # Coverage is drawn large, one channel, and averaged down; the colour is
+    # laid on at the final size. Drawing the colour large and resampling it
+    # took most of PUB-002's planning time: 47 shapes, many a page in size.
+    def coloured(ink: tuple, draw) -> Image.Image:
+        mask = Image.new("L", (w * big, h * big), 0)
+        draw(ImageDraw.Draw(mask))
+        mask = mask.reduce(big) if big > 1 else mask
+        if ink[3] < 255:
+            mask = mask.point(lambda v: v * ink[3] // 255)
+        layer = Image.new("RGBA", (w, h), (*ink[:3], 0))
+        layer.putalpha(mask)
+        return layer
+
+    def fills(pen) -> None:
+        for piece in filled:
+            pen.polygon([at(p) for p in piece.points], fill=255)
+
+    def lines(pen) -> None:
         line = max(1, round(width * scale * big))
         for piece in pieces:
             points = [at(p) for p in piece.points]
             if piece.closed:
                 points.append(points[0])
-            pen.line(points, fill=stroke, width=line, joint="curve")
-    image = image.resize((w, h), Image.Resampling.LANCZOS)
+            pen.line(points, fill=255, width=line, joint="curve")
+
+    image = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    if filled and fill is not None:
+        image = coloured(fill, fills)
+    if stroke is not None:
+        image = Image.alpha_composite(image, coloured(stroke, lines))
     path = out / f"{key}.png"
-    image.save(path, "PNG", optimize=True)
+    image.save(path, "PNG")
     picture = Picture(key, path, w, h, "image/png", notes)
     return Drawn(picture, box)
 

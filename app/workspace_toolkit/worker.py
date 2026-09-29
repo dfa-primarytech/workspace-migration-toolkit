@@ -50,7 +50,10 @@ def limit(name: str, value: int) -> None:
 def main() -> None:
     source, output, config = map(Path, sys.argv[1:4])
     fmt = sys.argv[4] if len(sys.argv) > 4 else "pptx"
-    smaller_pictures = len(sys.argv) > 5 and sys.argv[5] == "compress-pictures"
+    flags = set(sys.argv[5:])
+    smaller_pictures = "compress-pictures" in flags
+    # Checking a file, not converting it: only what the check reports is done.
+    check_only = "check-only" in flags
     settings = Settings(**json.loads(config.read_text(encoding="utf-8")))
     try:
         if sys.platform != "win32":
@@ -68,11 +71,13 @@ def main() -> None:
         elif fmt == "pptx":
             report = render_pptx(source, output / "converted.pptx", settings)
             (output / "render.json").write_text(json.dumps(report), encoding="utf-8")
-        elif fmt == "pub":
+        elif fmt == "pub" and not check_only:
             # The pictures are drawn here too, from untrusted payloads, inside
             # the same limits; the app only sends the plan this writes. A
             # failure here must not stop the file being checked: converting
-            # it is refused instead, for want of a plan.
+            # it is refused instead, for want of a plan. Not when only
+            # checking: the plan is drawn again when converting, and a large
+            # file's plan must not make the check itself time out.
             try:
                 render_pub(output)
             except Exception as exc:  # noqa: BLE001

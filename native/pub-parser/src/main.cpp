@@ -101,7 +101,8 @@ int main(int argc, char **argv) {
       std::printf("schema %s\n", pubir::kSchemaVersion);
         // libmspub and librevenge expose no version macro, so the versions
       // the binary was built against are baked in by CMake from pkg-config.
-      std::printf("libmspub %s\n", PUBIR_LIBMSPUB_VERSION);
+      std::printf("libmspub %s%s%s\n", PUBIR_LIBMSPUB_VERSION,
+                  PUBIR_LIBMSPUB_PATCHES[0] ? " patched: " : "", PUBIR_LIBMSPUB_PATCHES);
       std::printf("librevenge %s\n", PUBIR_LIBREVENGE_VERSION);
       return 0;
     }
