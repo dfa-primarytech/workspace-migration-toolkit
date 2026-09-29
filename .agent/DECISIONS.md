@@ -548,3 +548,24 @@ border it overhung in Publisher. Calibri and Arial are now measured (from
 their metric-compatible open fonts, Carlito and Liberation Sans), so text
 boxes in them are fitted too. Every one of those that shrinks on PUB-002 was
 measured live as overflowing its box before.
+
+## 2026-09-29: Built for a frustrated educator, not for review (owner)
+
+The people this is for are teachers whose files did not survive the move to
+Google. They need: choose a file (upload, or from Drive), press Convert, get
+the Google file. They do not need notes. The owner also wants a bulk option:
+convert a whole folder of files that don't play nicely with Google in one go.
+
+So, for the staff-facing app:
+- one step: pick, then Convert (no Check file button, as already decided);
+- no lists of notes or warnings on screen; the technical report stays
+  downloadable for IT and support only;
+- bulk conversion of many files at once is a goal.
+
+Until the one-step app lands, the reader's own notes (libmspub and parser
+diagnostics) are kept out of every on-screen summary and kept only in the
+technical report (`technicalNotes`, and each element's notes marked
+`source: reader`). Bulk conversion must respect the drive.file scope: the app
+can only open files the person picked, so "a folder" means picking many files
+from it in the Picker (multi-select), not reading a folder's contents, unless
+a broader Drive scope is deliberately chosen (it needs Google's verification).

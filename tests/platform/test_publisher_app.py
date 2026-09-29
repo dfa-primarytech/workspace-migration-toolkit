@@ -202,8 +202,9 @@ def test_a_publisher_file_is_read_and_summarised(tmp_path):
     assert report["assetCounts"] == {"image": 2}
     fonts = {f["name"]: f for f in report["fonts"]}
     assert fonts["SassoonPrimaryInfant"]["replacement"] == "Andika"
-    codes = [w["code"] for w in report["warnings"]]
-    assert "path-flattened" in codes
+    # The reader's own notes are kept for support, not listed for staff.
+    assert "path-flattened" not in [w["code"] for w in report["warnings"]]
+    assert "path-flattened" in [w["code"] for w in report["technicalNotes"]]
     assert report["limitations"][0]["code"] == "no-lists"
 
 
