@@ -59,14 +59,29 @@ upload, sign and send a page at a time within the 15-minute link lifetime.
 
 Slides fits a picture inside the size it is given without distorting it.
 So each picture is given a size in its own proportions, and the transform
-stretches it to the frame. Four of PUB-001's pictures are stretched a great
-deal (one by about 3.5×). LibreOffice, which uses the same reader library,
-draws them the same way. Publisher probably cropped them, and libmspub
-0.1.4 does not pass crops on. Each is reported (`picture-stretched`).
+stretches it to the frame.
+
+**Crops are recovered from the file** (`publisher_crop.py`). libmspub reads
+each picture's crop and drops it, so a cropped picture used to be stretched
+into its frame. LibreOffice still draws it that way. The parser now saves
+Publisher's drawing records (`drawing.bin`), and the app reads the four "crop
+from" values of every picture shape.
+
+It matches each stored picture to the reader's asset by size, and a picture
+used more than once to its placements in whichever order makes every one fit.
+A crop is applied only when the cropped picture then has its frame's own
+shape, within 3%; otherwise the picture is left as it was and the report says
+so. The cropped part is cut out before upload (a photograph stays JPEG) and
+reported as "Cropped as in the original".
+
+On PUB-001 all five cropped placements fit exactly. They include the banner,
+one picture cropped two ways: a thin strip on page 1, trimmed further on the
+right on page 4. A picture that is still out of shape after all this is
+reported (`picture-stretched`).
 
 ## Known limits
 
-- **Crops** are not applied (the reader doesn't pass them on).
+- **Crops** are applied only when they fit their frame (see above). An outward crop (padding), which Publisher allows, is not handled and leaves the picture uncropped.
 - **Mirrored pictures** are reported, not flipped (the reader can't tell which way).
 - **Gradients** are drawn in a single colour; the reader does not pass their colours.
 - **Self-crossing filled shapes** are filled even-odd, so a star's centre is left empty where Publisher fills it.

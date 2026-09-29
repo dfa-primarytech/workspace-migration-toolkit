@@ -372,35 +372,6 @@ retains the manifest and must be treated as document data. Reports omit those
 names, values, formula expressions and macro source. The earlier content-free,
 ephemeral-only manifest wording was inaccurate and is superseded here.
 
-## 2026-09-29: XLSX extent, indexes and abandoned workspace cleanup
-
-Google's workbook cell-limit preflight uses the bounding extent of actual `<c>`
-cell references, not SpreadsheetML's cached `<dimension>`. Some exporters leave
-that cache at the full Excel grid after cells are removed, causing a false hard
-block. Keep the declared extent as a separate diagnostic: when it alone exceeds
-Google's limit, report `declared_extent_needs_review` and allow native import.
-
-XLSX sheet indexes are zero-based, matching other toolkit manifests and list/API
-positions. User-facing messages may describe ordinal sheet numbers separately.
-
-Remove the uncalled stale-workspace sweeper. The context manager still removes
-normal request workspaces. Cleanup after process or host termination belongs to
-the deployment's ephemeral-storage lifecycle; an application helper that no
-startup or scheduler invokes creates a false cleanup guarantee.
-
-## 2026-09-29: XLSX native import verified live
-
-A generated five-sheet XLSX was analysed and converted through the running app
-against real Google Drive and Sheets APIs. The source SHA-256 in the downloaded
-conversion report matched the generated fixture. Drive created a native Google
-Sheet and archived the original; Sheets read-back confirmed five sheet names,
-GRID types and visibility states. The source inventory recorded 227 populated
-cells, 47 formulas and no formula-error cells.
-
-This verifies the OAuth scope, Drive import and Sheets structural read-back path.
-It does not establish formula, chart, formatting, validation or protection
-fidelity; the report correctly retains `workbook_review_required` for those.
-
 ## 2026-09-29: Fit substituted text to its frame: spacing first, then size
 The live run showed Andika text running off PUB-001's pages. Andika's
 letters are wider than Sassoon's, so the same text wraps onto more lines.
@@ -435,3 +406,38 @@ grey grid. The report says so and tells staff to add borders if the original
 had them. Reading real borders from the `.pub` belongs with the picture-crop
 investigation, which needs the same direct reading of the file. Verified live
 on PUB-001.
+
+## 2026-09-29: Recover picture crops from Publisher's drawing records
+PUB-001's stretched pictures were cropped in Publisher. The crops are the
+Office drawing properties "crop from top/bottom/left/right" (0x100 to 0x103)
+on each picture shape in `Escher/EscherStm`. libmspub 0.1.4 reads every shape
+property into a map and never looks those four up (checked in its source).
+
+- **The parser keeps the records as they are** (`drawing.bin`), read
+  through librevenge from the container libmspub has just accepted and held
+  to the per-asset limit. It gets no new parsing code and no new dependency.
+  The records are small (11 KB for PUB-001) and hold no text or picture data.
+- **The app interprets them** (`publisher_crop.py`, in the worker): stored
+  pictures are matched to assets by size, and placements to shapes in
+  whichever order fits.
+- **A crop is applied only when the cropped picture has its frame's shape**,
+  within 3%. That is the purpose of a crop, and it guards against any
+  mismatch. On PUB-001 all five fit exactly, including one picture cropped
+  two different ways.
+- The same records hold other properties libmspub drops. They are the
+  place to look next for anything the reader loses (not table borders,
+  which live in the Contents stream).
+
+## 2026-09-29: XLSX native import verified live
+
+A generated five-sheet XLSX was analysed and converted through the running app
+against real Google Drive and Sheets APIs. The source SHA-256 in the downloaded
+conversion report matched the generated fixture. Drive created a native Google
+Sheet and archived the original; Sheets read-back confirmed five sheet names,
+GRID types and visibility states. The source inventory recorded 227 populated
+cells, 47 formulas and no formula-error cells.
+
+This verifies the OAuth scope, Drive import and Sheets structural read-back path.
+It does not establish formula, chart, formatting, validation or protection
+fidelity; the report correctly retains `workbook_review_required` for those.
+
