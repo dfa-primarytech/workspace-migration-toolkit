@@ -36,7 +36,7 @@ bundle/ (document.json, assets.json, assets/)
 | Straight strokes with no filled area (rules, polylines) | One editable line per segment, grouped | SUBSTITUTED (NATIVE for a single line) |
 | Filled or curved drawing | A picture of it | FLATTENED |
 | Drawing with no stroke and no area | Nothing | IGNORED, reported |
-| Table | `createTable`, column widths, minimum row heights, merges, cell text and fill; borders transparent | SUBSTITUTED: the reader can't see borders |
+| Table | `createTable`, column widths, minimum row heights, merges, cell text and fill; Publisher's default grid (0.75 pt black on every cell) | SUBSTITUTED: the file stores no borders to read |
 | Border art | Each border's tiles combined into one picture | FLATTENED |
 | Authored group | `groupObjects` over what its contents became | NATIVE; reported if it holds a table or fewer than two items |
 | Wrapper layer | Nothing of its own; its contents are drawn | IGNORED |
@@ -89,7 +89,7 @@ reported (`picture-stretched`).
 - **Gradients** are drawn in a single colour; the reader does not pass their colours.
 - **Self-crossing filled shapes** are filled even-odd, so a star's centre is left empty where Publisher fills it.
 - **Text insets**: the Slides API has no setting for the space inside a text box, so text may wrap slightly differently.
-- **Table borders** are drawn invisible. libmspub 0.1.4 passes on none at all (its `TableInfo` holds only sizes and spans), so whether the original had lines can't be known. Hidden matches LibreOffice's rendering and PUB-001. Google's default grey grid looked like an artefact. Verified live: page 1's table has no lines. Reading real borders from the `.pub` is future work, alongside picture crops.
+- **Table borders** are drawn as Publisher's default grid: a thin (0.75 pt) black line on every cell edge. Neither PUB-001 nor PUB-002 stores a border setting anywhere: the table and cell records in Contents, the table's text records (TCD) and its drawing record were all dumped with a debug build of libmspub. Yet every table in both prints a thin black grid, as the owner's Publisher print previews of PUB-002 pages 3 and 12 show. The width is estimated from those previews. A table whose author changed or removed its lines has not been seen yet; when one is, its records will show where Publisher keeps them. This replaces the invisible borders of #95.
 - **Exact line spacing** has no Slides equivalent; percentage spacing is kept.
 - **Page size (§14), settled live.** `presentations.create` accepts a `pageSize` and ignores it: A5 came back as 720 × 405 pt. The presentation is therefore made by importing an empty PowerPoint deck of the publication's size (`publisher_deck.py`), which Google keeps. The size is still read back and reported if it differs.
 - **Text is fitted to its box** (`publisher_fit.py`). Publisher sized each frame for its original font. Andika, which replaces Sassoon, has wider letters, so the same text wraps onto more lines. On the first live run it ran off pages 2 and 3, and under the frog on page 2.

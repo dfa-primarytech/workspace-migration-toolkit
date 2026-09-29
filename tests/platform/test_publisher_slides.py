@@ -693,10 +693,12 @@ def test_a_table_is_built_cell_by_cell():
     ]
     assert cells == [(0, 0, "Wide"), (1, 0, "A"), (1, 1, "B")]
     assert requests(result, "updateTableCellProperties")
-    # The reader passes on no borders, so none are drawn (not Google's grey grid).
+    # Publisher's default grid, thin and black, not Google's grey one.
     (borders,) = requests(result, "updateTableBorderProperties")
     assert borders["borderPosition"] == "ALL" and "tableRange" not in borders
-    assert borders["tableBorderProperties"]["tableBorderFill"]["solidFill"]["alpha"] == 0
+    line = borders["tableBorderProperties"]
+    assert line["tableBorderFill"]["solidFill"]["alpha"] == 1
+    assert line["weight"] == {"magnitude": 0.75, "unit": "PT"} and line["dashStyle"] == "SOLID"
     codes = [n["code"] for n in report(result)["el_1"]["notes"]]
     assert "column-widened" in codes and "table-borders" in codes
 

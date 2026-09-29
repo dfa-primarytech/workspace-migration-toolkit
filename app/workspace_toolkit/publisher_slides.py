@@ -750,16 +750,23 @@ def placed(object_id: str, page: str, frame: Frame) -> dict:
 # ------------------------------------------------------------------ elements
 
 
-def hidden_borders(object_id: str) -> dict:
-    """Every border of a table, made invisible."""
+# Publisher's default table grid: every cell edged in a thin black line. The
+# width is an estimate from print previews; the file doesn't store it.
+GRID_WEIGHT = 0.75  # points
+
+
+def grid_borders(object_id: str) -> dict:
+    """Every border of a table, as Publisher's default grid."""
     return {
         "updateTableBorderProperties": {
             "objectId": object_id,
             "borderPosition": "ALL",
             "tableBorderProperties": {
-                "tableBorderFill": {"solidFill": {"color": rgb((0, 0, 0)), "alpha": 0}}
+                "tableBorderFill": {"solidFill": {"color": rgb((0, 0, 0)), "alpha": 1}},
+                "weight": {"magnitude": GRID_WEIGHT, "unit": "PT"},
+                "dashStyle": "SOLID",
             },
-            "fields": "tableBorderFill",
+            "fields": "tableBorderFill,weight,dashStyle",
         }
     }
 
@@ -1123,11 +1130,11 @@ class PageBuilder:
                 }
             }
         )
-        # libmspub 0.1.4 passes on no table borders at all (its TableInfo holds
-        # only sizes and spans), so the table is drawn without them, as
-        # LibreOffice draws it, rather than with Google's default grey grid.
-        # Slides has no "no border": the border is made fully transparent.
-        self.requests.append(hidden_borders(object_id))
+        # No table in PUB-001 or PUB-002 stores a border setting anywhere (the
+        # table, cell, text and drawing records were all dumped), yet every
+        # one prints a thin black grid: Publisher's default, drawn here rather
+        # than Google's grey one.
+        self.requests.append(grid_borders(object_id))
         for index, column in enumerate(columns):
             width = (column.get("width") or {}).get("points")
             if not width:
@@ -1206,8 +1213,8 @@ class PageBuilder:
         notes.append(
             note(
                 "table-borders",
-                "The table is drawn without borders: the reader can't see whether the "
-                "original had any. If it did, add them in Slides.",
+                "The table is drawn with thin black lines round every cell, Publisher's "
+                "usual grid. If the original's lines were different, change them in Slides.",
             )
         )
         entry = self.line(element, C.SUBSTITUTED, *_unique(notes))
