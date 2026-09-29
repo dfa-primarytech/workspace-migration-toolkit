@@ -558,8 +558,10 @@ convert a whole folder of files that don't play nicely with Google in one go.
 
 So, for the staff-facing app:
 - one step: pick, then Convert (no Check file button, as already decided);
-- no lists of notes or warnings on screen; the technical report stays
-  downloadable for IT and support only;
+- no lists of notes or warnings on screen. The notes are still wanted, for
+  testing and refining the conversions: every note stays in the report saved
+  in the conversion folder ("Conversion report.json"), which is where the
+  owner and agents read them. Always ask first what the end user needs;
 - bulk conversion of many files at once is a goal.
 
 Until the one-step app lands, the reader's own notes (libmspub and parser
