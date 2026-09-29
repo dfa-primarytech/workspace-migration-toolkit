@@ -55,6 +55,7 @@ from .publisher_fit import (
     Style,
     advance,
     fit,
+    fit_with,
     measurable,
 )
 from .publisher_fit import height as laid_height
@@ -66,6 +67,15 @@ PICTURE = "wmt-picture:"
 PREFIX = "wmt_"
 OBJECT_ID = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_\-:]{4,49}$")
 MIN_COLUMN_WIDTH = 32.0  # points; narrower columns are refused (unverified)
+# Of the room a table's text is estimated to need, as for a text box. With
+# TABLE_INSET_Y, the estimate of PUB-002's eight tables came within 13 pt of
+# Google's own drawing of them, over and under (measured in the editor).
+TABLE_SAFETY = 0.97
+TABLE_GAP = 2.0  # points kept clear below a table
+PAGE_EDGE = 10.0  # points a table keeps from the bottom of the page
+# Google's space above and below the text in a table cell: 6.2 to 6.5 pt on
+# PUB-002's page 3, measured in the Slides editor (a text box has 3.6).
+TABLE_INSET_Y = 6.4
 LINE_MINIMUM = 0.01  # points: a horizontal or vertical line still needs some extent
 UNGROUPABLE = {"table"}
 ALIGNMENT = {
@@ -299,18 +309,28 @@ def _with_room(paragraph: dict, room: float) -> dict:
     return paragraph
 
 
-def rough_height(paras: list[Para], width: float) -> float:
+def rough_height(
+    paras: list[Para], width: float, spacing: float | None = None, scale: float = 1.0
+) -> float:
     """Text's height in a font with no measurements: half an em a character,
     Google's line height, and each paragraph's own space above and below."""
     total = 0.0
     for para in paras:
-        biggest = max((s.size for _, s in para.runs), default=12.0)
-        ems = sum(len(text) * 0.5 * s.size for text, s in para.runs)
+        biggest = max((s.size for _, s in para.runs), default=12.0) * scale
+        ems = sum(len(text) * 0.5 * s.size * scale for text, s in para.runs)
         room = max(width - para.indent_start - para.indent_end, 1.0)
-        spacing = (para.line_spacing or 100.0) / 100
+        own = para.line_spacing or 100.0
+        used = (min(own, spacing) if spacing is not None else own) / 100
         lines = max(1, math.ceil(ems / room))
-        total += para.space_above + para.space_below + lines * biggest * LINE * spacing
+        total += para.space_above + para.space_below + lines * biggest * LINE * used
     return total
+
+
+@dataclass
+class TableLayout:
+    texts: dict[tuple[int, int], list[dict]]  # each cell's paragraphs, as sent
+    fitted: Fit | None  # the spacing and size the table's text needs, if changed
+    pictures: list[dict]  # createImage requests for pictures set in its text
 
 
 def _only_room(paragraph: dict) -> dict:
@@ -403,6 +423,15 @@ def _laid(paragraphs: list[dict]) -> tuple[list[dict], list[list[tuple[str, dict
     return paragraphs[: len(laid)], laid
 
 
+def measured_as(family: str | None, fonts: dict[str, dict]) -> str | None:
+    """The family text is measured in: the one Slides draws with. A family it
+    doesn't have is drawn in its default, Arial."""
+    name = resolve_font(family, fonts)
+    if family and fonts[family]["status"] == FontStatus.UNKNOWN:
+        return "Arial"
+    return name
+
+
 def measured(paragraphs: list[dict], fonts: dict[str, dict]) -> list[Para]:
     """The text as publisher_fit lays it out: in the fonts Slides will use."""
     paragraphs, laid = _laid(paragraphs)
@@ -415,7 +444,7 @@ def measured(paragraphs: list[dict], fonts: dict[str, dict]) -> list[Para]:
             (
                 text,
                 Style(
-                    resolve_font(run["style"].get("fontFamily"), fonts),
+                    measured_as(run["style"].get("fontFamily"), fonts),
                     float(run["style"].get("fontSizePoints") or 12),
                     bool(run["style"].get("bold")),
                     bool(run["style"].get("italic")),
@@ -989,6 +1018,33 @@ class PageBuilder:
             entry.notes.append(note("font-substituted", "A font was replaced; see the fonts."))
         self.made(element, entry, object_id)
 
+    def room_below(self, element: dict, frame: Frame) -> float:
+        """How tall a table may grow: down to whatever is below it on the page,
+        the bottom of a box it sits in, or near the page's edge, and never
+        less than its own height. A table that grows
+        into nothing is left as Google sets it."""
+        left, right = frame.cx - frame.width / 2, frame.cx + frame.width / 2
+        top, bottom = frame.cy - frame.height / 2, frame.cy + frame.height / 2
+        # Readable text over Publisher's exact layout (the owner's choice,
+        # 2026-09-29): a table may grow to near the page's edge, past a border
+        # it overhung in Publisher, before its text is made smaller.
+        limit = float(self.page.get("height") or bottom) - PAGE_EDGE
+        for other in self.page.get("elements", []):
+            if other is element or not other.get("visible", True):
+                continue
+            box = frame_of(other)
+            if box is None:
+                continue
+            xs = [x for x, _ in box.corners()]
+            ys = [y for _, y in box.corners()]
+            if max(xs) <= left or min(xs) >= right:
+                continue
+            if min(ys) <= top + 1 and max(ys) >= bottom - 1:
+                limit = min(limit, max(ys))  # a box the table sits in
+            elif min(ys) >= bottom - 1:
+                limit = min(limit, min(ys))  # something below it
+        return max(frame.height, limit - top - TABLE_GAP)
+
     def in_front_of(self, element: dict) -> list[Obstacle]:
         """Pictures and shapes drawn over a text frame: Publisher wraps text around them."""
         out = []
@@ -1224,7 +1280,7 @@ class PageBuilder:
                         }
                     }
                 )
-        texts, placed_inline = self._inline(element, frame, rows, columns, minimums)
+        layout = self._table_layout(element, frame, rows, columns, minimums)
         for row in rows:
             for cell in row.get("cells", []):
                 if cell.get("covered"):
@@ -1258,13 +1314,19 @@ class PageBuilder:
                         }
                     )
                 text, more = text_requests(
-                    object_id, texts[(cell["row"], cell["column"])], self.fonts, location
+                    object_id,
+                    layout.texts[(cell["row"], cell["column"])],
+                    self.fonts,
+                    location,
+                    fitted=layout.fitted,
                 )
                 self.requests += text
                 notes += more
+        if layout.fitted:
+            notes += layout.fitted.notes
         # Over the table, so after it: Slides can't hold a picture in a cell.
-        self.requests += placed_inline
-        if placed_inline:
+        self.requests += layout.pictures
+        if layout.pictures:
             notes.append(
                 note(
                     "inline-picture-over-table",
@@ -1282,15 +1344,17 @@ class PageBuilder:
         entry = self.line(element, C.SUBSTITUTED, *_unique(notes))
         self.made(element, entry, object_id)
 
-    def _inline(
+    def _table_layout(
         self, element: dict, frame: Frame, rows: list, columns: list, minimums: list[float]
-    ) -> tuple[dict[tuple[int, int], list[dict]], list[dict]]:
-        """Each cell's paragraphs, with room left for the pictures set in them,
-        and those pictures placed where that room will be.
+    ) -> TableLayout:
+        """How the table's text is set so the table stays the height it was, and
+        where the pictures set in its text go.
 
-        Each row is as tall as its tallest cell's text, or its own height if
-        more, as Slides grows it; a picture goes in the room its paragraph
-        leaves above its line, aligned as the paragraph is.
+        Slides grows a row to its tallest cell's text, never shrinks it below
+        the row's own height. Publisher's rows were sized for its layout, so
+        text laid out Google's way can push the table off the page (PUB-002's
+        page 3). As in a text box (publisher_fit), the lines are brought closer
+        first, then the text made smaller, the same throughout the table.
         """
         texts: dict[tuple[int, int], list[dict]] = {}
         room: dict[tuple[int, int, int], list[tuple[Picture, Inline]]] = {}
@@ -1306,57 +1370,70 @@ class PageBuilder:
                         tallest = max(shape.height for _, shape in found)
                         paragraphs[index] = _with_room(paragraph, tallest)
                 texts[(cell["row"], cell["column"])] = paragraphs
-        if not room:
-            return texts, []
         widths = [
             max((c.get("width") or {}).get("points") or MIN_COLUMN_WIDTH, MIN_COLUMN_WIDTH)
             for c in columns
         ]
-        scale = frame.width / sum(widths)
-        widths = [w * scale for w in widths]
+        stretch = frame.width / sum(widths)
+        widths = [w * stretch for w in widths]
+        cells = {(c["row"], c["column"]): c for r in rows for c in r.get("cells", [])}
 
-        def text_height(paragraphs: list[dict], width: float) -> float:
+        def span(row_index: int, column: int) -> float:
+            return sum(widths[column : column + cells[(row_index, column)].get("columnSpan", 1)])
+
+        def text_height(
+            paragraphs: list[dict], width: float, spacing: float | None, scale: float
+        ) -> float:
             paras = measured(paragraphs, self.fonts)
             if paras and all(measurable(s.family) for p in paras for _, s in p.runs):
-                return laid_height(paras, width - 2 * INSET_X, None, 1.0)
-            return rough_height(paras, width - 2 * INSET_X)
+                return laid_height(paras, width - 2 * INSET_X, spacing, scale)
+            return rough_height(paras, width - 2 * INSET_X, spacing, scale)
 
-        heights = list(minimums)
-        cells = {(c["row"], c["column"]): c for r in rows for c in r.get("cells", [])}
-        for (row_index, column), cell in cells.items():
-            if cell.get("covered") or cell.get("rowSpan", 1) > 1:
-                continue
-            span = widths[column : column + cell.get("columnSpan", 1)]
-            content = text_height(texts[(row_index, column)], sum(span))
-            if content:
-                heights[row_index] = max(heights[row_index], content + 2 * INSET_Y)
+        def heights(spacing: float | None, scale: float) -> list[float]:
+            result = list(minimums)
+            for (row_index, column), cell in cells.items():
+                if cell.get("covered") or cell.get("rowSpan", 1) > 1:
+                    continue
+                content = text_height(
+                    texts[(row_index, column)], span(row_index, column), spacing, scale
+                )
+                if content:
+                    needed = content / TABLE_SAFETY + 2 * TABLE_INSET_Y
+                    result[row_index] = max(result[row_index], needed)
+            return result
+
+        allowed = self.room_below(element, frame)
+        fitted = fit_with(lambda spacing, scale: sum(heights(spacing, scale)), allowed)
+        spacing, scale = fitted.line_spacing, fitted.scale
+        final = heights(spacing, scale)
         top = frame.cy - frame.height / 2
         left = frame.cx - frame.width / 2
-        requests: list[dict] = []
+        pictures: list[dict] = []
         for (row_index, column, index), found in sorted(room.items()):
-            span = widths[column : column + cells[(row_index, column)].get("columnSpan", 1)]
+            width = span(row_index, column)
             paragraphs = texts[(row_index, column)]
             # The text above the picture's line, with the room left for it.
-            above = text_height(paragraphs[: index + 1], sum(span))
-            line = text_height([_only_room(paragraphs[index])], sum(span))
+            above = text_height(paragraphs[: index + 1], width, spacing, scale)
+            line = text_height([_only_room(paragraphs[index])], width, spacing, scale)
             tallest = max(shape.height for _, shape in found)
-            y = top + sum(heights[:row_index]) + INSET_Y + above - line - tallest
+            y = top + sum(final[:row_index]) + TABLE_INSET_Y + above - line - tallest
             total = sum(shape.width for _, shape in found)
             align = str(paragraphs[index].get("style", {}).get("alignment") or "").lower()
             x = left + sum(widths[:column])
             if align in {"center", "centre"}:
-                x += (sum(span) - total) / 2
+                x += (width - total) / 2
             elif align in {"right", "end"}:
-                x += sum(span) - INSET_X - total
+                x += width - INSET_X - total
             else:
                 x += INSET_X
             for number, (picture, shape) in enumerate(found):
                 object_id = oid(element["id"], "inline", row_index, column, index, number)
                 box = Frame.from_bounds(x, y, shape.width, shape.height)
-                requests.append(image_request(object_id, self.slide, picture, box))
+                pictures.append(image_request(object_id, self.slide, picture, box))
                 self.pictures[picture.key] = picture
                 x += shape.width
-        return texts, requests
+        changed = spacing is not None or scale != 1.0
+        return TableLayout(texts, fitted if changed else None, pictures)
 
     def _wrapper(self, element: dict) -> None:
         # Only a container: its contents are drawn in their own right.

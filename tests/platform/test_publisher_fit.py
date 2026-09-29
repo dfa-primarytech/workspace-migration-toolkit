@@ -36,7 +36,10 @@ def para(text: str, style: Style = ANDIKA, **extra) -> Para:
 
 
 def test_andikas_measurements_are_shipped_and_its_lines_are_tall():
-    assert measurable("Andika") and not measurable("Calibri") and not measurable(None)
+    assert measurable("Andika") and not measurable("Sassoon Primary") and not measurable(None)
+    # Calibri and Arial, from their metric-compatible open fonts Carlito and
+    # Liberation Sans: the widths are the same, by design.
+    assert measurable("Calibri") and measurable("Arial")
     # Andika's own line height is 1.61 em, but Google does not use it: see below.
     assert em("Andika") == pytest.approx((2500 + 800) / 2048)
     assert advance("m", ANDIKA, 1.0) > advance("i", ANDIKA, 1.0) > 0
@@ -85,7 +88,7 @@ def test_text_that_cannot_fit_is_reported_and_never_made_tiny():
 
 
 def test_a_frame_in_a_font_without_measurements_is_not_touched():
-    assert fit([para(WORDS * 20, Style("Calibri", 12))], 200, 40) is None
+    assert fit([para(WORDS * 20, Style("Sassoon Primary", 12))], 200, 40) is None
 
 
 def test_the_plan_shrinks_an_overflowing_sassoon_frame_and_says_so():

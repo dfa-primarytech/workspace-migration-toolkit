@@ -2,6 +2,35 @@
 
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-29
+- Branch: `feat/publisher-table-fit`, based on main `e356d7d` (#100 merged)
+- Objective: keep PUB-002's tables on the page (page 3's ran off it; so did 7, 8 and 9).
+- Files changed:
+  - `publisher_slides.py` (`_table_layout`, `room_below`, `TableLayout`, `measured_as`; `rough_height` takes spacing and scale);
+  - `publisher_fit.py` (`fit_with`, the search `fit` now uses);
+  - `font_metrics/calibri.json`, `arial.json` (new, from Carlito and Liberation Sans) and its README;
+  - tests: `test_publisher_table_fit.py` (new, 4), `test_publisher_fit.py`;
+  - `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - Measured in the Slides editor: Google pads a cell's text 6.2 to 6.5 pt above and below. With that, the row estimates of all eight tables came within 13 pt of Google's drawing.
+  - Tables grow into free space (down to what is below, a box they sit in, or 10 pt from the edge), and only past that is their text made closer, then smaller.
+  - Verified live: all eight tables stay on their pages (page 9: 721 to 482 pt).
+  - The owner chose readable text over Publisher's exact bottom edge.
+- Checks: 506 platform tests passed, 12 skipped; Ruff and mypy clean.
+- Known failures: none.
+- Unresolved:
+  - Page 18's bullets sit tight against centred text.
+  - The on-screen summaries show the reader's internal notes.
+  - The owner wants no Check file button in the final version.
+- Decisions: DECISIONS.md, 2026-09-29 (keep tables on the page, readable text first).
+- Next task: the bullet gap, then hiding internal notes from staff.
+- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 20:42 UTC). `wmt-test-live` runs `wmt-test/app:pub17`. Parsed PUB-002 bundles are under `/root/wmt-test/private`; never commit them.
+
+---
+
+## Previous handoff
+
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
 - Branch: `feat/publisher-tables`, based on main `bc0a4be` (#99 merged)
 - Objective: PUB-002's tables: grid lines and the book covers missing from their cells.
 - Files changed:
@@ -56,21 +85,4 @@
 - Decisions: DECISIONS.md, 2026-09-29 (Check file button; route A).
 - Next task: tables: borders and in-cell pictures from the Contents stream, as further libmspub patches; then row fitting and the bullet gap.
 - Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 19:36 UTC). The container `wmt-test-live` runs `wmt-test/app:pub12` (tagged `pub3`). PUB-002 is at `/root/wmt-test/private/pub-002.pub`; never commit it.
-
----
-
-## Previous handoff
-
-- Agent: Codex (XLSX)
-- Date: 2026-09-29
-- Branch: `codex/xlsx-live-followups`, based on main `77e08cb`; PR #94
-- Objective: Finish the XLSX follow-ups left after #72 and verify native Google Sheets import live.
-- Files changed: `xlsx.py`, `jobs.py`, `tests/platform/test_xlsx.py`, `tests/platform/test_xlsx_issue51.py`, `docs/xlsx-migration.md`, and coordination files.
-- Completed: cell-limit checks use observed cell extent and separately report stale declared extents; sheet indexes are zero-based; the uncalled stale-workspace sweeper and test are removed; a generated five-sheet workbook converted through real Drive and Sheets APIs, with five sheets confirmed by read-back.
-- Checks: 469 passed, 14 skipped before the final main reconciliation; Ruff check and format clean; mypy clean for 29 source files; Bandit and secret scan clean. Live report: 5 sheets, 227 populated cells, 47 formulas, 0 formula errors, native spreadsheet created and structurally verified.
-- Known failures: none.
-- Unresolved: formula results, charts, formatting, validation and protection still need human visual comparison in the imported Google Sheet. One synthetic live import does not establish broad fidelity.
-- Decisions: DECISIONS.md, 2026-09-29 (XLSX extent/index/cleanup and live native import).
-- Next task: visually compare the generated workbook against its Expected results sheet, then add targeted regression work only for observed fidelity losses.
-- Warnings: the downloaded conversion report contains private Drive file and folder IDs and must not be committed. No school document or OAuth token is in this branch.
 
