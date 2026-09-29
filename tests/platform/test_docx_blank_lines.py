@@ -17,7 +17,16 @@ import re
 from defusedxml import ElementTree
 from workspace_toolkit.docs import source_text
 
-from .test_docx import INK, SECTION, XMLNS, anchor, q, render_with_header, transform_body
+from .test_docx import (
+    INK,
+    SECTION,
+    XMLNS,
+    anchor,
+    offset,
+    q,
+    render_with_header,
+    transform_body,
+)
 
 TEXT = "<w:p><w:r><w:t>{}</w:t></w:r></w:p>"
 PARAGRAPH = re.compile(r"<w:p[\s/>]")
@@ -134,3 +143,23 @@ def test_hidden_text_is_not_expected_in_the_export():
         "<w:p><w:r><w:rPr><w:vanish w:val='0'/></w:rPr><w:t>unhidden</w:t></w:r></w:p>"
     )
     assert tokens(body) == ["Shown", "unhidden"]
+
+
+def test_a_blank_line_inside_a_converted_text_box_survives(tmp_path):
+    # The text box's paragraphs move into a table cell. The author's blank
+    # line is recognised there only because it is the same element that was
+    # recorded before the move; a pass that copied it would lose it.
+    textbox = (
+        '<a:graphic><a:graphicData uri="x"><wps:wsp><wps:spPr/>'
+        "<wps:txbx><w:txbxContent>"
+        + TEXT.format("Line one")
+        + "<w:p/>"
+        + TEXT.format("Line two")
+        + "</w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic>"
+    )
+    body = anchor(textbox, h=("column", offset(0)), v=("paragraph", offset(0))) + SECTION
+    root, report = transform_body(tmp_path, body)
+    assert report["textboxes"] == 1
+    cell = root.find(".//" + q("w", "tc"))
+    lines = ["".join(t.text or "" for t in p.iter(q("w", "t"))) for p in cell.findall(q("w", "p"))]
+    assert lines == ["Line one", "", "Line two"], "the blank line in the text box was removed"

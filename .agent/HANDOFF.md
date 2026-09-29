@@ -31,6 +31,27 @@
 
 ---
 
+- Agent: Claude Code / QuietHeron, standing in on DOCX at the human's request
+- Date: 2026-09-28
+- Branch: `fix/docx-blank-lines-follow-up`, based on main `e81d77e`
+- Objective: SilverDog's non-blocking review notes on #56.
+- Files changed: `app/workspace_toolkit/docs.py` (comments and constant placement only; no behaviour change), `tests/platform/test_docx_blank_lines.py` (one new test), this file.
+- Completed:
+  - `empty_paragraphs` now says the set is keyed on element identity, so it holds only while passes move paragraphs rather than copy them.
+  - A new test pins that an author's blank line inside a converted text box survives the move into its cell.
+  - `FALLBACK` and `WORD_BREAKS` now sit above `source_text`.
+  - The explicit-stack walk and its `None` end-of-paragraph marker are explained.
+- Checks: platform 296 passed, 8 skipped (main: 295 and 8). Ruff check and format clean; mypy reports no issues in 17 files; Bandit reports no issues. The new test was confirmed to fail when `transform` records *copies* of the empty paragraphs instead of the elements themselves (1 failed), then passes on the real code.
+- Known failures: none.
+- Unresolved: none from the review. The cell-seam double height SilverDog found is theirs and was addressed in #60.
+- Decisions: none.
+- Next task: #70 (library folder race) if the platform owner agrees to option 1; otherwise the queue in BACKLOG.md.
+- Warnings: `docs.py` is the DOCX stream's. This is a comment-and-test change made at the human's request.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron (Publisher and platform)
 - Date: 2026-09-28
 - Branch: `fix/low-severity-audit-52`, based on main `9f58568`
