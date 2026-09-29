@@ -45,6 +45,7 @@ from .publisher_art import (
     subpaths,
 )
 from .publisher_fit import Fit, Para, Style, fit
+from .publisher_wrap import Obstacle, wrap
 from .units import Frame, length_points, percentage, size
 
 PICTURE = "wmt-picture:"
@@ -382,11 +383,13 @@ def text_requests(
     fonts: dict[str, dict],
     cell: dict | None = None,
     fitted: Fit | None = None,
+    extra: dict[int, tuple[float, float]] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Insert the text, then style each run and paragraph by its range.
 
     `fitted` (publisher_fit) makes the text fit its box: its scale applies to
-    every font size, and its line spacing to every paragraph.
+    every font size, and its line spacing to every paragraph. `extra`
+    (publisher_wrap) adds start and end indents to paragraphs beside a picture.
     """
     paragraphs, laid = _laid(paragraphs)
     scale = fitted.scale if fitted else 1.0
@@ -403,7 +406,7 @@ def text_requests(
     total = utf16(whole)
     requests: list[dict] = [{"insertText": {**where, "insertionIndex": 0, "text": whole}}]
     position = 0
-    for paragraph, pieces in zip(paragraphs, laid, strict=True):
+    for number, (paragraph, pieces) in enumerate(zip(paragraphs, laid, strict=True)):
         start = position
         for text, run in pieces:
             length = utf16(text)
@@ -424,6 +427,9 @@ def text_requests(
             style["lineSpacing"] = spacing
             if "lineSpacing" not in fields:
                 fields.append("lineSpacing")
+        added = (extra or {}).get(number)
+        if added:
+            _indent(style, fields, *added)
         if fields:
             end = position if position > start else min(start + 1, total)
             requests.append(
@@ -438,6 +444,17 @@ def text_requests(
             )
         position += 1  # the paragraph break
     return requests, _unique(notes)
+
+
+def _indent(style: dict, fields: list[str], start: float, end: float) -> None:
+    """Adds to a paragraph's indents, keeping its first line's offset."""
+    for key, amount in (("indentStart", start), ("indentFirstLine", start), ("indentEnd", end)):
+        if not amount:
+            continue
+        current = style.get(key, {}).get("magnitude", 0.0)
+        style[key] = {"magnitude": round(current + amount, 4), "unit": "PT"}
+        if key not in fields:
+            fields.append(key)
 
 
 def _scaled(style: dict, scale: float) -> dict:
@@ -729,11 +746,45 @@ class PageBuilder:
         style, notes = box_style(object_id, element["source"]["styleProperties"], text=True)
         self.requests += style
         paragraphs = element.get("paragraphs", [])
-        fitted = fit(measured(paragraphs, self.fonts), frame.width, frame.height)
-        text, more = text_requests(object_id, paragraphs, self.fonts, fitted=fitted)
+        paras = measured(paragraphs, self.fonts)
+        wrapped = None
+        if not frame.rotation:
+            box = (
+                frame.cx - frame.width / 2,
+                frame.cy - frame.height / 2,
+                frame.width,
+                frame.height,
+            )
+            wrapped = wrap(paras, box, self.in_front_of(element))
+        fitted = wrapped.fitted if wrapped else fit(paras, frame.width, frame.height)
+        text, more = text_requests(
+            object_id,
+            paragraphs,
+            self.fonts,
+            fitted=fitted,
+            extra=wrapped.extra if wrapped else None,
+        )
         self.requests += text
         if fitted:
             notes = [*notes, *fitted.notes]
+        if wrapped and wrapped.around and wrapped.extra:
+            count = len(wrapped.around)
+            notes.append(
+                note(
+                    "text-wrapped",
+                    f"Text was indented to keep clear of {count} "
+                    f"picture{'s' if count > 1 else ''}, as it wrapped around "
+                    f"{'them' if count > 1 else 'it'} in the original.",
+                )
+            )
+        if wrapped and wrapped.under:
+            notes.append(
+                note(
+                    "text-under-picture",
+                    "A picture covers most of this text's width, so it can't be kept "
+                    "clear: it sits over the text, as Slides can't wrap text around it.",
+                )
+            )
         substituted = any(
             self.fonts[f]["status"] != FontStatus.AVAILABLE
             for f in _families(element.get("paragraphs", []))
@@ -743,6 +794,25 @@ class PageBuilder:
         if substituted:
             entry.notes.append(note("font-substituted", "A font was replaced; see the fonts."))
         self.made(element, entry, object_id)
+
+    def in_front_of(self, element: dict) -> list[Obstacle]:
+        """Pictures and shapes drawn over a text frame: Publisher wraps text around them."""
+        out = []
+        for other in self.page.get("elements", []):
+            if (
+                other["zIndex"] <= element["zIndex"]
+                or not other.get("visible", True)
+                or other.get("type") not in {"image", "shape"}
+                or is_border_tile(other)
+            ):
+                continue
+            frame = frame_of(other)
+            if frame is None:
+                continue
+            xs = [x for x, _ in frame.corners()]
+            ys = [y for _, y in frame.corners()]
+            out.append(Obstacle(other["id"], min(xs), min(ys), max(xs), max(ys)))
+        return out
 
     def _image(self, element: dict) -> None:
         frame = frame_of(element)
