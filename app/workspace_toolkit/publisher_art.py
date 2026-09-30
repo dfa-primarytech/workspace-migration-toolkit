@@ -29,6 +29,10 @@ SLIDES_MAX_BYTES = 50 * 1024 * 1024
 
 PPI = 220  # as for "Make pictures smaller": sharp at print size, no larger
 SUPERSAMPLE = 3  # outlines drawn at 3× and averaged down, for smooth edges
+# Pixels in one supersampled coverage mask (one byte each). The picture itself
+# is capped at SLIDES_MAX_PIXELS, but its mask is SUPERSAMPLE² times larger:
+# up to 225 million pixels for a path that reaches far off the page.
+MASK_BUDGET = 40_000_000
 CURVE_STEPS = 24
 DECODE_LIMIT = 60_000_000  # pictures.py's MAX_PIXELS: refuse decompression bombs
 GREY = "#808080"
@@ -274,6 +278,15 @@ def _canvas(box: tuple[float, float, float, float]) -> tuple[float, int, int]:
     return scale, max(1, math.ceil(width * scale)), max(1, math.ceil(height * scale))
 
 
+def _supersample(width: int, height: int) -> int:
+    """How many times larger to draw a mask: SUPERSAMPLE, or less where that
+    would pass MASK_BUDGET (edges are then a little less smooth)."""
+    for big in range(SUPERSAMPLE, 1, -1):
+        if width * height * big * big <= MASK_BUDGET:
+            return big
+    return 1
+
+
 def draw_path(key: str, pieces: list[Subpath], style: dict, out: Path) -> Drawn | None:
     """A path as a transparent PNG covering its own extent, or None if it draws nothing."""
     fill, stroke, width, notes = paint(style)
@@ -285,7 +298,7 @@ def draw_path(key: str, pieces: list[Subpath], style: dict, out: Path) -> Drawn 
     pad = width / 2 + 1
     box = (min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad)
     scale, w, h = _canvas(box)
-    big = SUPERSAMPLE
+    big = _supersample(w, h)
 
     def at(point):
         return ((point[0] - box[0]) * scale * big, (point[1] - box[1]) * scale * big)
