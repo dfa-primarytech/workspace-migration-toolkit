@@ -28,7 +28,7 @@ REPAIRED_PARAGRAPH = {
     "spaceAbove": {"magnitude": 0, "unit": "PT"},
     "spaceBelow": {"magnitude": 0, "unit": "PT"},
 }
-SECRET = "Pupil name: CONFIDENTIAL"
+PUPIL_TEXT = "Pupil name: CONFIDENTIAL"
 
 
 def run(content, style=None):
@@ -64,7 +64,7 @@ def worksheet(repaired=False):
                     "body": {
                         "content": [
                             {"endIndex": 1, "sectionBreak": {}},
-                            paragraph(1, 10, run(SECRET + "\n")),
+                            paragraph(1, 10, run(PUPIL_TEXT + "\n")),
                             table(10, 40),
                             paragraph(40, 41, run("\n", text_style), style=paragraph_style),
                             table(41, 70),
@@ -209,4 +209,29 @@ def test_the_repair_report_carries_no_document_text(tmp_path):
     report = convert_with(tmp_path, google, on())
 
     assert report["readBack"]["repair"]["status"] == "applied"
-    assert SECRET not in json.dumps(report)
+    assert PUPIL_TEXT not in json.dumps(report)
+
+
+def test_the_update_is_sent_once_with_its_revision_guard():
+    import httpx
+    from workspace_toolkit.google import Google
+
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(503)  # a write is never repeated, even on a transient reply
+
+    google = Google("token", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    requests = [{"updateTextStyle": {"range": {"startIndex": 1, "endIndex": 2}}}]
+    try:
+        asyncio.run(google.batch_update("doc", requests, "rev-9"))
+    except ToolkitError:
+        pass
+    else:
+        raise AssertionError("a refused update was treated as done")
+    assert len(sent) == 1
+    assert sent[0].method == "POST"
+    assert sent[0].url.path == "/v1/documents/doc:batchUpdate"
+    body = json.loads(sent[0].content)
+    assert body == {"requests": requests, "writeControl": {"requiredRevisionId": "rev-9"}}

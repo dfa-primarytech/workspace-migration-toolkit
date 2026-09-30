@@ -34,6 +34,7 @@ from typing import Any
 # Serialisation only; parsing always uses defusedxml.
 from xml.etree.ElementTree import Element, SubElement, tostring  # nosec B405
 
+from .config import Settings
 from .docx import (
     COINCIDENT_SIZE_TOL,
     COINCIDENT_TOL_EMU,
@@ -63,7 +64,7 @@ from .errors import ToolkitError
 from .model import UNCOMPARABLE, text_tokens, warning
 from .model import Compatibility as C
 from .package import DOCX, Package
-from .readback import read_back
+from .readback import read_back, repair_blank_pages
 
 DEFAULT_WRAP_GAP_DXA = 180
 WRAP_ELEMENTS = ("wrapNone", "wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom")
@@ -2600,6 +2601,7 @@ async def convert(
     google,
     progress: dict | None = None,
     original_name: str = "",
+    settings: Settings | None = None,
 ) -> dict:
     """Uploads the rendered .docx for native import, then checks what came back."""
     # imported here to avoid a cycle
@@ -2685,6 +2687,12 @@ async def convert(
                 "tables": render_report.get("topLevelTables"),
             },
         )
+        # Edits the person's new document, so only where the deployment has
+        # turned it on (#54).
+        if settings is not None and settings.docx_repair_blank_pages:
+            report["readBack"]["repair"] = await repair_blank_pages(
+                google, uploaded["id"], report["readBack"]
+            )
         report["verification"] = "text_checked"
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:

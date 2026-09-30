@@ -375,6 +375,20 @@ class Google:
             params={"includeTabsContent": "true"},
         )
 
+    async def batch_update(self, document_id: str, requests: list[dict], revision_id: str) -> dict:
+        """Applies `requests` to a Google Doc only if it is still at `revision_id`.
+
+        Google refuses the whole update if the document changed after that
+        revision was read, so indexes from that read can't land in the wrong
+        place. A write, so it is sent once and never repeated (see request).
+        Not verified live under drive.file (#54).
+        """
+        return await self.request(
+            "POST",
+            f"https://docs.googleapis.com/v1/documents/{document_id}:batchUpdate",
+            json={"requests": requests, "writeControl": {"requiredRevisionId": revision_id}},
+        )
+
     async def export_pdf(self, file_id: str, max_bytes: int = PDF_EXPORT_LIMIT) -> bytes:
         """A converted file exported as PDF, for the read-back's page checks.
 

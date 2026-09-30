@@ -54,6 +54,8 @@ PIPELINES: dict[str, Pipeline] = {
         convert=docs.convert,
         kind="document",
         destination="Google Docs",
+        # For the optional blank-page repair after import (#54).
+        needs_settings=True,
     ),
     ".pub": Pipeline(
         fmt=PUB,

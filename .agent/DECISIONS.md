@@ -658,3 +658,27 @@ only break a page, a page count unlike the one Word saved in
   tests; the scope spike above showed `drive.file` reaches both calls, not
   what real answers look like for real worksheets. PPTX and Sheets read-back
   are left for later.
+
+## 2026-09-30: Blank-page repair after import is optional, off by default (#54)
+
+Owner and Claude 1 agreed. Google's import can turn Word's empty separator
+paragraphs into blank pages. #42 (already fixed) keeps those paragraphs
+rather than deleting them before import, which would join pages and lose
+spacing. #54 instead repairs them in the new Google Doc.
+
+- **Off unless `WMT_DOCX_REPAIR_BLANK_PAGES` is set.** It edits the
+  person's document after it is made, and `documents.batchUpdate` under
+  `drive.file` has not been verified live. The live scope check above covered
+  only reading.
+- **Only when the read-back (#53) found probably-blank pages**, and only on
+  empty top-level paragraphs that sit directly between two tables or hold a
+  page break. Never the body's last block, never inside a table, never a
+  paragraph with content. The Docs API can't say which page a paragraph is on,
+  so candidates aren't matched to particular blank pages; the report gives the
+  page counts and blank pages before and after instead.
+- **One update, guarded by `requiredRevisionId`** from a fresh read whose
+  indexes are the only ones used. If anyone changed the document in between,
+  Google refuses the whole update, and the repair is reported as skipped.
+- **Idempotent.** A paragraph already at 1 pt with no keep-together or
+  spacing isn't a candidate, so a second run changes nothing.
+- **Reported, not shown:** `readBack.repair`, classified SUBSTITUTED.
