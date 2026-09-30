@@ -9,6 +9,7 @@ from workspace_toolkit.config import Settings
 from workspace_toolkit.errors import ToolkitError
 from workspace_toolkit.google import (
     LIBRARY,
+    READ_ATTEMPTS,
     Google,
     asset_names,
     convert,
@@ -305,6 +306,11 @@ def test_google_rejects_malformed_success_responses(tmp_path):
     asyncio.run(run_upload())
 
 
+async def no_wait(_seconds):
+    """Stands in for asyncio.sleep. Not a lambda calling asyncio.sleep(0):
+    that name is the patched one, so it would call itself."""
+
+
 def transport_calls(responses):
     """A Drive stand-in that replays `responses` and records what it was asked."""
     calls = []
@@ -432,11 +438,14 @@ def test_a_library_made_elsewhere_at_the_same_moment_wins_and_is_reported():
     assert all(c.method in {"GET", "POST"} for c in drive.calls), "nothing moved or deleted"
 
 
-def test_a_failed_recheck_keeps_the_folder_it_made():
+def test_a_failed_recheck_keeps_the_folder_it_made(monkeypatch):
+    # The recheck is a read, so it is asked READ_ATTEMPTS times before it
+    # counts as failed (#120).
+    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", no_wait)
     responses = [
         lambda r: httpx.Response(200, json={"files": []}),
         lambda r: httpx.Response(200, json={"id": "library-new"}),
-        lambda r: httpx.Response(500),
+        *[lambda r: httpx.Response(500)] * READ_ATTEMPTS,
         lambda r: httpx.Response(200, json={"id": "job-1"}),
     ]
 
@@ -489,7 +498,7 @@ def test_a_refused_asset_copy_is_not_retried(tmp_path, monkeypatch):
     """A 400 is a real refusal. Asking again only delays reporting it."""
     path = tmp_path / "asset"
     path.write_bytes(b"data")
-    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", lambda s: asyncio.sleep(0))
+    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", no_wait)
     attempts = []
 
     def handler(request):
@@ -512,7 +521,7 @@ def test_the_document_upload_is_never_retried(tmp_path, monkeypatch):
     """A lost reply can still mean success: asking twice leaves two documents."""
     path = tmp_path / "doc.docx"
     path.write_bytes(b"data")
-    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", lambda s: asyncio.sleep(0))
+    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", no_wait)
     attempts = []
 
     def handler(request):
@@ -679,3 +688,121 @@ def test_two_files_with_one_name_stay_apart():
 def test_an_unsafe_object_name_is_cleaned():
     manifest = deck([("v1", 'Week 3/4: "tides"')], assets={"v1": "video/mp4"})
     assert asset_names(manifest, "Topic")["v1"] == "Topic – slide 1 – Week 3 4 tides.mp4"
+
+
+# ---------------------------------------------- #120: safe reads are retried
+
+
+def read_through(responses, method="GET", monkeypatch=None):
+    """Runs one Google.request against replayed replies; returns the result
+    (or the error), the calls made, and the waits asked for."""
+    waits: list[float] = []
+
+    async def no_waiting(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", no_waiting)
+
+    async def run():
+        calls, transport = transport_calls(responses)
+        async with httpx.AsyncClient(transport=transport) as client:
+            try:
+                result = await Google("test-token", client).request(
+                    method, "https://slides.googleapis.com/v1/presentations/p"
+                )
+            except ToolkitError as error:
+                result = error
+        return result, calls
+
+    result, calls = asyncio.run(run())
+    return result, calls, waits
+
+
+def test_a_throttled_read_is_asked_again(monkeypatch):
+    """One 503 on the verification read used to fail a conversion that worked."""
+    result, calls, waits = read_through(
+        [lambda r: httpx.Response(503), lambda r: httpx.Response(200, json={"slides": []})],
+        monkeypatch=monkeypatch,
+    )
+    assert result == {"slides": []}
+    assert len(calls) == 2
+    assert len(waits) == 1 and 1.0 <= waits[0] <= 1.25, waits
+
+
+def test_a_read_waits_as_long_as_google_asks(monkeypatch):
+    result, _, waits = read_through(
+        [
+            lambda r: httpx.Response(429, headers={"Retry-After": "7"}),
+            lambda r: httpx.Response(200, json={}),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    assert result == {}
+    assert waits == [7.0]
+
+
+def test_a_dropped_connection_on_a_read_is_asked_again(monkeypatch):
+    def dropped(request):
+        raise httpx.ConnectError("reset", request=request)
+
+    result, calls, _ = read_through(
+        [dropped, lambda r: httpx.Response(200, json={"ok": True})], monkeypatch=monkeypatch
+    )
+    assert result == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_a_read_that_keeps_failing_gives_up_after_its_attempts(monkeypatch):
+    result, calls, waits = read_through([lambda r: httpx.Response(503)], monkeypatch=monkeypatch)
+    assert isinstance(result, ToolkitError) and result.code == "google_failed"
+    assert result.detail == "http_503"
+    assert len(calls) == READ_ATTEMPTS
+    assert len(waits) == READ_ATTEMPTS - 1
+    assert waits[1] > waits[0], "each wait is longer than the last"
+
+
+def test_a_read_refused_outright_is_not_asked_again(monkeypatch):
+    result, calls, _ = read_through([lambda r: httpx.Response(404)], monkeypatch=monkeypatch)
+    assert isinstance(result, ToolkitError)
+    assert len(calls) == 1
+
+
+def test_a_wait_longer_than_the_job_can_afford_is_not_waited_out(monkeypatch):
+    result, calls, waits = read_through(
+        [lambda r: httpx.Response(429, headers={"Retry-After": "3600"})], monkeypatch=monkeypatch
+    )
+    assert isinstance(result, ToolkitError)
+    assert len(calls) == 1 and waits == []
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH", "PUT", "DELETE"])
+def test_a_request_that_changes_something_is_never_repeated(monkeypatch, method):
+    """A lost or throttled reply to a create can still mean it was made."""
+    result, calls, waits = read_through(
+        [lambda r: httpx.Response(503), lambda r: httpx.Response(200, json={"id": "x"})],
+        method=method,
+        monkeypatch=monkeypatch,
+    )
+    assert isinstance(result, ToolkitError)
+    assert len(calls) == 1 and waits == []
+
+
+def test_the_library_search_survives_one_throttled_reply(monkeypatch):
+    """The folder search is a read: throttled once, it is not a failed job,
+    and no second library folder is made."""
+    monkeypatch.setattr("workspace_toolkit.google.asyncio.sleep", no_wait)
+    responses = [
+        lambda r: httpx.Response(429),
+        lambda r: httpx.Response(200, json={"files": [{"id": "library-1"}]}),
+        lambda r: httpx.Response(200, json={"id": "job-1"}),
+    ]
+
+    async def run():
+        calls, transport = transport_calls(responses)
+        async with httpx.AsyncClient(transport=transport) as client:
+            await Google("test-token", client).folder("Worksheet")
+        return calls
+
+    calls = asyncio.run(run())
+    assert [c.method for c in calls] == ["GET", "GET", "POST"]
+    assert json_body(calls[-1])["parents"] == ["library-1"]

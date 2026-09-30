@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 from collections import Counter
 from datetime import UTC, datetime
@@ -28,6 +29,16 @@ LIBRARY = "Workspace conversions"
 # waiting out; anything else is a real refusal and retrying only hides it.
 TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
 UPLOAD_ATTEMPTS = 4
+
+# A read changes nothing, so a throttled one is worth asking again (#120).
+# Anything that creates or changes something is asked once: a lost reply can
+# still mean it was done, and asking again could make a second one.
+SAFE_METHODS = frozenset({"GET", "HEAD"})
+READ_ATTEMPTS = 3
+READ_DELAY = 1.0  # seconds before the second try, doubled after, plus jitter
+# A longer wait than Google asks for here is not waited out: the job has its
+# own deadline, and a person is waiting on the page.
+MAX_RETRY_AFTER = 30.0
 
 
 # One lock per event loop -- in production, one per process. It is shared by
@@ -56,6 +67,20 @@ def failure_detail(exc: BaseException) -> str:
     return f"http_{status}" if status is not None else type(exc).__name__
 
 
+def retry_after(exc: BaseException) -> float | None:
+    """The wait Google asked for, in seconds, if it gave one as a number.
+
+    Retry-After may also be an HTTP date; that is rare from Google's APIs, and
+    is treated as not given, so the usual backoff applies.
+    """
+    response = getattr(exc, "response", None)
+    value = response.headers.get("Retry-After") if response is not None else None
+    try:
+        return max(0.0, float(value)) if value else None
+    except ValueError:
+        return None
+
+
 def is_transient(exc: BaseException) -> bool:
     """Whether waiting and asking again could plausibly succeed."""
     status = http_status(exc)
@@ -73,20 +98,43 @@ class Google:
         self.warnings: list[dict] = []
 
     async def request(self, method: str, url: str, **kwargs) -> dict:
-        try:
-            response = await self.client.request(method, url, headers=self.headers, **kwargs)
-            response.raise_for_status()
-            result = response.json() if response.content else {}
-            if not isinstance(result, dict):
-                raise ValueError("Unexpected Google response")
-            return result
-        except (httpx.HTTPError, ValueError) as exc:
-            raise ToolkitError(
-                "google_failed",
-                "Google could not complete this operation. Check the report before retrying.",
-                502,
-                detail=failure_detail(exc),
-            ) from exc
+        """One call to a Google API, returning its JSON object.
+
+        A read (SAFE_METHODS) that meets a temporary failure -- throttling, a
+        server error, a dropped connection -- is asked again, up to
+        READ_ATTEMPTS times, waiting as Google asks (Retry-After) or backing
+        off. Before, one throttled verification read failed a conversion that
+        had worked, and a person retrying then got a second copy. A request
+        that creates or changes something is never repeated here.
+        """
+        attempts = READ_ATTEMPTS if method.upper() in SAFE_METHODS else 1
+        delay = READ_DELAY
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._request_once(method, url, **kwargs)
+            except (httpx.HTTPError, ValueError) as exc:
+                wait = retry_after(exc)
+                if wait is None:
+                    wait = delay + random.uniform(0, delay / 4)  # noqa: S311  # nosec B311 (jitter)
+                if attempt == attempts or not is_transient(exc) or wait > MAX_RETRY_AFTER:
+                    raise ToolkitError(
+                        "google_failed",
+                        "Google could not complete this operation. "
+                        "Check the report before retrying.",
+                        502,
+                        detail=failure_detail(exc),
+                    ) from exc
+                await asyncio.sleep(wait)
+                delay *= 2
+        raise AssertionError("unreachable")
+
+    async def _request_once(self, method: str, url: str, **kwargs) -> dict:
+        response = await self.client.request(method, url, headers=self.headers, **kwargs)
+        response.raise_for_status()
+        result = response.json() if response.content else {}
+        if not isinstance(result, dict):
+            raise ValueError("Unexpected Google response")
+        return result
 
     async def download(self, file_id: str, destination: Path, max_bytes: int | None) -> int:
         """Downloads a Drive file (picked, not one this app made) into
