@@ -53,8 +53,8 @@ from .docx import (
     to_dxa,
 )
 from .errors import ToolkitError
+from .model import UNCOMPARABLE, text_tokens, warning
 from .model import Compatibility as C
-from .model import warning
 from .package import DOCX, Package
 
 DEFAULT_WRAP_GAP_DXA = 180
@@ -2007,6 +2007,16 @@ def _cached_result_text(root: Element) -> set[int]:
 
 FALLBACK = q("mc", "Fallback")
 WORD_BREAKS = {q("w", "tab"), q("w", "ptab"), q("w", "br"), q("w", "cr")}
+# Characters Word keeps as elements rather than text (#122). A no-break
+# hyphen is a hyphen on the page; a soft hyphen shows only where a line
+# breaks. A symbol names a code in its font, which is not a character here --
+# chr() of it gives the wrong letter for most symbol fonts -- so the word
+# holding it is marked as not comparable instead of guessed at.
+IN_WORD = {
+    q("w", "noBreakHyphen"): "-",
+    q("w", "softHyphen"): "",
+    q("w", "sym"): UNCOMPARABLE,
+}
 
 
 def source_text(root: Element) -> str:
@@ -2040,6 +2050,8 @@ def source_text(root: Element) -> str:
       the legacy copy doubled every word in it.
     * Hidden runs (`w:vanish`) are skipped: the export does not contain them.
       Hiding applied through a character style is not resolved.
+    * No-break and soft hyphens are characters in the word, not gaps in it;
+      a word holding a symbol is not compared at all (IN_WORD).
     """
     skip = _cached_result_text(root)
     pieces: list[str] = []
@@ -2061,6 +2073,9 @@ def source_text(root: Element) -> str:
             continue
         if node.tag in WORD_BREAKS:
             pieces.append(" ")
+            continue
+        if node.tag in IN_WORD:
+            pieces.append(IN_WORD[node.tag])
             continue
         if node.tag == q("w", "r") and _is_hidden(node):
             continue
@@ -2135,7 +2150,13 @@ def verify(
     unconditional.
     """
     findings = []
-    missing = Counter(tokens) - Counter(exported.split())
+    # Both sides through the same text_tokens (#122). The source's words are
+    # already split; reading each again only normalises it, or drops it.
+    source: Counter = Counter()
+    for word, count in tokens.items():
+        for token in text_tokens(word):
+            source[token] += count
+    missing = source - text_tokens(exported)
     if missing:
         findings.append(
             warning(

@@ -14,7 +14,7 @@ import httpx
 
 from .errors import ToolkitError
 from .model import Compatibility as C
-from .model import warning
+from .model import text_tokens, warning
 from .package import PPTX_MIME
 from .pptx import analysis_report
 
@@ -365,18 +365,27 @@ class Google:
         )
 
 
+def _joined(text: dict) -> str:
+    """One shape's or cell's text, its pieces joined as they are shown.
+
+    Each piece is a stretch of one style, so a word styled partway through
+    ("H2O" with a subscript) is several pieces; joined with spaces it became
+    words the source never had (#122). Paragraph ends are already newlines
+    inside the pieces. An autoText piece (a slide number) holds its value as
+    it is shown; it is read whatever its kind, since which kinds Slides keeps
+    as autoText is documented only for slide numbers.
+    """
+    return "".join(
+        item.get("textRun", {}).get("content", "") or item.get("autoText", {}).get("content", "")
+        for item in text.get("textElements", [])
+    )
+
+
 def google_text(element: dict) -> str:
-    fragments = []
-    for item in element.get("shape", {}).get("text", {}).get("textElements", []):
-        fragments.append(item.get("textRun", {}).get("content", ""))
+    fragments = [_joined(element.get("shape", {}).get("text", {}))]
     for row in element.get("table", {}).get("tableRows", []):
         for cell in row.get("tableCells", []):
-            fragments.append(
-                "".join(
-                    e.get("textRun", {}).get("content", "")
-                    for e in cell.get("text", {}).get("textElements", [])
-                )
-            )
+            fragments.append(_joined(cell.get("text", {})))
     for child in element.get("elementGroup", {}).get("children", []):
         fragments.append(google_text(child))
     return " ".join(fragment for fragment in fragments if fragment)
@@ -437,7 +446,7 @@ def verify(manifest: dict, presentation: dict) -> list[dict]:
         converted = " ".join(google_text(e) for e in target.get("pageElements", []))
         # Whitespace-normalised token multiset catches missing/repeated text without
         # publishing it in the conversion report. This does not prove layout fidelity.
-        missing = Counter(original.split()) - Counter(converted.split())
+        missing = text_tokens(original) - text_tokens(converted)
         if missing:
             findings.append(
                 warning(
