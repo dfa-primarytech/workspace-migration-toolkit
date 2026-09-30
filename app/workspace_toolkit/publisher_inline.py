@@ -164,7 +164,8 @@ def marks(document: dict) -> Iterator[tuple[str, int, int, int]]:
                         for index, paragraph in enumerate(cell.get("paragraphs", [])):
                             for _ in range(_count(paragraph)):
                                 yield element["id"], cell["row"], cell["column"], index
-            for index, paragraph in enumerate((element.get("text") or {}).get("paragraphs", [])):
+            # A text box keeps its paragraphs on the element itself.
+            for index, paragraph in enumerate(element.get("paragraphs") or []):
                 for _ in range(_count(paragraph)):
                     yield element["id"], -1, -1, index
 

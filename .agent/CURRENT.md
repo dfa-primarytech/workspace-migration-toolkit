@@ -13,6 +13,10 @@ was a narrative changelog back to 22 September that had mostly gone stale
 of how it got here, see git log and merged PR descriptions; `HANDOFF.md`
 keeps the last few session handoffs, `HANDOFF-archive.md` the rest.
 
+## Audit fixes (2026-09-30)
+
+The full-repository audit's issues are #105-#137 (plus #55, reopened). Fixes are split by stream: Publisher (#105-#111) on `fix/publisher-planning-crashes` and after, DOCX (#113-#117, #134, #135, #55) in a second Claude Code session. Issues are claimed by comment before work starts.
+
 ## Coordination
 
 The human runs this as the conductor: they relay prompts between whichever

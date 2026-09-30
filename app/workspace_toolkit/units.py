@@ -97,10 +97,17 @@ class Frame:
         return cls(width, height, cx, cy, rotation)
 
     def corners(self) -> list[tuple[float, float]]:
-        """Top-left, top-right, bottom-right, bottom-left, as drawn on the page."""
+        """Top-left, top-right, bottom-right, bottom-left, as drawn on the page.
+
+        Turned about the centre directly rather than through `transform`,
+        which divides by the size: a rule has no height, and still has corners.
+        """
+        turn = math.radians(-self.rotation)
+        cos, sin = math.cos(turn), math.sin(turn)
+        half_w, half_h = self.width / 2, self.height / 2
         return [
-            apply(self.transform(self.width, self.height), (u, v))
-            for u, v in ((0, 0), (self.width, 0), (self.width, self.height), (0, self.height))
+            (self.cx + cos * u - sin * v, self.cy + sin * u + cos * v)
+            for u, v in ((-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h))
         ]
 
     def transform(self, width: float, height: float) -> dict:

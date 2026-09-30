@@ -1016,6 +1016,21 @@ class PageBuilder:
                     "clear: it sits over the text, as Slides can't wrap text around it.",
                 )
             )
+        # Pictures set in a text box's lines are recovered, but where each
+        # falls in the text isn't known, so they are named rather than guessed.
+        inline = sum(
+            len(self.prepared.inline.get((element["id"], -1, -1, index), []))
+            for index in range(len(paragraphs))
+        )
+        if inline:
+            notes.append(
+                note(
+                    "inline-picture-missing",
+                    f"{inline} picture{'s' if inline > 1 else ''} set in this text "
+                    f"{'are' if inline > 1 else 'is'} missing: add "
+                    f"{'them' if inline > 1 else 'it'} in Slides.",
+                )
+            )
         substituted = any(
             self.fonts[f]["status"] != FontStatus.AVAILABLE
             for f in _families(element.get("paragraphs", []))
@@ -1079,6 +1094,10 @@ class PageBuilder:
         picture = cropped or self.prepared.pictures.get(asset or "")
         if frame is None:
             self.line(element, C.UNSUPPORTED, note("no-position", "It has no position."))
+            return
+        if frame.width <= 0 or frame.height <= 0:
+            # Slides cannot draw, or even mark, a picture with no area.
+            self.line(element, C.UNSUPPORTED, note("picture-no-size", "The picture has no size."))
             return
         if picture is None:
             reason = self.prepared.refused.get(asset or "", "The picture was not extracted.")
@@ -1149,6 +1168,9 @@ class PageBuilder:
         if frame is None:
             self.line(element, C.UNSUPPORTED, note("no-position", "It has no position."))
             return
+        if frame.width <= 0 or frame.height <= 0:
+            self._flat(element, frame)
+            return
         object_id = oid(element["id"])
         kind = "ELLIPSE" if element["geometry"]["shapeKind"] == "ellipse" else "RECTANGLE"
         self.requests.append(
@@ -1163,6 +1185,30 @@ class PageBuilder:
         style, notes = box_style(object_id, element["source"]["styleProperties"], text=False)
         self.requests += style
         entry = self.line(element, C.SUBSTITUTED if notes else C.NATIVE, *notes)
+        self.made(element, entry, object_id)
+
+    def _flat(self, element: dict, frame: Frame) -> None:
+        """A rectangle or ellipse with no height or no width: Slides can't
+        make a shape without area, and all that shows of it is its outline,
+        so it is drawn as the line it looks like."""
+        style = element["source"]["styleProperties"]
+        top_left, top_right, _, bottom_left = frame.corners()
+        end = top_right if frame.width > 0 else bottom_left
+        if paint(style)[1] is None or end == top_left:
+            self.line(
+                element,
+                C.IGNORED,
+                note("draws-nothing", "It has no outline and no filled area, so nothing shows."),
+            )
+            return
+        object_id = oid(element["id"])
+        self.requests += [
+            line_request(object_id, self.slide, top_left, end),
+            line_style(object_id, style),
+        ]
+        entry = self.line(
+            element, C.SUBSTITUTED, note("drawn-as-line", "A shape with no area, drawn as a line.")
+        )
         self.made(element, entry, object_id)
 
     def _line(self, element: dict) -> None:
@@ -1462,7 +1508,9 @@ class PageBuilder:
         """WordArt as a text box over its outlines' extent, sized to fill it."""
         art, box = self.prepared.wordart[element["id"]]
         frame = Frame.from_bounds(*box)
-        lines = [line for line in art.text.split("\n") if line]
+        # Cleaned as a text box's text is: a stray control character would
+        # otherwise stop the whole conversion at check().
+        lines = [line for line in (clean(part) for part in art.text.split("\n")) if line]
         object_id = oid(element["id"])
         family = resolve_font(art.font, self.fonts) if art.font else None
         size = wordart_size(art, lines, family, frame)
@@ -1543,9 +1591,24 @@ class PageBuilder:
             element = by_id.get(element_id)
             if element is None:
                 return []
-            if element_id in self.objects and element["type"] != "wrapper":
+            # A wrapper is only a container, except WordArt: its text box is
+            # made under the wrapper's own id.
+            if element_id in self.objects and (
+                element["type"] != "wrapper" or element_id in self.prepared.wordart
+            ):
                 return self.objects[element_id]
             return [o for child in children[element_id] for o in objects_of(child["id"])]
+
+        def kinds_in(element_id: str, seen: frozenset[str] = frozenset()) -> set[str]:
+            """Every kind of element inside, at any depth: a group left unmade
+            passes its contents, tables included, up to the group around it."""
+            seen = seen | {element_id}
+            return {
+                kind
+                for child in children[element_id]
+                if child["id"] not in seen
+                for kind in {child["type"]} | kinds_in(child["id"], seen)
+            }
 
         def depth(element: dict) -> int:
             level, parent = 0, element.get("parentId")
@@ -1558,7 +1621,7 @@ class PageBuilder:
         ]
         for group in sorted(groups, key=depth, reverse=True):
             members = [o for c in children[group["id"]] for o in objects_of(c["id"])]
-            kinds = {by_id[c["id"]]["type"] for c in children[group["id"]]}
+            kinds = kinds_in(group["id"])
             entry = self.line(group, C.NATIVE)
             if len(members) >= 2 and not kinds & UNGROUPABLE:
                 group_id = oid(group["id"])

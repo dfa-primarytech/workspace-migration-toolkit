@@ -1,5 +1,33 @@
 # Handoff
 
+- Agent: Claude Code (Publisher)
+- Date: 2026-09-30
+- Branch: `fix/publisher-planning-crashes`, based on main `2d80316`
+- Objective: fix the high-priority Publisher audit issues #105, #106, #107 and #110 (claimed on each issue).
+- Files changed:
+  - `units.py` (`Frame.corners` no longer goes through `transform`);
+  - `publisher_slides.py` (`_image` refuses a picture with no area; `_shape` hands a flat rectangle/ellipse to the new `_flat`; `group_all` checks kinds at every depth and counts WordArt's wrapper; `_wordart` cleans its text; `_text` reports pictures set in a text box);
+  - `publisher_inline.py` (`marks` reads a text box's own `paragraphs`);
+  - `tests/platform/test_publisher_planning.py` (new, 12);
+  - `docs/publisher-renderer.md`, this file.
+- Completed:
+  - #105: a zero-height or zero-width element no longer crashes planning. A flat rectangle/ellipse is drawn as the line it looks like; a picture with no area is reported, not drawn.
+  - #106: a table inside a nested group stops every enclosing group being made.
+  - #110: WordArt inside an authored group is grouped; a control character in WordArt text is dropped instead of failing `check()`.
+  - #107: U+FFFC in text boxes is now counted, so a picture there can't be taken for a table's. A recovered text-box picture is reported as missing on its box (`inline-picture-missing`), not placed: its position in the text isn't known.
+  - All 12 new tests fail on main and pass here.
+- Checks: 519 platform tests passed, 14 skipped; Ruff clean. Mypy reports only `hypercorn` missing from the local venv (`server.py`, untouched). Pillow 12.3.0 (the pinned version) is now installed in the local `.venv`, so the Publisher tests run locally.
+- Known failures: none.
+- Unresolved:
+  - #107: placing text-box inline pictures properly would need their position in the laid-out text.
+  - Not live-verified against Slides.
+- Decisions: none new.
+- Next task: #108, #109, #111 (Publisher). A second Claude session is taking the DOCX issues (#114, #134, #113, then #55/#112/#115/#117/#135); don't edit `docx.py`/`docs.py` from here.
+- Warnings: none new.
+---
+
+## Previous handoff
+
 - Agent: Claude Code (second session, DOCX stream)
 - Date: 2026-09-30
 - Branch: `fix/docx-placement-sections`, the top of a stack on main `2d80316`: `fix/docx-page-size` (#114) <- `fix/docx-same-page-geometry` (#134) <- this (#112, #115, #116, #117, #118, #135). `fix/docx-textbox-ends-container` (#113) is on main by itself.
@@ -39,7 +67,6 @@
     #129 (PR #164, top-level catch in main, exit 4, allocation-free last-resort report; PUBIR_FAIL_FOR_TESTING hook). Green in run 36713758504 and ready for review.
 - Next task: the empty-drawing residue (#20) the #113 tests ran into. #150 is the Publisher session's (PR #160).
 - Warnings: merge the stack in order (#114, #134, then the placement PR); after a squash merge, the next branch needs rebasing onto main. #113 conflicts with nothing in the stack.
-
 ---
 
 ## Previous handoff
@@ -68,32 +95,3 @@
 - Decisions: DECISIONS.md, 2026-09-29 (keep tables on the page, readable text first).
 - Next task: the bullet gap, then hiding internal notes from staff.
 - Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 20:42 UTC). `wmt-test-live` runs `wmt-test/app:pub17`. Parsed PUB-002 bundles are under `/root/wmt-test/private`; never commit them.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code / QuietHeron (Publisher)
-- Date: 2026-09-29
-- Branch: `feat/publisher-tables`, based on main `bc0a4be` (#99 merged)
-- Objective: PUB-002's tables: grid lines and the book covers missing from their cells.
-- Files changed:
-  - `publisher_slides.py` (`grid_borders`; `_inline`, `_with_room`, `rough_height`; U+FFFC dropped from text);
-  - `publisher_inline.py` (new), `publisher_art.py` (`Prepared.inline`), `publisher.py`;
-  - parser: `main.cpp`, `model.h`, `collector.h`, `bundle.cpp` write `drawing-pictures.bin` (EscherDelayStm); `tests/test_bundle.cpp`;
-  - tests: `test_publisher_inline.py` (new, 6), `test_publisher_slides.py`;
-  - `docs/publisher-parser.md`, `docs/publisher-renderer.md`, DECISIONS.md, this file.
-- Completed:
-  - Grid: no record in either booklet holds a border (dumped with a debug libmspub build), yet all print a thin black grid (the owner's print previews). Tables get 0.75 pt black on every cell.
-  - Covers: all 7 recovered (inline pictures; libmspub drops shapes not on a page) and placed over their cells.
-  - Verified live on PUB-002: pages 11, 12 and 14 match the Publisher screenshots.
-- Checks: 502 platform tests passed, 12 skipped; Ruff and mypy clean; the app image builds with the parser's C++ tests passing.
-- Known failures: none.
-- Unresolved:
-  - Page 3's table runs off the page: table rows aren't fitted to their text as text boxes are (next task).
-  - Page 18's bullets sit tight against centred text.
-  - The on-screen summaries show the reader's internal notes.
-  - The debug libmspub patch (table dumps) is only in `/root/wmt-test/dbg` on CT 203, never in the repo.
-- Decisions: DECISIONS.md, 2026-09-29 (table grids, and pictures set in text).
-- Next task: fit table rows to the page (page 3); the bullet gap; hide internal notes from staff.
-- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 20:42 UTC). `wmt-test-live` runs `wmt-test/app:pub14`. Parsed PUB-002 bundles are under `/root/wmt-test/private`; never commit them.

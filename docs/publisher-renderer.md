@@ -33,17 +33,20 @@ bundle/ (document.json, assets.json, assets/)
 | Picture | `createImage`, stretched to its frame as Publisher's bitmap fill is | NATIVE |
 | Turned picture | Placed by its outline polygon, not its bounding box | NATIVE |
 | Rectangle, ellipse | `RECTANGLE` / `ELLIPSE` with fill and outline | NATIVE (SUBSTITUTED if a gradient became one colour) |
+| Rectangle or ellipse with no height or no width | The line its outline draws (Slides can't make a shape with no area) | SUBSTITUTED; IGNORED if it has no outline |
 | Straight strokes with no filled area (rules, polylines) | One editable line per segment, grouped | SUBSTITUTED (NATIVE for a single line) |
 | Filled or curved drawing | A picture of it | FLATTENED |
 | Drawing with no stroke and no area | Nothing | IGNORED, reported |
 | Table | `createTable`, column widths, minimum row heights, merges, cell text and fill; Publisher's default grid (0.75 pt black on every cell) | SUBSTITUTED: the file stores no borders to read |
 | Picture set inline in text (U+FFFC) | Recovered from the drawing records (`publisher_inline.py`) and placed over its table cell, centred as its paragraph is, with that line's space above kept free for it | NATIVE, reported: Slides can't hold a picture in a table |
+| Picture set inline in a text box | Not placed: where it falls in the text isn't known | Reported on the text box as missing |
 | Border art | Each border's tiles combined into one picture | FLATTENED |
-| Authored group | `groupObjects` over what its contents became | NATIVE; reported if it holds a table or fewer than two items |
+| Authored group | `groupObjects` over what its contents became, WordArt included | NATIVE; reported if it holds a table at any depth, or fewer than two items |
 | Wrapper layer | Nothing of its own; its contents are drawn | IGNORED |
 | Hidden element | Nothing | IGNORED |
 | Unknown element | Nothing | UNSUPPORTED |
 | Picture that could not be read | A dashed red box saying so, where it was | UNSUPPORTED |
+| Picture with no height or no width | Nothing: there is no space to mark | UNSUPPORTED, reported |
 
 Paint order is creation order: each page's elements are made in `zIndex`
 order, so the last thing Publisher drew is on top.
