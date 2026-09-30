@@ -27,7 +27,10 @@ struct Limits {
   long long maxTotalAssetBytes = 256LL * 1024 * 1024;
   long long maxTextBytes = 64LL * 1024 * 1024;
   long long maxParagraphsPerContainer = 100000;
-  long long maxTableCells = 200000;
+  long long maxTableCells = 200000; // ordinary and covered cells alike
+  // Rows get their own cap: an empty row holds no cells, so a stream of
+  // them never reaches the cell cap.
+  long long maxTableRows = 200000;
   long long maxPathCommands = 100000;
   long long maxPointsPerShape = 100000;
   long long maxDiagnostics = 20000;

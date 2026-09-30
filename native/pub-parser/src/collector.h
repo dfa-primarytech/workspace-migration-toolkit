@@ -102,6 +102,8 @@ private:
   long long enter(const char *name);
   bool halted() const { return halt_; }
   void halt(const std::string &code, const std::string &message);
+  // Halts and returns true once the table cell cap is reached.
+  bool tableCellCapReached();
 
   void diagnose(const char *severity, const std::string &code, const std::string &message,
                 long long eventIndex = -1, const std::string &elementId = std::string());
@@ -193,6 +195,7 @@ private:
 
   long long totalAssetBytes_ = 0;
   long long tableCells_ = 0;
+  long long tableRows_ = 0;
   std::map<std::string, std::string> assetByHash_; // sha256 -> asset id
 };
 

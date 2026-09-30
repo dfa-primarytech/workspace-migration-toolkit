@@ -1291,6 +1291,10 @@ void IrCollector::openTableRow(const librevenge::RVNGPropertyList &props) {
     diagnose("warning", "row-without-table", "openTableRow arrived with no open table", event);
     return;
   }
+  if (tableRows_ >= limits_.maxTableRows) {
+    halt("limit-table-rows", "table row limit reached; remaining content is counted but not collected");
+    return;
+  }
   Element *table = elementById(tableStack_.back().elementId);
   if (table == nullptr) return;
 
@@ -1305,6 +1309,7 @@ void IrCollector::openTableRow(const librevenge::RVNGPropertyList &props) {
     row.heightIsMinimum = row.height.valid;
   }
   table->table.rows.push_back(std::move(row));
+  tableRows_++;
   tableStack_.back().rowOpen = true;
 }
 
@@ -1319,6 +1324,12 @@ void IrCollector::closeTableRow() {
   tableStack_.back().cellOpen = false;
 }
 
+bool IrCollector::tableCellCapReached() {
+  if (tableCells_ < limits_.maxTableCells) return false;
+  halt("limit-table-cells", "table cell limit reached; remaining content is counted but not collected");
+  return true;
+}
+
 void IrCollector::openTableCell(const librevenge::RVNGPropertyList &props) {
   const long long event = enter("openTableCell");
   if (halt_) return;
@@ -1326,10 +1337,7 @@ void IrCollector::openTableCell(const librevenge::RVNGPropertyList &props) {
     diagnose("warning", "cell-without-row", "openTableCell arrived with no open table row", event);
     return;
   }
-  if (tableCells_ >= limits_.maxTableCells) {
-    halt("limit-table-cells", "table cell limit reached; remaining content is counted but not collected");
-    return;
-  }
+  if (tableCellCapReached()) return;
   Element *table = elementById(tableStack_.back().elementId);
   if (table == nullptr || table->table.rows.empty()) return;
 
@@ -1368,6 +1376,9 @@ void IrCollector::insertCoveredTableCell(const librevenge::RVNGPropertyList &pro
              "insertCoveredTableCell arrived with no open table row", event);
     return;
   }
+  // Checked like an ordinary cell (#127): a covered cell holds no content,
+  // but it is still a cell kept in memory, with its properties.
+  if (tableCellCapReached()) return;
   Element *table = elementById(tableStack_.back().elementId);
   if (table == nullptr || table->table.rows.empty()) return;
 
