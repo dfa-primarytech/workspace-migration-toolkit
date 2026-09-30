@@ -207,6 +207,19 @@ def validate_references(
         identifier = element.get("id")
         if identifier in seen_ids:
             problems.append(Problem(path, f"duplicate element id {identifier!r}"))
+
+        # Checked before this element's own id is recorded: after it, an
+        # element naming itself as parent looked like an earlier one (#125).
+        # Requiring an earlier element also rules out every longer cycle,
+        # since some element in a cycle must name one that comes after it.
+        parent = element.get("parentId")
+        if parent is not None and parent == identifier:
+            problems.append(Problem(path, "element is its own parent"))
+        elif parent is not None and parent not in seen_ids:
+            # Children follow their parent in paint order, so a forward
+            # reference means the ordering is wrong, not just the id.
+            problems.append(Problem(path, f"parentId {parent!r} is not an earlier element"))
+
         seen_ids.add(identifier)
         element_ids.add(identifier)
 
@@ -214,12 +227,6 @@ def validate_references(
             problems.append(
                 Problem(path, "element pageIndex does not match the page it is listed under")
             )
-
-        parent = element.get("parentId")
-        if parent is not None and parent not in seen_ids:
-            # Children follow their parent in paint order, so a forward
-            # reference means the ordering is wrong, not just the id.
-            problems.append(Problem(path, f"parentId {parent!r} is not an earlier element"))
 
         if element.get("type") == "image":
             image = element.get("image", {})
@@ -243,6 +250,15 @@ def validate_references(
 
     for page_index, page in enumerate(document.get("pages", [])):
         z_values = [element.get("zIndex") for element in page.get("elements", [])]
+        if not all(isinstance(z, int) and not isinstance(z, bool) for z in z_values):
+            # Sorting a missing zIndex (None) against numbers raised TypeError,
+            # which lost every problem already found, including the schema's
+            # own "zIndex is required" (#125). Reported instead; the order
+            # checks below need every value.
+            problems.append(
+                Problem(f"pages[{page_index}]", "an element has no whole-number zIndex")
+            )
+            continue
         if z_values != sorted(z_values):
             problems.append(Problem(f"pages[{page_index}]", "elements are not listed in z-order"))
         if z_values and z_values != list(range(len(z_values))):

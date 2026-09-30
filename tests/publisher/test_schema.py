@@ -210,6 +210,33 @@ class ReferenceValidationTest(unittest.TestCase):
         problems = validation.validate_references(document, {"assets": []})
         self.assertTrue(any("earlier element" in p.message for p in problems))
 
+    def test_an_element_that_is_its_own_parent_is_reported(self):
+        # #125: its own id was recorded first, so it looked like an earlier one.
+        document = minimal_document()
+        element = text_element("el_000001", 0)
+        element["parentId"] = "el_000001"
+        document["pages"][0]["elements"] = [element]
+        problems = validation.validate_references(document, {"assets": []})
+        self.assertTrue(any("its own parent" in p.message for p in problems), problems)
+
+    def test_a_longer_parent_cycle_is_reported(self):
+        # a -> c -> b -> a: somewhere in any cycle an element names a later one.
+        document = minimal_document()
+        a, b, c = (text_element(f"el_00000{n}", n - 1) for n in (1, 2, 3))
+        a["parentId"], b["parentId"], c["parentId"] = "el_000003", "el_000001", "el_000002"
+        document["pages"][0]["elements"] = [a, b, c]
+        problems = validation.validate_references(document, {"assets": []})
+        self.assertTrue(any("earlier element" in p.message for p in problems), problems)
+
+    def test_a_missing_z_index_is_reported_not_a_crash(self):
+        # #125: sorting None against numbers raised TypeError.
+        document = minimal_document()
+        first, second, third = (text_element(f"el_00000{n}", n - 1) for n in (1, 2, 3))
+        del first["zIndex"], third["zIndex"]
+        document["pages"][0]["elements"] = [first, second, third]
+        problems = validation.validate_references(document, {"assets": []})
+        self.assertTrue(any("zIndex" in p.message for p in problems), problems)
+
     def test_a_verified_compatibility_claim_is_rejected_in_a_parser_bundle(self):
         # The parser has checked nothing against Google. A bundle claiming
         # otherwise did not come from the parser.
@@ -270,3 +297,28 @@ class BundlePayloadTest(unittest.TestCase):
     def test_a_wrong_size_is_reported_once_not_twice(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(self._bundle(directory, b"picture", b"pic"), ["assets[0].byteLength"])
+
+
+class MalformedBundleTest(unittest.TestCase):
+    """#125: a malformed model is reported as problems, never a crash that
+    loses the problems already found."""
+
+    def test_a_bundle_missing_z_indexes_keeps_its_schema_problems(self):
+        document = minimal_document()
+        first, second = text_element("el_000001", 0), text_element("el_000002", 1)
+        del first["zIndex"], second["zIndex"]
+        document["pages"][0]["elements"] = [first, second]
+        with tempfile.TemporaryDirectory() as directory:
+            parts = {
+                "document": document,
+                "assets": {"schemaVersion": "1.0.0", "assets": []},
+                "report": {"schemaVersion": "1.0.0"},
+            }
+            for name, content in parts.items():
+                path = os.path.join(directory, f"{name}.json")
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(content, handle)
+            problems = validation.validate_bundle(directory)
+        schema = [p for p in problems if p.path.startswith("document.json:")]
+        self.assertTrue(any("zIndex" in p.message for p in schema), problems)
+        self.assertTrue(any("whole-number zIndex" in p.message for p in problems), problems)
