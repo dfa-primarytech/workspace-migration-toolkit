@@ -767,8 +767,13 @@ def font_requirements(package: Package) -> list[dict]:
                 entry["italic"] = entry["italic"] or italic
 
     requirements = [seen[key] for key in sorted(seen)]
+    # catalogue() keeps one spelling per family, however it is written
+    # ("Baskerville", "baskerville", " Baskerville"), so the answer is looked
+    # up by the same normalised name: every spelling gets it, and each is
+    # then substituted as it is written in the document (#119).
     compatibility_of = {
-        entry["name"]: entry for entry in catalogue({r["family"] for r in requirements})
+        normalise_family(str(entry["name"])): entry
+        for entry in catalogue({r["family"] for r in requirements})
     }
     for requirement in requirements:
         metadata = table.get(normalise_family(requirement["family"]))
@@ -776,7 +781,7 @@ def font_requirements(package: Package) -> list[dict]:
             requirement["metadata"] = metadata
             requirement["embedded"] = bool(metadata.get("embedded"))
         requirement["symbol"] = is_symbol_font(metadata)
-        requirement["compatibility"] = compatibility_of.get(requirement["family"])
+        requirement["compatibility"] = compatibility_of.get(normalise_family(requirement["family"]))
     return requirements
 
 
