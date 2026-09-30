@@ -156,9 +156,24 @@ docker run --rm -p 8080:8080 --env-file .env workspace-toolkit
 The container runs as a non-root user and listens on `$PORT`. `/healthz` checks
 process availability, not Google readiness. Cloud Run configuration is documented
 in `deploy/cloud-run.example.yaml`; it is a template, not an automatic deployment.
-Use a 300-second service request timeout, concurrency 2, and adequate memory for
-both parser children and temporary files (the example uses 2 GiB). Application
-jobs time out after 240 seconds; parser children after 30 seconds. The initial
+Use a 3600-second service request timeout (Cloud Run's maximum, as the
+example sets), concurrency 2, and adequate memory for both parser children and
+temporary files (the example uses 2 GiB).
+
+The request timeout must stay above the app's own deadlines, which grow with
+the file (`config.py`):
+
+- **The job** (`job_timeout_for`): 240 seconds, plus one second for every
+  512 KiB of the file, capped at `job_timeout_ceiling` (3300 seconds). The cap
+  sits under the 3600-second request timeout, so the app stops a job and
+  reports it itself, rather than Cloud Run cutting the request off with no
+  report. A file picked from Drive is timed again once its real size is known.
+- **The parser child** (`parser_timeout_for`): 30 seconds, plus one second for
+  every 4 MiB, doubled when pictures are being made smaller. It runs inside the
+  job, so the job's deadline still bounds it.
+
+A shorter request timeout (such as the 300 seconds this page once gave) would
+end large conversions before the app's own deadline, with no report. The initial
 version is synchronous, with no durable queue, cross-request job store or crash
 recovery. A platform shutdown can interrupt a conversion.
 
