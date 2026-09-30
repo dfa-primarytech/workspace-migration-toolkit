@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import sys
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -20,6 +21,24 @@ def workspace(settings: Settings):
     with TemporaryDirectory(prefix="wmt-", dir=settings.temp_dir) as directory:
         root = Path(directory)
         yield uuid4().hex, root
+
+
+def stop(process: asyncio.subprocess.Process) -> None:
+    """Kills the worker and everything it started (#130).
+
+    The worker runs the Publisher parser with subprocess.run, which waits in
+    the worker: killing only the worker left the parser running, outside the
+    job limit, writing into a folder about to be deleted. The worker leads its
+    own process group, so the whole group goes, even once the worker itself
+    has exited. On Windows (development only) just the worker is stopped.
+    """
+    if sys.platform != "win32":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # everything in it has already gone
+    elif process.returncode is None:
+        process.kill()
 
 
 async def preflight(
@@ -65,20 +84,20 @@ async def preflight(
             for k, v in os.environ.items()
             if k.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"}
         },
+        # Its own process group, so stopping it stops what it started too.
+        start_new_session=sys.platform != "win32",
     )
     try:
         await asyncio.wait_for(process.wait(), timeout=timeout)
     except TimeoutError:
-        if process.returncode is None:
-            process.kill()
+        stop(process)
         await process.wait()
         raise ToolkitError("parser_timeout", "This file took too long to analyse.", 422) from None
     except asyncio.CancelledError:
         # Not a slow file: the client went away, or the whole job ran out of
         # time. Stop the worker and let the cancellation through, so the job
         # timeout is reported as itself rather than as a parser timeout.
-        if process.returncode is None:
-            process.kill()
+        stop(process)
         await asyncio.shield(process.wait())
         raise
     if process.returncode:
