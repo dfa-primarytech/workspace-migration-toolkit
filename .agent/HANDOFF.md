@@ -23,7 +23,8 @@
   - #152 (#131): `WMT_REQUIRE_READERS=1` in both validity workflows makes a missing LibreOffice fail its tests; the DOCX job also fails on any skip.
   - #154 (#130): the worker leads its own process group and a stopped job kills the whole group, parser included. Linux-only tests; draft PR #155 runs them on main's code to show they fail there (close it after).
   - Filed #150 (an expired sign-in fails every remaining Publisher page), from Claude 2's review of #139.
-- Next task: #150; then the native parser issues (#126-#129) if a Linux build is available. Claude 2 has #119, #122, #123, #125 and #146. `pptx.py`/`pictures.py`/`package.py` are Platform-owned: say so if the Platform stream is active.
+  - #150, stacked on #145 (`fix/publisher-expired-sign-in`): Slides answering a page with 401 or 403 stops the conversion (`session_expired` / `google_forbidden`, detail `stopped_at_page_N`) instead of failing every later page; the partial report and links are kept.
+- Next task: none claimed. Claude 2 is taking the native parser issues (#126-#129) through Linux CI. `pptx.py`/`pictures.py`/`package.py` are Platform-owned: say so if the Platform stream is active.
 - Warnings: in this environment, a heredoc passed through Python can lose a backslash level: after writing a regex that way, search the file for control characters (bytes 1 to 8), or write the edit with the Edit tool instead.
 ---
 

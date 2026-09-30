@@ -182,9 +182,11 @@ class FakeGoogle:
         page_size=A5_EMU,
         lose_reply=False,
         store_fails=lambda n: False,
+        refuse_from: tuple[int, int] | None = None,
     ):
         self.refuse = refuse  # objectIds whose pictures Slides "cannot fetch"
         self.store_fails = store_fails  # given the upload's number (from 1): answer 503?
+        self.refuse_from = refuse_from  # (batch number, status): refuse every batch from then
         self.uploads = 0
         self.page_size = page_size
         self.lose_reply = lose_reply
@@ -295,6 +297,8 @@ class FakeGoogle:
 
     def batch(self, requests: list[dict]) -> httpx.Response:
         self.batches += 1
+        if self.refuse_from and self.batches >= self.refuse_from[0]:
+            return httpx.Response(self.refuse_from[1], json={"error": {"message": "no"}})
         # Atomic, as Slides is: check everything before changing anything.
         lengths = {k: len(v.get("text", "")) for k, v in self.objects.items()}
         for index, request in enumerate(requests):
@@ -695,3 +699,32 @@ def test_a_copy_is_given_up_quietly_when_the_token_cannot_be_had():
             return await Bucket("b", SIGNER, Broken(client), client).delete("publisher/x.png")
 
     assert asyncio.run(go()) is False
+
+
+# ------------------------------------------------------------------ access lost mid-way (#150)
+
+
+@pytest.mark.parametrize("status, code", [(401, "session_expired"), (403, "google_forbidden")])
+def test_losing_access_stops_the_conversion_instead_of_failing_every_page(
+    tmp_path, monkeypatch, status, code
+):
+    # Batch 1 sets the slides up, batch 2 is page 1: access goes at page 2.
+    fake = FakeGoogle(refuse_from=(3, status))
+    root, manifest = picture_pages(tmp_path, 4)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert fake.batches == 3, "no page is tried after access has gone"
+    assert report["status"] == "failed_with_partial_outputs"
+    assert report["url"].startswith("https://docs.google.com/presentation/d/")
+    (note,) = [w for w in report["warnings"] if w["code"] == code]
+    assert note["detail"] == "stopped_at_page_2"
+    assert "The first 1 page(s) are in the conversion folder" in note["message"]
+    assert "pages_failed" not in [w["code"] for w in report["warnings"]]
+
+
+def test_a_page_google_refuses_for_its_content_still_lets_the_rest_through(tmp_path, monkeypatch):
+    fake = FakeGoogle(refuse_from=(3, 400))
+    root, manifest = picture_pages(tmp_path, 3)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert fake.batches == 4  # pages 2 and 3 are each still tried
+    assert report["status"] == "completed_with_warnings"
+    assert "pages_failed" in [w["code"] for w in report["warnings"]]
