@@ -208,7 +208,10 @@ limits but have no OS address-space cap.
 most of it the job folder, which on Cloud Run is RAM. Two 94 MiB jobs at once
 peaked at 751 MiB. **Size limits that remain are Google's**: its published
 conversion limits are 50 MB to Docs and 100 MB to Slides or Sheets. A larger
-file is warned about (`beyond_import_limit`) before converting, not refused.
+file is warned about (`beyond_import_limit`) before converting, not refused. If
+Google then turns it down (its upload, or a call on the converted file,
+fails), the reason given for the failure (`stoppedBecause`) names that limit
+in plain words instead of a generic upload failure.
 **Embedded video is taken out before a deck goes to Google** (issue #36): Slides
 does not import embedded video (`docs/research.md`), and the conversion saves
 each video to the conversion folder anyway. The video's part, its relationships
