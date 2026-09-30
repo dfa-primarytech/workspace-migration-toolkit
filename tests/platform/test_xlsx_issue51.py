@@ -126,6 +126,19 @@ def test_native_import_uses_the_actual_worker_package_and_mime(tmp_path, suffix,
     assert package[4] == {"convert": True, "target": SHEETS_MIME}
 
 
+def test_a_clean_workbook_is_still_converted_with_review(tmp_path):
+    """#123: nothing in the read-back checks formulas, formatting, charts or
+    protection, so even a workbook with no findings at all is sent for a look.
+    Plain "converted" is kept for stronger verification (docs/xlsx-migration.md)."""
+    source = generated_workbook(tmp_path / "source.xlsx")
+    # As if preflight found nothing at all (the shared fixture has formulas).
+    manifest = {**analyse(source, tmp_path / "result"), "warnings": []}
+    report = asyncio.run(convert(tmp_path, manifest, RecordingGoogle()))
+
+    assert report["status"] == report["migrationTier"] == "converted_with_review"
+    assert [w["code"] for w in report["warnings"]] == ["workbook_review_required"]
+
+
 def test_chart_sheet_is_inventoried_and_preserved_with_a_review_warning(tmp_path):
     source = generated_workbook(tmp_path / "source.xlsx", chart_sheet=True)
     manifest = analyse(source, tmp_path / "result")

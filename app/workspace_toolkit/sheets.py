@@ -142,7 +142,12 @@ async def convert(
             )
             report["warnings"].extend(verify(manifest, spreadsheet))
             report["verification"] = "sheet_count_names_and_visibility_checked"
-            report["status"] = "converted_with_review" if report["warnings"] else "converted"
+            # Always with review: the read-back checks the sheets' structure,
+            # names, types and visibility, not formulas, formatting, charts,
+            # pivots, validation or protection, so verify() always asks for a
+            # look. Plain "converted" is kept for stronger verification than
+            # this (docs/xlsx-migration.md), not for a workbook with no notes.
+            report["status"] = "converted_with_review"
             report["migrationTier"] = report["status"]
     except ToolkitError as exc:
         report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
