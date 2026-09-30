@@ -93,21 +93,31 @@ UNSUPPORTED_GRAPHICS = {
     "http://schemas.openxmlformats.org/drawingml/2006/diagram": "SmartArt diagram",
 }
 
-# Word's positioning frames map onto the table-positioning ones directly.
+# Word's positioning frames that map onto the table-positioning ones directly.
+# The margin *areas* (MARGIN_AREAS) do not: a table has no frame for them.
 ANCHOR_FRAMES = {
     "page": "page",
     "margin": "margin",
-    "leftMargin": "margin",
-    "rightMargin": "margin",
-    "topMargin": "margin",
-    "bottomMargin": "margin",
-    "insideMargin": "margin",
-    "outsideMargin": "margin",
     "column": "text",
     "character": "text",
     "paragraph": "text",
     "line": "text",
 }
+
+# The strip of paper each margin frame measures from (ECMA-376 20.4.3.4/5):
+# the left and top margins start at the paper's edge, the right and bottom
+# ones where the text area ends.
+MARGIN_AREAS = {
+    "H": {"leftMargin": "near", "rightMargin": "far"},
+    "V": {"topMargin": "near", "bottomMargin": "far"},
+}
+# Inside and outside swap sides between odd and even pages, and which page an
+# object lands on is not known here. A position measured from them, or aligned
+# to them within a margin strip, is placed as it always was -- against the text
+# area -- and marked uncertain, so the report can say to check it.
+PAGE_SIDED_FRAMES = {"insideMargin", "outsideMargin"}
+PAGE_SIDED_ALIGN = {"inside", "outside"}
+AREA_EDGES = {"H": ("width", "left", "right"), "V": ("height", "top", "bottom")}
 
 ALIGN_KEYWORDS = {"left", "right", "center", "inside", "outside", "top", "bottom"}
 
@@ -174,16 +184,94 @@ def classify(anchor: Element) -> tuple[str, str]:
     return "unsupported", "floating object"
 
 
-def anchor_position(anchor: Element, axis: str) -> dict | None:
+def margin_area(axis: str, relative_from: str, geometry: dict | None) -> tuple[int, int] | None:
+    """Where one margin strip starts on the paper, and how deep it is, in EMU.
+
+    None when the section does not state what is needed to say.
+    """
+    side = MARGIN_AREAS[axis][relative_from]
+    extent, near, far = AREA_EDGES[axis]
+    geometry = geometry or {}
+    if side == "near":
+        depth = geometry.get(near)
+        return None if depth is None else (0, depth)
+    paper, depth = geometry.get(extent), geometry.get(far)
+    return None if paper is None or depth is None else (paper - depth, depth)
+
+
+def _margin_area_position(
+    pos: Element, anchor: Element, axis: str, geometry: dict | None
+) -> dict | None:
+    """A position in a margin strip, restated from the paper's own edge.
+
+    A table can only be placed against the page, the margin (the text area)
+    or the text, so keeping the offset and calling the frame "margin" put a
+    right-margin note on top of the body text.
+    """
+    relative_from = pos.get("relativeFrom") or ""
+    area = margin_area(axis, relative_from, geometry)
+    if area is None:
+        return None
+    start, depth = area
+    offset = pos.find(q("wp", "posOffset"))
+    if offset is not None:
+        value = emu((offset.text or "").strip())
+        if value is None:
+            return None
+        return {"mode": "offset", "emu": start + value, "frame": "page"}
+    align = pos.find(q("wp", "align"))
+    keyword = (align.text or "").strip() if align is not None else ""
+    if keyword in PAGE_SIDED_ALIGN:
+        return {"mode": "align", "align": keyword, "frame": "margin", "uncertain": True}
+    extent = anchor_extent(anchor)
+    if keyword not in ALIGN_KEYWORDS or extent is None:
+        return None
+    size = extent["cx" if axis == "H" else "cy"]
+    at = {"left": 0, "top": 0, "center": (depth - size) // 2}
+    at |= {"right": depth - size, "bottom": depth - size}
+    return {"mode": "offset", "emu": start + at[keyword], "frame": "page"}
+
+
+def on_an_unknown_side(anchor: Element) -> bool:
+    """Whether this anchor's position depends on the page being odd or even."""
+    for axis in ("H", "V"):
+        pos = anchor.find(q("wp", "position" + axis))
+        if pos is None:
+            continue
+        frame = pos.get("relativeFrom") or ""
+        align = pos.find(q("wp", "align"))
+        keyword = (align.text or "").strip() if align is not None else ""
+        if frame in PAGE_SIDED_FRAMES:
+            return True
+        if frame in MARGIN_AREAS[axis] and keyword in PAGE_SIDED_ALIGN:
+            return True
+    return False
+
+
+def anchor_position(anchor: Element, axis: str, geometry: dict | None = None) -> dict | None:
     """Reads <wp:positionH>/<wp:positionV> as structure, not a single number.
 
     A keyword alignment and an absolute offset become different attributes on
     the table (tblpXSpec vs tblpX), so the distinction has to survive.
+
+    `geometry` is the page_geometry of the anchor's section. A position in a
+    margin strip needs it to become a position on the page; without it, that
+    position is unusable. One that depends on which side of a spread the page
+    is (see PAGE_SIDED_FRAMES) is read as before and marked "uncertain".
     """
     pos = anchor.find(q("wp", "position" + axis))
     if pos is None:
         return None
-    frame = ANCHOR_FRAMES.get(pos.get("relativeFrom") or "", "text")
+    relative_from = pos.get("relativeFrom") or ""
+    if relative_from in MARGIN_AREAS[axis]:
+        return _margin_area_position(pos, anchor, axis, geometry)
+    if relative_from in PAGE_SIDED_FRAMES:
+        found = _plain_position(pos, "margin")
+        return None if found is None else {**found, "uncertain": True}
+    return _plain_position(pos, ANCHOR_FRAMES.get(relative_from, "text"))
+
+
+def _plain_position(pos: Element, frame: str) -> dict | None:
     offset = pos.find(q("wp", "posOffset"))
     if offset is not None:
         value = emu((offset.text or "").strip())
@@ -242,7 +330,9 @@ def header_footer_parts(package: Package) -> list[str]:
     return sorted(name for name in package.names if HEADER_FOOTER.match(name))
 
 
-def _element_pairs(root: Element, id_prefix: str) -> list[tuple[Element, dict]]:
+def _element_pairs(
+    root: Element, id_prefix: str, geometry_of=lambda anchor: None
+) -> list[tuple[Element, dict]]:
     """Every anchor in `root`, paired with the manifest element built from it.
 
     Anchors inside mc:Fallback are a legacy restatement of the shape in the
@@ -258,8 +348,9 @@ def _element_pairs(root: Element, id_prefix: str) -> list[tuple[Element, dict]]:
     pairs = []
     for index, anchor in enumerate(a for a in root.iter(q("wp", "anchor")) if a not in duplicates):
         kind, label = classify(anchor)
-        position_h = anchor_position(anchor, "H")
-        position_v = anchor_position(anchor, "V")
+        geometry = geometry_of(anchor)
+        position_h = anchor_position(anchor, "H", geometry)
+        position_v = anchor_position(anchor, "V", geometry)
         element = {
             "id": f"{id_prefix}_{index + 1:03d}",
             "type": ELEMENT_TYPES[kind],
@@ -270,7 +361,9 @@ def _element_pairs(root: Element, id_prefix: str) -> list[tuple[Element, dict]]:
             "zIndex": index,
             "visibility": anchor.get("behindDoc") != "1",
             "compatibility": COMPATIBILITY[kind],
-            "warnings": element_warnings(kind, label, position_h, position_v),
+            "warnings": element_warnings(
+                kind, label, position_h, position_v, on_an_unknown_side(anchor)
+            ),
         }
         pairs.append((anchor, element))
     return pairs
@@ -286,8 +379,12 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
     sections = page_sizes(body)
     buckets: list[list[dict]] = [[] for _ in sections]
     section_of = section_index(body, len(sections))
+    geometries = [page_geometry(sect) for sect in section_properties(body)] or [page_geometry(None)]
 
-    for anchor, element in _element_pairs(root, "element"):
+    def geometry_of(anchor: Element) -> dict:
+        return geometries[min(section_of(anchor), len(geometries) - 1)]
+
+    for anchor, element in _element_pairs(root, "element", geometry_of):
         buckets[section_of(anchor)].append(element)
 
     pages = [
@@ -314,7 +411,10 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
     for part_name in header_footer_parts(package):
         part_root = package.xml(part_name)
         prefix = part_name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-        for _anchor, element in _element_pairs(part_root, f"{prefix}_element"):
+        # Which sections use a given header is not modelled, so its margin
+        # strips are measured against the last section, like the rest of it.
+        final = lambda _anchor: geometries[-1]  # noqa: E731
+        for _anchor, element in _element_pairs(part_root, f"{prefix}_element", final):
             header_footer_elements.append({**element, "part": part_name})
 
     return {
@@ -331,7 +431,11 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
 
 
 def element_warnings(
-    kind: str, label: str, position_h: dict | None, position_v: dict | None
+    kind: str,
+    label: str,
+    position_h: dict | None,
+    position_v: dict | None,
+    unknown_side: bool = False,
 ) -> list[dict]:
     if kind == "unsupported":
         return [
@@ -348,6 +452,15 @@ def element_warnings(
             warning(
                 "textbox_unpositioned",
                 "This text box has no usable position and will be placed inline.",
+            )
+        ]
+    if unknown_side and kind in ("textbox", "picture"):
+        return [
+            warning(
+                "position_page_side_uncertain",
+                f"This {label} is positioned by the inside or outside margin, which "
+                "changes side between pages. It is placed as before; check its position.",
+                label=label,
             )
         ]
     return []
@@ -411,6 +524,24 @@ def _stated_length(size: Element, name: str, default: float) -> float:
     return value
 
 
+def page_geometry(sect_pr: Element | None) -> dict[str, int | None]:
+    """A section's page size and margins in EMU; None for anything unstated."""
+    size = sect_pr.find(q("w", "pgSz")) if sect_pr is not None else None
+    margins = sect_pr.find(q("w", "pgMar")) if sect_pr is not None else None
+    geometry: dict[str, int | None] = {}
+    for key, element, name in (
+        ("width", size, "w"),
+        ("height", size, "h"),
+        ("left", margins, "left"),
+        ("right", margins, "right"),
+        ("top", margins, "top"),
+        ("bottom", margins, "bottom"),
+    ):
+        value = twips(element.get(q("w", name))) if element is not None else None
+        geometry[key] = None if value is None else round(value * EMU_PER_DXA)
+    return geometry
+
+
 def body_blocks(container: Element | list[Element]):
     """Body-level blocks in document order, looking inside content controls."""
     for child in container:
@@ -419,6 +550,37 @@ def body_blocks(container: Element | list[Element]):
             content = child.find(q("w", "sdtContent"))
             if content is not None:
                 yield from body_blocks(content)
+
+
+def governing_sections(body: Element) -> dict[Element, Element | None]:
+    """Every body-level block, mapped to the section properties that lay it out.
+
+    A section's properties sit on the paragraph that *ends* it, so a block
+    belongs to the first break at or after it, and anything after the last
+    break to the body's own ``w:sectPr``. Never reads ``w:sectPrChange``,
+    which keeps the properties a tracked change replaced.
+    """
+    final = body.find(q("w", "sectPr"))
+    owner: dict[Element, Element | None] = {}
+    pending: list[Element] = []
+    for block in body_blocks(body):
+        pending.append(block)
+        if local(block.tag) == "p":
+            section = block.find(q("w", "pPr") + "/" + q("w", "sectPr"))
+            if section is not None:
+                owner.update(dict.fromkeys(pending, section))
+                pending = []
+    owner.update(dict.fromkeys(pending, final))
+    return owner
+
+
+def section_of(element: Element | None, parent_of: dict, owner: dict) -> Element | None:
+    """The section properties governing `element`, found through its block."""
+    while element is not None:
+        if element in owner:
+            return owner[element]
+        element = parent_of.get(element)
+    return None
 
 
 def _section_breaks(container: Element | list[Element]):
@@ -445,12 +607,17 @@ def _ends_section(child: Element) -> bool:
     return any(True for _ in _section_breaks([child]))
 
 
-def page_sizes(body: Element) -> list[dict]:
+def section_properties(body: Element) -> list[Element]:
+    """Every section's properties, in order, the body's own last."""
     sections = list(_section_breaks(body))
     body_level = body.find(q("w", "sectPr"))
     if body_level is not None:
         sections.append(body_level)
-    found = [page_size(sect) for sect in sections]
+    return sections
+
+
+def page_sizes(body: Element) -> list[dict]:
+    found = [page_size(sect) for sect in section_properties(body)]
     return found or [page_size(None)]
 
 

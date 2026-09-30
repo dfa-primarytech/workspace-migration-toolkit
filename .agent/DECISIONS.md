@@ -587,3 +587,27 @@ against real worksheets. A page end inside either one, or too great a distance, 
 picture floating and counts it in `picturesGeometryUncertain`, which now
 reaches the saved report (it was dropped before). The order-based pass
 refuses a run of pictures with a page break inside it.
+
+## 2026-09-30: Margin strips, page-sided frames, and each table's own section (#112, #115, #135)
+
+**Margin strips.** Word's `leftMargin`/`topMargin` frames start at the
+paper's edge and `rightMargin`/`bottomMargin` where the text area ends
+(ECMA-376 20.4.3.4/5). They were all treated as the text area. They are now
+restated as page offsets from the governing section's page size and margins,
+in one helper the parser and the placement passes share.
+
+**Inside and outside.** These swap sides between odd and even pages, and the
+page an object lands on is not known. Reading them as on an odd page would
+trade one wrong placement for another, and dropping the position would lose
+the object's place entirely. The owner chose: keep the position they get
+today (against the text area), and report it as uncertain
+(`positionsPageSideUncertain` in the conversion report, a
+`position_page_side_uncertain` warning in the analysis).
+
+**Sections.** Every table, row and placement is measured by the section
+that lays it out (the first section break at or after it, else the body's
+own `w:sectPr`), never the last section for everything, and never the old
+properties a tracked change keeps. This supersedes "measured by its last
+one" in `_final_section`'s docstring, which now serves only headers and
+footers: which sections use a header is not worked out, so a header is
+measured by the body's last section.
