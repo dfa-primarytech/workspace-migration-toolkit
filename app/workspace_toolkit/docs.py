@@ -274,6 +274,11 @@ def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> bool:
     # laid out landscape. Content belonging to this section must precede it.
     at = index if _ends_section(paragraph) else index + 1
     container.insert(at, table)
+    # Kept in step with what just moved: the box's paragraphs are now in the
+    # table's cell. A box nested in this one is anchored in one of them, and
+    # the map taken before would send it to the box it has left (#119).
+    parent_of[table] = container
+    parent_of.update(parents(table))
     _keep_tables_apart(container, at, rtl=is_rtl(paragraph))
     _end_with_paragraph(container, rtl=is_rtl(paragraph))
     return True
