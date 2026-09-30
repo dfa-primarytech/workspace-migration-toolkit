@@ -26,7 +26,13 @@
   - #120 (PR #148): `Google.request` retries GET/HEAD only, 3 attempts, Retry-After up to 30 s; writes are asked once.
   - #121 (PR #149): pipelines no longer upload the report; web.py saves it once, after the Drive, import-limit and pictures notes.
   - Filed #146 (a picture floating inside a text box stays floating in the new cell). Cross-reviewed the Publisher session's #138, #139, #140 and #145 (comments on each; no blockers).
-- Next task: #119, #146, and the empty-drawing residue (#20) the #113 tests ran into.
+  - Then, each its own PR on main (trial merges with every other open PR of mine are clean):
+    #146 (PR #153, pictures decided after text boxes, with a fresh parent map);
+    #119 (PR #156, font answers looked up by normalised name; the parent map kept in step with each box it moves);
+    #122 (PR #157, `model.text_tokens` on both sides: autoText, runs joined within a shape, hyphen variants; a word holding `w:sym` is left out, not mapped);
+    #125 (PR #158, validator: missing zIndex reported, self-parent reported);
+    #123 (PR #159, comment and fixed status only; no test can fail on main, stated in the PR).
+- Next task: the empty-drawing residue (#20) the #113 tests ran into. #126-#129 need the native parser built (Docker); left alone. #150 is the Publisher session's.
 - Warnings: merge the stack in order (#114, #134, then the placement PR); after a squash merge, the next branch needs rebasing onto main. #113 conflicts with nothing in the stack.
 
 ---
