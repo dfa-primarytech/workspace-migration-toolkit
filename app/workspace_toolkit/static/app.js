@@ -83,10 +83,14 @@ async function openPicker() {
   await new Promise(resolve => {
     // Folders can be opened, and every file in one selected at once: that
     // is how a whole folder is converted under the drive.file scope, which
-    // only lets the app open files the person picked.
-    const view = new google.picker.DocsView().setMimeTypes(mimeTypes).setIncludeFolders(true).setSelectFolderEnabled(false);
+    // only lets the app open files the person picked. Without a parent the
+    // view lists every folder in Drive at once, so it starts at My Drive;
+    // shared drives get their own tab, as a view can't start in both.
+    const folders = () => new google.picker.DocsView().setMimeTypes(mimeTypes).setIncludeFolders(true).setSelectFolderEnabled(false);
     const picker = new google.picker.PickerBuilder()
-      .addView(view)
+      .setTitle('Choose files to convert')
+      .addView(folders().setParent('root').setLabel('My Drive'))
+      .addView(folders().setEnableDrives(true).setLabel('Shared drives'))
       .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
       .setOAuthToken(accessToken)
       .setDeveloperKey(session.pickerApiKey)
