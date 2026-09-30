@@ -128,6 +128,32 @@ async def send(google: Google, presentation: str, slide: str, requests: list[dic
         delay *= 2
 
 
+# Slides refusing a page because the person's access has gone: an expired
+# sign-in (401) or lost permission (403). Not the page's fault, and not worth
+# asking again for every page after it.
+ACCESS_LOST = {401, 403}
+
+
+def access_lost(status: int, index: int) -> ToolkitError:
+    """Stops the conversion; the pages already made stay in the folder."""
+    made = f"The first {index} page(s) are in the conversion folder. " if index else ""
+    if status == 401:
+        return ToolkitError(
+            "session_expired",
+            f"Your Google sign-in expired during the conversion. {made}"
+            "Please sign in again and convert the file again.",
+            401,
+            detail=f"stopped_at_page_{index + 1}",
+        )
+    return ToolkitError(
+        "google_forbidden",
+        f"Google Slides stopped allowing changes to the presentation. {made}"
+        "Please sign in again and convert the file again.",
+        403,
+        detail=f"stopped_at_page_{index + 1}",
+    )
+
+
 # ------------------------------------------------------------------ one page
 
 
@@ -446,6 +472,9 @@ async def convert(
                     replaced.update(swapped)
                     unsent.update(marked)
                 except Refused as refusal:
+                    if refusal.status in ACCESS_LOST:
+                        # Every later page would be refused the same way (#150).
+                        raise access_lost(refusal.status, index) from None
                     failed_pages.append(index + 1)
                     refusals.append(
                         {"page": index + 1, "status": refusal.status, "request": refusal.kind}
