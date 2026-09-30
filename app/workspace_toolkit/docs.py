@@ -174,18 +174,23 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
         elif item.kind == "ink":
             _detach(item.drawing, item.anchor)
             report["ink"] += 1
-        elif item.kind == "picture":
-            if item.behind:
-                send_behind_text(item.anchor)
-            elif _inline_picture(parent_of, item, ids):
-                report["picturesInlined"] += 1
-            report["pictures"] += 1
         elif item.kind == "textbox":
             # Counted only when a table was actually produced. A report saying
             # four text boxes were converted, when four empty boxes were
             # skipped, describes work that did not happen.
             if _replace_textbox(parent_of, item, ids):
                 report["textboxes"] += 1
+    # Pictures last, against the tree as the text boxes left it: a picture
+    # floating inside a box has just moved into the cell the box became, and
+    # the map taken before would still place it in the box, not the cell (#146).
+    parent_of = parents(root)
+    for item in items:
+        if item.kind == "picture":
+            if item.behind:
+                send_behind_text(item.anchor)
+            elif _inline_picture(parent_of, item, ids):
+                report["picturesInlined"] += 1
+            report["pictures"] += 1
     return report
 
 
