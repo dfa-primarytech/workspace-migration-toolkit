@@ -270,7 +270,29 @@ def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> bool:
     at = index if _ends_section(paragraph) else index + 1
     container.insert(at, table)
     _keep_tables_apart(container, at, rtl=is_rtl(paragraph))
+    _end_with_paragraph(container, rtl=is_rtl(paragraph))
     return True
+
+
+def _last_block(container: Element) -> Element | None:
+    """The container's last block. A body's trailing w:sectPr is not one."""
+    blocks = [child for child in container if local(child.tag) != "sectPr"]
+    return blocks[-1] if blocks else None
+
+
+def _end_with_paragraph(container: Element, rtl: bool = False) -> None:
+    """Keeps a cell, header, footer or body ending in a paragraph, as Word
+    always writes them, when a table has just become its last block.
+
+    Placed before the body's w:sectPr, never after it: section properties
+    must be the body's last child.
+    """
+    last = _last_block(container)
+    if last is None or local(last.tag) != "tbl":
+        return
+    if local(container.tag) not in MUST_END_WITH_A_PARAGRAPH:
+        return
+    container.insert(list(container).index(last) + 1, new_paragraph(rtl))
 
 
 def _ends_section(paragraph: Element) -> bool:
@@ -597,7 +619,10 @@ def remove_empty_paragraphs(root: Element, already_empty: set[Element]) -> None:
         # whose last block is a table leaves a cell ending in w:tbl, and the
         # paragraph appended to fix that is itself blank -- so without this it
         # is removed again on the way out.
-        if siblings[-1] is paragraph and local(container.tag) in MUST_END_WITH_A_PARAGRAPH:
+        if (
+            _last_block(container) is paragraph
+            and local(container.tag) in MUST_END_WITH_A_PARAGRAPH
+        ):
             continue
         # A paragraph wedged between two tables is what stops them merging.
         at = siblings.index(paragraph)
