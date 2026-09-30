@@ -51,8 +51,31 @@ def import_limit_warning(key: str, size: int) -> list[dict]:
             classification=C.UNSUPPORTED,
             sizeBytes=size,
             limitBytes=limit,
+            product=product,
         )
     ]
+
+
+# How Google turning a file down shows here: its upload failing, or a call on
+# the converted file failing. Too large for Google is the likely cause when the
+# file was already over Google's published limit (#36).
+REFUSED_BY_GOOGLE = {"upload_uncertain", "google_failed"}
+
+
+def name_the_limit(report: dict, beyond: list[dict]) -> None:
+    """Says plainly which limit a failed conversion ran into, where it was
+    Google's size limit, so the person isn't left with a generic failure."""
+    if not beyond or not str(report.get("status", "")).startswith("failed"):
+        return
+    if not any(w.get("code") in REFUSED_BY_GOOGLE for w in report.get("warnings", [])):
+        return
+    note = beyond[0]
+    size, limit, product = note["sizeBytes"], note["limitBytes"], note["product"]
+    report["stoppedBecause"] = (
+        f"Google didn't convert it. The file is {size / 1_000_000:,.0f} MB, and Google's limit "
+        f"for converting to {product} is {limit // 1_000_000} MB. If it holds photographs, try "
+        'again with "Make pictures smaller".'
+    )
 
 
 def pictures_report(path: Path) -> tuple[dict, dict] | None:
@@ -364,6 +387,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             # Added here rather than in each pipeline, so every
                             # format reports what happened in Drive the same way.
                             report.setdefault("warnings", []).extend(beyond + google.warnings)
+                            name_the_limit(report, beyond)
                             outcome = pictures_report(root / "result" / "pictures.json")
                             if smaller and outcome:
                                 report["pictures"], note = outcome
