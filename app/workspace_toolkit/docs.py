@@ -1336,6 +1336,61 @@ def place_orphan_pictures(
     return report
 
 
+def _table_start(table: Element, geometry: dict, width: int) -> int | None:
+    """Where a table's first column starts, in EMU from the text column's
+    start -- the frame `_place_above` measures pictures in (#168).
+
+    Read from what the table states: a floating position (`w:tblpPr`), an
+    alignment (`w:jc`), or an indent (`w:tblInd`). `width` is the table's grid
+    width in EMU. None where the answer isn't exact: an aligned rather than
+    offset floating table, an indent that isn't in twips, a centred or
+    right-aligned table on a page whose size isn't stated, or columns running
+    right to left. The indent is taken as ECMA-376 states it, to the table's
+    leading edge. Word's older layouts put that edge a cell margin further
+    left; like the rest of this pass, this doesn't model that.
+    """
+    properties = table.find(q("w", "tblPr"))
+    if properties is None:
+        return 0
+    rtl = properties.find(q("w", "bidiVisual"))
+    if rtl is not None and rtl.get(q("w", "val")) not in OFF_VALUES:
+        return None
+
+    indent = properties.find(q("w", "tblInd"))
+    if indent is None or indent.get(q("w", "type")) == "nil":
+        inset: int | None = 0
+    elif indent.get(q("w", "type")) in (None, "dxa"):
+        stated = _measure(indent, "w")
+        inset = None if stated is None else stated * EMU_PER_DXA
+    else:
+        inset = None
+
+    position = properties.find(q("w", "tblpPr"))
+    if position is not None:
+        across = _measure(position, "tblpX")
+        if position.get(q("w", "tblpXSpec")) is not None or across is None or inset != 0:
+            return None
+        anchor = position.get(q("w", "horzAnchor"))
+        if anchor in ("margin", "text"):
+            return across * EMU_PER_DXA
+        if anchor == "page" and geometry.get("left") is not None:
+            return across * EMU_PER_DXA - geometry["left"]
+        return None
+
+    alignment = properties.find(q("w", "jc"))
+    align = None if alignment is None else alignment.get(q("w", "val"))
+    if align in (None, "left", "start"):
+        return inset
+    if align not in ("center", "right", "end"):
+        return None
+    page, left, right = geometry.get("width"), geometry.get("left"), geometry.get("right")
+    if page is None or left is None or right is None:
+        return None
+    # An aligned table ignores its indent.
+    spare = page - left - right - width
+    return spare // 2 if align == "center" else spare
+
+
 def _place_above(
     root: Element,
     paragraphs: list[Element],
@@ -1367,14 +1422,22 @@ def _place_above(
         report["picturesUnplaced"] += len(anchors)
         return
 
-    edges, running = [], 0
+    section = sections.of(table)
+    geometry = page_geometry(section)
+    margin = _margin(section, "left")
+    start_of_table = _table_start(table, geometry, sum(columns) * EMU_PER_DXA)
+    if start_of_table is None:
+        # Where the columns are isn't known, so neither is which one a
+        # picture was drawn over.
+        report["picturesGeometryUncertain"] += len(pictures)
+        uncertain.update(pictures)
+        return
+
+    edges, running = [], start_of_table
     for width in columns:
         edges.append((running, running + width * EMU_PER_DXA))
         running += width * EMU_PER_DXA
 
-    section = sections.of(table)
-    geometry = page_geometry(section)
-    margin = _margin(section, "left")
     placed: dict[int, list[tuple[int, Element]]] = {}
     frames: set[str] = set()
     straddling: list[Element] = []

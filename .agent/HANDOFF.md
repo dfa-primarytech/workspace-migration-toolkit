@@ -2,20 +2,18 @@
 
 - Agent: Claude Code (Claude 2, DOCX/platform/parser)
 - Date: 2026-09-30
-- Branch: `fix/docx-straddling-pictures`, based on main `7eaf26a` (PR #167)
-- Objective: #55's remaining criterion: a picture straddling two table columns was moved into one, chosen by its centre, and could then shrink.
-- Files changed: `docs.py` (`_place_above` needs the whole picture inside one column; `place_orphan_pictures` counts `picturesGeometryUncertain` and hands those anchors to `place_pictures_by_table_geometry`, which skips them; `transform` adds the two passes' uncertain counts instead of keeping only the second); `tests/platform/test_docx_straddling.py` (new, 5); `test_docx.py` (one test's margin corrected); this file and the archive.
+- Branch: `fix/docx-table-position`, based on main `f7f39c5` (PR #169). Before it: #167 (#55), merged.
+- Objective: #168, pictures above an indented, aligned or floating table were measured against columns starting at the text column's edge. Then #53 and #54, in that order, one PR each (split agreed with Claude 1, who has #104, #88 and #36).
+- Files changed: `docs.py` (`_table_start` reads `tblpPr`, `jc` and `tblInd`; `_place_above` offsets its column edges by it, and leaves and reports the stack when it's None); `tests/platform/test_docx_table_position.py` (new, 9); this file.
 - Completed:
-  - A picture that overlaps a column but fits none is left floating and counted as uncertain. The rest of its stack is left too (rows are read from the whole stack) and counted unplaced. A picture clear of the table is unplaced, as before.
-  - Margin-strip anchors are covered: `_offset` already restates them from the paper's edge (#143).
-  - A picture both passes see is counted once.
-  - `test_a_page_relative_offset_is_measured_from_the_margin_not_the_paper` used a 457200 EMU margin against the section's 914400; it passed only through the centre rule. Corrected; it passes on main too.
-  - 4 of the 5 new tests fail on main; the fifth guards that a picture inside one column is still placed.
-- Checks: 621 platform tests passed, 17 skipped; Ruff clean; mypy clean.
+  - #168: an indented (`tblInd` in twips), centred, right-aligned (`jc`) or floating (`tblpPr` against margin, text or page) table has its columns where it says. An aligned floating table (`tblpXSpec`), a non-twip indent, a floating table that's also indented, an aligned table on an unstated page, or `bidiVisual` leaves the pictures and counts them under `picturesGeometryUncertain`.
+  - 8 of the 9 new tests fail on main; the ninth guards a table at the text column's start.
+  - Earlier, #55 (#167): `_place_above` needs the whole picture inside one column, straddlers are reported, and both passes' uncertain counts add up with each picture counted once.
+- Checks: 630 platform tests passed, 17 skipped; Ruff clean; mypy clean.
 - Known failures: none.
-- Unresolved: `_place_above` measures columns from the text column's start and ignores a table's own `tblpPr` position or `tblInd`, so a floating or indented table's columns are misread there (the geometry pass does read `tblpPr`). Not changed here; worth an issue if it matters on real worksheets.
-- Decisions: none new; this applies the geometry pass's existing containment rule to the earlier pass.
-- Next task: none claimed. The live check on #166 (PUB-001, PUB-002, a real DOCX and PPTX through the test host) needs the owner.
+- Unresolved: `tblInd` is read as ECMA-376 states it, to the table's leading edge. Word's pre-2013 layouts put that edge a cell margin further left, which isn't modelled (nor was it before). A multi-column section's "column"/"text" frame is still read as the text column's start.
+- Decisions: none new.
+- Next task: #53 (post-import read-back, Docs first; report only, never on screen; fake Google in tests; new functions only in `google.py`, and tell Claude 1 before editing an existing one), then #54 (optional blank-page repair built on #53).
 - Warnings: the scratchpad venv's `.pth` points at `wmt-docx-fixes/app`, and the worker subprocess gets a fixed environment without `PYTHONPATH`, so tests run from another checkout convert with this checkout's code.
 ---
 
