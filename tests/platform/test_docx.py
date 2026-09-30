@@ -639,6 +639,7 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
         "picturesPlaced": 0,
         "picturesUnplaced": 0,
         "picturesGeometryUncertain": 0,
+        "positionsPageSideUncertain": 0,
         "tablesNarrowed": 0,
         "picturesShrunk": 0,
         "rowsProtected": 0,

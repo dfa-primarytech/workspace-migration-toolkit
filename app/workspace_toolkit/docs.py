@@ -38,6 +38,7 @@ from .docx import (
     COINCIDENT_SIZE_TOL,
     COINCIDENT_TOL_EMU,
     EXTENSION_NS,
+    MARGIN_AREAS,
     NS,
     OFF_VALUES,
     STYLES_PART,
@@ -48,9 +49,13 @@ from .docx import (
     body_blocks,
     classify,
     font_requirements,
+    governing_sections,
     local,
+    margin_area,
+    page_geometry,
     parents,
     q,
+    section_of,
     to_dxa,
     twips,
 )
@@ -135,9 +140,10 @@ def remove_background(root: Element) -> None:
         container.remove(background)
 
 
-def replace_anchors(root: Element, ids: Ids) -> dict:
+def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) -> dict:
     """Rewrites floating content into constructs Google imports faithfully."""
     parent_of = parents(root)
+    sections = Sections(root, parent_of, fallback)
     items: list[Anchored] = []
     for anchor in root.iter(q("wp", "anchor")):
         drawing = parent_of.get(anchor)
@@ -145,6 +151,7 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
             continue
         run = parent_of.get(drawing)
         kind, label = classify(anchor)
+        geometry = page_geometry(sections.of(anchor))
         items.append(
             Anchored(
                 anchor=anchor,
@@ -153,8 +160,8 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
                 paragraph=_enclosing(parent_of, run, "p"),
                 kind=kind,
                 label=label,
-                h=anchor_position(anchor, "H"),
-                v=anchor_position(anchor, "V"),
+                h=anchor_position(anchor, "H", geometry),
+                v=anchor_position(anchor, "V", geometry),
                 extent=anchor_extent(anchor),
             )
         )
@@ -168,6 +175,15 @@ def replace_anchors(root: Element, ids: Ids) -> dict:
         "picturesInlined": 0,
         "ink": 0,
         "unsupported": unsupported,
+        # Placed by the inside or outside margin, which is on one side on odd
+        # pages and the other on even ones: kept where it always went, and
+        # counted so a person knows to check it (#112).
+        "positionsPageSideUncertain": sum(
+            1
+            for item in items
+            if item.kind in ("textbox", "picture")
+            and any(axis and axis.get("uncertain") for axis in (item.h, item.v))
+        ),
     }
     for item in items:
         if item.kind == "unsupported":
@@ -850,6 +866,27 @@ def _measure(element: Element | None, name: str) -> int | None:
     return None if value is None else round(value)
 
 
+class Sections:
+    """Which section's page lays out an element, as the part stands now.
+
+    Built per pass, because passes move content: a table a text box became
+    is a new block, and belongs to whichever section it was inserted into.
+    A header or footer has no body, so it is measured by `fallback`, the
+    main document's last section.
+    """
+
+    def __init__(self, root: Element, parent_of: dict, fallback: Element | None = None) -> None:
+        body = root.find(q("w", "body"))
+        self.owner = governing_sections(body) if body is not None else {}
+        self.parent_of = parent_of
+        self.fallback = fallback
+
+    def of(self, element: Element | None) -> Element | None:
+        if not self.owner:
+            return self.fallback
+        return section_of(element, self.parent_of, self.owner)
+
+
 def _final_section(root: Element) -> Element | None:
     """The section properties that measure the page, in dxa.
 
@@ -875,9 +912,8 @@ def _final_section(root: Element) -> Element | None:
     return breaks[-1] if breaks else None
 
 
-def printable_width(root: Element) -> int | None:
-    """The usable width in dxa, from the section that ends the body."""
-    section = _final_section(root)
+def printable_width(section: Element | None) -> int | None:
+    """The usable width in dxa of one section's page."""
     if section is None:
         return None
     width = _measure(section.find(q("w", "pgSz")), "w")
@@ -890,13 +926,11 @@ def printable_width(root: Element) -> int | None:
     return usable if usable > 0 else None
 
 
-def printable_height(root: Element) -> int | None:
-    """The usable height in dxa, from the section that ends the body.
+def printable_height(section: Element | None) -> int | None:
+    """The usable height in dxa of one section's page.
 
-    Mirrors printable_width: same section, same "measured by the last one"
-    reasoning, top and bottom margins instead of left and right.
+    Mirrors printable_width: top and bottom margins instead of left and right.
     """
-    section = _final_section(root)
     if section is None:
         return None
     height = _measure(section.find(q("w", "pgSz")), "h")
@@ -919,11 +953,23 @@ def _cell_padding(table: Element) -> int:
 
 
 def _scale_extent(holder: Element, factor: float) -> bool:
-    """Shrinks one picture's stated size, outer frame and inner geometry alike."""
+    """Shrinks one drawing's stated size: its frame, and its own shape's size.
+
+    Only the outermost shape's a:ext. A group's children are drawn at their
+    own size times the group's (a:ext over a:chExt), so scaling the group
+    already scales them; scaling them as well shrank them twice while their
+    offsets shrank once, and scrambled the group (#118).
+    """
     changed = False
     extent = holder.find(q("wp", "extent"))
     sizes = [extent] if extent is not None else []
-    sizes += holder.findall(".//" + q("a", "ext"))
+    data = holder.find(q("a", "graphic") + "/" + q("a", "graphicData"))
+    for shape in data if data is not None else []:
+        for properties in shape:
+            if local(properties.tag) in ("spPr", "grpSpPr"):
+                size = properties.find(q("a", "xfrm") + "/" + q("a", "ext"))
+                if size is not None:
+                    sizes.append(size)
     for size in sizes:
         for axis in ("cx", "cy"):
             try:
@@ -935,7 +981,7 @@ def _scale_extent(holder: Element, factor: float) -> bool:
     return changed
 
 
-def fit_tables_to_page(root: Element) -> dict:
+def fit_tables_to_page(root: Element, fallback: Element | None = None) -> dict:
     """Narrows a table wider than the page, and the pictures inside it.
 
     Word lets a table state columns totalling more than the paper can hold; it
@@ -949,14 +995,18 @@ def fit_tables_to_page(root: Element) -> dict:
 
     Only top-level tables are measured. A nested table is bounded by its cell,
     not the page, and shrinking it against the page would compound.
+
+    Each table is measured by its own section's page: a landscape table ahead
+    of a portrait section fits the landscape page, not the portrait one.
     """
-    usable = printable_width(root)
     report = {"tablesNarrowed": 0, "picturesShrunk": 0}
-    if usable is None:
-        return report
     parent_of = parents(root)
+    sections = Sections(root, parent_of, fallback)
     for table in root.iter(q("w", "tbl")):
         if _enclosing(parent_of, parent_of.get(table), "tbl") is not None:
+            continue
+        usable = printable_width(sections.of(table))
+        if usable is None:
             continue
         grid = table.find(q("w", "tblGrid"))
         columns = grid.findall(q("w", "gridCol")) if grid is not None else []
@@ -1084,18 +1134,27 @@ LABEL_CHARS = 4  # "1." or "12." numbers a question; longer text is content
 # offset is compared against the grid directly. Down: any frame, because the
 # vertical offsets are only ever ranked against each other -- but every picture
 # above one table must share a frame, or the ranking compares two origins.
-ACROSS_FRAMES = {"column", "margin", "insideMargin", "leftMargin", "text"}
+# (The left margin strip starts at the paper's edge, not the text column; it
+# arrives here already restated as a page offset, see _offset.)
+# The inside margin is read as it always was, as the text column's start: which
+# side it is on depends on the page, and the report says so (see
+# replace_anchors).
+ACROSS_FRAMES = {"column", "margin", "insideMargin", "text"}
 # A page-relative offset counts from the paper's edge, so the margin has to come
 # off it before it means anything against a grid. That is exact arithmetic, not
 # a guess, so those pictures are worth recovering rather than reporting.
 PAGE_FRAMES = {"page"}
 
 
-def _margin(root: Element, side: str) -> int | None:
-    """One page margin in EMU, from the section that ends the body."""
-    body = root.find(q("w", "body"))
-    sections = list(body.iter(q("w", "sectPr"))) if body is not None else []
-    margin = _measure(sections[-1].find(q("w", "pgMar")), side) if sections else None
+def _margin(section: Element | None, side: str) -> int | None:
+    """One page margin in EMU, from the section's current properties.
+
+    Never from w:sectPrChange, which keeps the margins a tracked page-setup
+    change replaced.
+    """
+    if section is None:
+        return None
+    margin = _measure(section.find(q("w", "pgMar")), side)
     return None if margin is None else margin * EMU_PER_DXA
 
 
@@ -1114,8 +1173,15 @@ def _starts_the_page(root: Element, paragraph: Element) -> bool:
     return spacing is None or spacing.get(q("w", "before")) in (None, "0")
 
 
-def _offset(anchor: Element, axis: str) -> tuple[str, int] | None:
-    """A picture's frame and offset on one axis, or nothing if it is unstated."""
+def _offset(anchor: Element, axis: str, geometry: dict | None = None) -> tuple[str, int] | None:
+    """A picture's frame and offset on one axis, or nothing if it is unstated.
+
+    An offset into a margin strip is restated from the paper's edge, as a
+    "page" offset (see docx.margin_area), using `geometry`, the page_geometry
+    of the picture's section. An inside or outside strip changes side with the
+    page, which is not known here; one is read as before and reported (see
+    replace_anchors).
+    """
     position = anchor.find(q("wp", "position" + axis))
     if position is None:
         return None
@@ -1124,9 +1190,13 @@ def _offset(anchor: Element, axis: str) -> tuple[str, int] | None:
     if frame is None or offset is None:
         return None
     try:
-        return frame, int(offset.text or "")
+        value = int(offset.text or "")
     except ValueError:
         return None
+    if frame in MARGIN_AREAS[axis]:
+        area = margin_area(axis, frame, geometry)
+        return None if area is None else ("page", area[0] + value)
+    return frame, value
 
 
 def _bands(offsets: list[int]) -> list[list[int]]:
@@ -1144,14 +1214,13 @@ def _candidate_rows(table: Element, column: int, parent_of: dict, holding: int) 
     """Cells in one column holding a question number and exactly `holding` pictures."""
     found = []
     for row in table.findall(q("w", "tr")):
-        cells = [
-            cell
-            for cell in row.findall(q("w", "tc"))
-            if _enclosing(parent_of, parent_of.get(cell), "tbl") is table
-        ]
-        if column >= len(cells):
+        cell = _cell_at(row, column, column)
+        if cell is None:
             return []
-        cell = cells[column]
+        # The lower part of a vertically merged cell shows its first part's
+        # content, not its own, so nothing is put there.
+        if _continues_merge(cell):
+            continue
         # Something is still floating inside this cell; whatever it is, this row
         # is not settled and nothing should be dropped into it.
         if list(cell.iter(q("wp", "anchor"))):
@@ -1162,6 +1231,36 @@ def _candidate_rows(table: Element, column: int, parent_of: dict, holding: int) 
         if len(text) <= LABEL_CHARS:
             found.append(cell)
     return found
+
+
+def _row_cells(row: Element) -> list[tuple[int, int, Element]]:
+    """This row's cells, each with the first grid column it covers and how many.
+
+    A cell's place on the grid is not its place in the row: w:gridBefore skips
+    columns at the start, and a w:gridSpan cell covers several. Indexing the
+    row's cells by grid column put a picture in the cell after the one it was
+    drawn over.
+    """
+    found = []
+    start = _span(row.find(q("w", "trPr")), "gridBefore")
+    for cell in row.findall(q("w", "tc")):
+        span = max(1, _span(cell.find(q("w", "tcPr")), "gridSpan"))
+        found.append((start, span, cell))
+        start += span
+    return found
+
+
+def _cell_at(row: Element, first: int, last: int) -> Element | None:
+    """The one cell covering grid columns first to last, or None if none does."""
+    for start, span, cell in _row_cells(row):
+        if start <= first and last < start + span:
+            return cell
+    return None
+
+
+def _continues_merge(cell: Element) -> bool:
+    merge = cell.find(q("w", "tcPr") + "/" + q("w", "vMerge"))
+    return merge is not None and merge.get(q("w", "val")) in (None, "continue")
 
 
 def _target_rows(table: Element, column: int, parent_of: dict) -> list[Element]:
@@ -1178,8 +1277,8 @@ def _target_rows(table: Element, column: int, parent_of: dict) -> list[Element]:
     return empty or _candidate_rows(table, column, parent_of, 1)
 
 
-def _page_anchored(anchor: Element) -> bool:
-    down = _offset(anchor, "V")
+def _page_anchored(anchor: Element, geometry: dict | None) -> bool:
+    down = _offset(anchor, "V", geometry)
     return down is not None and down[0] == "page"
 
 
@@ -1199,9 +1298,10 @@ def _picture_only_paragraph(paragraph: Element) -> bool:
     return all(classify(a)[0] == "picture" for a in paragraph.iter(q("wp", "anchor")))
 
 
-def place_orphan_pictures(root: Element, ids: Ids) -> dict:
+def place_orphan_pictures(root: Element, ids: Ids, fallback: Element | None = None) -> dict:
     """Moves a picture floating above a table into the cell it was drawn over."""
     parent_of = parents(root)
+    sections = Sections(root, parent_of, fallback)
     report = {"picturesPlaced": 0, "picturesUnplaced": 0}
     for container in list(root.iter()):
         blocks = list(container)
@@ -1222,7 +1322,7 @@ def place_orphan_pictures(root: Element, ids: Ids) -> dict:
             if _page_relation(blocks, i + 1, index + 1) == "different":
                 report["picturesUnplaced"] += anchors
                 continue
-            _place_above(root, run, blocks[index + 1], parent_of, ids, report)
+            _place_above(root, run, blocks[index + 1], parent_of, sections, ids, report)
     return report
 
 
@@ -1231,6 +1331,7 @@ def _place_above(
     paragraphs: list[Element],
     table: Element,
     parent_of: dict,
+    sections: Sections,
     ids: Ids,
     report: dict,
 ) -> None:
@@ -1260,11 +1361,13 @@ def _place_above(
         edges.append((running, running + width * EMU_PER_DXA))
         running += width * EMU_PER_DXA
 
-    margin = _margin(root, "left")
+    section = sections.of(table)
+    geometry = page_geometry(section)
+    margin = _margin(section, "left")
     placed: dict[int, list[tuple[int, Element]]] = {}
     frames: set[str] = set()
     for anchor in pictures:
-        across, down = _offset(anchor, "H"), _offset(anchor, "V")
+        across, down = _offset(anchor, "H", geometry), _offset(anchor, "V", geometry)
         # _measure_emu takes the element that *holds* wp:extent, not the extent.
         drawn = _measure_emu(anchor)
         if across is None or down is None or drawn is None:
@@ -1292,7 +1395,7 @@ def _place_above(
         # Two origins ranked against each other would order the pictures
         # arbitrarily -- unless the constant between them is known exactly,
         # which it is when the paragraph starts the text area.
-        top = _margin(root, "top")
+        top = _margin(section, "top")
         if (
             frames != {"page", "paragraph"}
             or top is None
@@ -1302,7 +1405,8 @@ def _place_above(
             return
         for column, found in placed.items():
             placed[column] = [
-                (down - top if _page_anchored(anchor) else down, anchor) for down, anchor in found
+                (down - top if _page_anchored(anchor, geometry) else down, anchor)
+                for down, anchor in found
             ]
 
     targets: list[tuple[Element, Element]] = []
@@ -1363,8 +1467,9 @@ TABLE_ABSOLUTE_V = {"page", "margin"}
 # A picture's own relativeFrom carries more values than a table's tblpPr
 # does (ST_RelFromH/V vs the much smaller CT_TblPPr enum). Only the ones
 # whose edge is unambiguous without knowing mirroring or RTL are safe here.
-PICTURE_ABSOLUTE_H = {"page", "margin", "leftMargin", "insideMargin"}
-PICTURE_ABSOLUTE_V = {"page", "margin", "topMargin"}
+# Margin strips arrive already restated against the page (see _offset).
+PICTURE_ABSOLUTE_H = {"page", "margin", "insideMargin"}
+PICTURE_ABSOLUTE_V = {"page", "margin"}
 
 
 def _page_offset(frame: str, value: int, margin: int | None, safe: set[str]) -> int | None:
@@ -1494,7 +1599,9 @@ def _page_relation(blocks: list[Element], first: int, last: int, limit: int | No
     return "same"
 
 
-def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
+def place_pictures_by_table_geometry(
+    root: Element, ids: Ids, fallback: Element | None = None
+) -> dict:
     """Assigns a still-floating picture to the cell its rectangle sits
     inside, wherever in the document it was anchored -- unlike
     place_orphan_pictures, this doesn't depend on document order at all.
@@ -1511,7 +1618,7 @@ def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
     shown, the picture stays where it is and is reported as uncertain.
     """
     parent_of = parents(root)
-    left_margin, top_margin = _margin(root, "left"), _margin(root, "top")
+    sections = Sections(root, parent_of, fallback)
     report = {"picturesPlaced": 0, "picturesUnplaced": 0, "picturesGeometryUncertain": 0}
 
     body = root.find(q("w", "body"))
@@ -1531,7 +1638,8 @@ def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
     for table in root.iter(q("w", "tbl")):
         if _enclosing(parent_of, parent_of.get(table), "tbl") is not None:
             continue  # a nested table is bounded by its cell, not the page
-        measured = _table_geometry(table, left_margin, top_margin)
+        section = sections.of(table)
+        measured = _table_geometry(table, _margin(section, "left"), _margin(section, "top"))
         if measured is not None:
             tables.append((table, *measured, block_index(table)))
     if not tables:
@@ -1540,14 +1648,16 @@ def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
     for anchor in list(root.iter(q("wp", "anchor"))):
         if classify(anchor)[0] != "picture" or anchor.get("behindDoc") not in (None, *OFF_VALUES):
             continue
-        across, down = _offset(anchor, "H"), _offset(anchor, "V")
+        section = sections.of(anchor)
+        geometry = page_geometry(section)
+        across, down = _offset(anchor, "H", geometry), _offset(anchor, "V", geometry)
         width, height = _measure_emu(anchor), _measure_emu_height(anchor)
         if across is None or down is None or width is None or height is None:
             continue
         # A picture's own offset (wp:posOffset) is already EMU, same as
-        # left_margin/top_margin (see _margin) -- no conversion needed here.
-        x0 = _page_offset(across[0], across[1], left_margin, PICTURE_ABSOLUTE_H)
-        y0 = _page_offset(down[0], down[1], top_margin, PICTURE_ABSOLUTE_V)
+        # _margin -- no conversion needed here.
+        x0 = _page_offset(across[0], across[1], _margin(section, "left"), PICTURE_ABSOLUTE_H)
+        y0 = _page_offset(down[0], down[1], _margin(section, "top"), PICTURE_ABSOLUTE_V)
         if x0 is None or y0 is None:
             continue
         x1, y1 = x0 + width, y0 + height
@@ -1577,25 +1687,37 @@ def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
             continue  # every table it overlaps is on another page
         table, col_edges, row_edges, _ = overlapping[relations.index("same")]
 
-        column = next(
-            (n for n, (left, right) in enumerate(col_edges) if left <= x0 and x1 <= right), None
-        )
-        row = next(
-            (n for n, (top, bottom) in enumerate(row_edges) if top <= y0 and y1 <= bottom), None
-        )
-        if column is None or row is None:
+        cell = _cell_under(table, col_edges, row_edges, (x0, y0, x1, y1))
+        if cell is None:
             report["picturesGeometryUncertain"] += 1
             continue
-        cells = [
-            cell
-            for cell in table.findall(q("w", "tr"))[row].findall(q("w", "tc"))
-            if _enclosing(parent_of, parent_of.get(cell), "tbl") is table
-        ]
-        if column >= len(cells):
-            report["picturesGeometryUncertain"] += 1
-            continue
-        _move_into_cell(cells[column], anchor, parent_of, ids, report)
+        _move_into_cell(cell, anchor, parent_of, ids, report)
     return report
+
+
+def _cell_under(
+    table: Element,
+    col_edges: list[tuple[int, int]],
+    row_edges: list[tuple[int, int]],
+    box: tuple[int, int, int, int],
+) -> Element | None:
+    """The one cell a rectangle lies wholly inside, or None if it is not one.
+
+    Found through the grid (#117): a merged cell covers several columns, and
+    w:gridBefore leaves columns with no cell at all. The lower part of a
+    vertically merged cell shows the content of its first part, not its own,
+    so nothing is placed by it.
+    """
+    x0, y0, x1, y1 = box
+    row = next((n for n, (top, bottom) in enumerate(row_edges) if top <= y0 and y1 <= bottom), None)
+    first = next((n for n, (left, right) in enumerate(col_edges) if left <= x0 < right), None)
+    last = next((n for n, (left, right) in enumerate(col_edges) if left < x1 <= right), None)
+    if row is None or first is None or last is None:
+        return None
+    cell = _cell_at(table.findall(q("w", "tr"))[row], first, last)
+    if cell is None or _continues_merge(cell):
+        return None
+    return cell
 
 
 def _cell_pictures(cell: Element) -> bool:
@@ -1635,7 +1757,9 @@ def _insert_in_schema_order(parent: Element, tag: str, order: list[str]) -> Elem
     return element
 
 
-def protect_picture_rows(root: Element, had_pictures: set[Element]) -> dict:
+def protect_picture_rows(
+    root: Element, had_pictures: set[Element], fallback: Element | None = None
+) -> dict:
     """Adds w:cantSplit to a table row that has just gained an inline picture.
 
     A picture #34 moved into a cell makes the row grow to hold it, and an
@@ -1648,8 +1772,8 @@ def protect_picture_rows(root: Element, had_pictures: set[Element]) -> dict:
     next page regardless, and forcing the attempt only makes that overflow
     less predictable.
     """
-    usable = printable_height(root)
     parent_of = parents(root)
+    sections = Sections(root, parent_of, fallback)
     rows: list[Element] = []
     seen: set[Element] = set()
     for cell in root.iter(q("w", "tc")):
@@ -1663,6 +1787,7 @@ def protect_picture_rows(root: Element, had_pictures: set[Element]) -> dict:
 
     protected = 0
     for row in rows:
+        usable = printable_height(sections.of(row))
         if usable is not None:
             heights = [
                 _measure_emu_height(inline)
@@ -1685,7 +1810,9 @@ def protect_picture_rows(root: Element, had_pictures: set[Element]) -> dict:
     return {"rowsProtected": protected}
 
 
-def _release_reserved_space(root: Element, before: set[Element], blank: set[Element]) -> int:
+def _release_reserved_space(
+    root: Element, before: set[Element], holders: set[Element], blank: set[Element]
+) -> int:
     """Stops protecting blank lines that were holding a picture's place.
 
     #42 is right that an author's blank line is layout and must survive. But a
@@ -1698,10 +1825,15 @@ def _release_reserved_space(root: Element, before: set[Element], blank: set[Elem
     So only in a cell that has just gained a picture, and only for lines that
     were already blank, the protection is lifted. Everything else about
     `remove_empty_paragraphs` still applies, including never emptying a cell.
+
+    A cell a text box became is new, but the pictures it holds were already
+    inline in the box, beside the author's own spacing (#116). `holders` is
+    every paragraph that held an inline picture before any pass ran, so only
+    a picture that arrived since counts as gained.
     """
     released = 0
     for cell in root.iter(q("w", "tc")):
-        if cell in before or not _cell_pictures(cell):
+        if cell in before or not _gained_picture(cell, holders):
             continue
         for paragraph in cell.findall(q("w", "p")):
             if paragraph in blank:
@@ -1710,19 +1842,31 @@ def _release_reserved_space(root: Element, before: set[Element], blank: set[Elem
     return released
 
 
-def transform(root: Element, ids: Ids | None = None) -> dict:
-    """Applies every pass, in the order they depend on each other."""
+def _gained_picture(cell: Element, holders: set[Element]) -> bool:
+    return any(
+        paragraph not in holders and list(paragraph.iter(q("wp", "inline")))
+        for paragraph in cell.findall(q("w", "p"))
+    )
+
+
+def transform(root: Element, ids: Ids | None = None, fallback: Element | None = None) -> dict:
+    """Applies every pass, in the order they depend on each other.
+
+    `fallback` measures a part with no body of its own (a header or footer):
+    the main document's last section.
+    """
     ids = ids or Ids()
     # Before anything moves: which blank lines are the author's own.
     already_empty = empty_paragraphs(root)
     # Which cells already held a picture, so we can tell which ones gain one.
     had_pictures = {cell for cell in root.iter(q("w", "tc")) if _cell_pictures(cell)}
+    holders = {p for p in root.iter(q("w", "p")) if list(p.iter(q("wp", "inline")))}
     strip_fallbacks_keep_choice(root)
     # Ink runs go first, so replace_anchors never sees them -- which is why the
     # count is carried across rather than taken from that pass.
     ink = remove_ink_runs(root)
     remove_background(root)
-    report = replace_anchors(root, ids)
+    report = replace_anchors(root, ids, fallback)
     report["ink"] += ink
     # After the anchors: a legacy picture inside a text box only becomes
     # reachable once that text box has been moved into its table.
@@ -1736,20 +1880,22 @@ def transform(root: Element, ids: Ids | None = None) -> dict:
     # before they can be measured against the page.
     # Before the tables are measured: a picture that lands in a cell changes
     # how wide that table needs to be.
-    report.update(place_orphan_pictures(root, ids))
+    report.update(place_orphan_pictures(root, ids, fallback))
     # A different reach than the pass above: by rectangle geometry rather
     # than document order, so it also catches a picture anchored nowhere
     # near its table in the XML -- but only for a table exact enough to
     # measure at all. Picture counts are summed, not replaced.
-    geometry = place_pictures_by_table_geometry(root, ids)
+    geometry = place_pictures_by_table_geometry(root, ids, fallback)
     report["picturesPlaced"] += geometry["picturesPlaced"]
     report["picturesUnplaced"] += geometry["picturesUnplaced"]
     report["picturesGeometryUncertain"] = geometry["picturesGeometryUncertain"]
-    report.update(fit_tables_to_page(root))
+    report.update(fit_tables_to_page(root, fallback))
     # After fitting: a picture #34 or #55 moved into a row may have just been
     # shrunk to the column, which changes whether the row still fits a page.
-    report.update(protect_picture_rows(root, had_pictures))
-    report["blankLinesReclaimed"] = _release_reserved_space(root, had_pictures, already_empty)
+    report.update(protect_picture_rows(root, had_pictures, fallback))
+    report["blankLinesReclaimed"] = _release_reserved_space(
+        root, had_pictures, holders, already_empty
+    )
     remove_empty_paragraphs(root, already_empty)
     return report
 
@@ -1910,6 +2056,7 @@ def render(package: Package, destination: Path) -> dict:
         "tablesNarrowed": 0,
         "picturesShrunk": 0,
         "picturesGeometryUncertain": 0,
+        "positionsPageSideUncertain": 0,
         "ink": 0,
         "legacyPictures": 0,
         "equations": 0,
@@ -1926,6 +2073,9 @@ def render(package: Package, destination: Path) -> dict:
     # and could answer it differently in each.
     mapping = substitutions_to_apply(package)
     applied: Counter = Counter()
+    # A header or footer has no section of its own; which sections use it is
+    # not worked out, so it is measured by the body's last one.
+    last_section = _final_section(package.xml(DOCX.main_part))
 
     for name in story_parts(package):
         root = package.xml(name)
@@ -1933,7 +2083,7 @@ def render(package: Package, destination: Path) -> dict:
             # Body text only. Drive's plain-text export does not reliably
             # include headers, so counting them would invent mismatches.
             tokens = Counter(source_text(root).split())
-        part_report = transform(root, ids)
+        part_report = transform(root, ids, None if name == DOCX.main_part else last_section)
         # Every part, unlike the token comparison above: that is body-only
         # because comparing header text would invent mismatches, which says
         # nothing about where an equation can be. An equation in a letterhead
@@ -1956,6 +2106,7 @@ def render(package: Package, destination: Path) -> dict:
             "tablesNarrowed",
             "picturesShrunk",
             "picturesGeometryUncertain",
+            "positionsPageSideUncertain",
             "ink",
             "legacyPictures",
         ):
@@ -2379,6 +2530,7 @@ async def convert(
                 "tablesNarrowed",
                 "picturesShrunk",
                 "picturesGeometryUncertain",
+                "positionsPageSideUncertain",
                 "ink",
                 # A family we swapped is a change to the document, and PROJECT.md
                 # says every change is reported. The Slides path has always shown
