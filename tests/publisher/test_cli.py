@@ -142,6 +142,37 @@ class CliTest(unittest.TestCase):
             run = harness.run_parser(self.parser, "--not-an-option", out)
             self.assertEqual(run.returncode, 2)
 
+    def _failing(self, failure: str) -> tuple[harness.ParserRun, dict]:
+        # PUBIR_FAIL_FOR_TESTING makes the parser throw once it has read its
+        # input, standing in for an allocation that fails on a large document
+        # without having to exhaust memory to get one.
+        with harness.TempOutput() as out:
+            source = self._write(os.path.dirname(out), "junk.pub", b"not publisher")
+            run = harness.run_parser(
+                self.parser, source, out, env={"PUBIR_FAIL_FOR_TESTING": failure}
+            )
+            report_path = os.path.join(out, "report.json")
+            report = {}
+            if os.path.exists(report_path):
+                with open(report_path, encoding="utf-8") as handle:
+                    report = json.load(handle)
+            return run, report
+
+    def test_running_out_of_memory_exits_with_a_reason_not_an_abort(self):
+        # #129: nothing caught std::bad_alloc, so the parser aborted (a
+        # signal, not an exit code) and left no report saying why.
+        run, report = self._failing("bad-alloc")
+        self.assertEqual(run.returncode, 4)
+        self.assertIn("out-of-memory", run.stderr)
+        self.assertEqual(report.get("status"), "failed")
+        self.assertEqual(report.get("failureCode"), "out-of-memory")
+
+    def test_any_other_exception_exits_with_a_reason_not_an_abort(self):
+        run, report = self._failing("exception")
+        self.assertEqual(run.returncode, 4)
+        self.assertIn("internal-error", run.stderr)
+        self.assertEqual(report.get("failureCode"), "internal-error")
+
 
 if __name__ == "__main__":
     unittest.main()
