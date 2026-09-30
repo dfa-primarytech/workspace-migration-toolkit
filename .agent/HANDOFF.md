@@ -21,7 +21,12 @@
   - A picture inside a text box, floating in it, is still not inlined when the box becomes a cell (the parent map is stale by then); noticed while testing #116, not changed.
   - Headers and footers are measured by the body's last section; which sections use them is not worked out.
 - Decisions: DECISIONS.md, 2026-09-30 (a shown common page; margin strips and page-sided frames).
-- Next task: #119, and the empty-drawing residue (#20) the #113 tests ran into.
+- Also this session (platform, each its own PR on main, independent of the DOCX stack and of each other; a trial merge of all four with #144 passes 523 tests):
+  - #133 (PR #147): docs/platform.md now gives the 3600 s request timeout and how the job and parser deadlines sit under it.
+  - #120 (PR #148): `Google.request` retries GET/HEAD only, 3 attempts, Retry-After up to 30 s; writes are asked once.
+  - #121 (PR #149): pipelines no longer upload the report; web.py saves it once, after the Drive, import-limit and pictures notes.
+  - Filed #146 (a picture floating inside a text box stays floating in the new cell). Cross-reviewed the Publisher session's #138, #139, #140 and #145 (comments on each; no blockers).
+- Next task: #119, #146, and the empty-drawing residue (#20) the #113 tests ran into.
 - Warnings: merge the stack in order (#114, #134, then the placement PR); after a squash merge, the next branch needs rebasing onto main. #113 conflicts with nothing in the stack.
 
 ---
