@@ -1,5 +1,34 @@
 # Handoff
 
+- Agent: Claude Code (Publisher session, on Platform/PPTX files by the owner's request)
+- Date: 2026-09-30
+- Branch: `fix/pptx-package-edits`, stacked on `fix/publisher-mask-budget` (PR #140): merge #138, #139, #140, then this
+- Objective: #124, #136, #137: package parts edited by regex left packages that no longer held together.
+- Files changed:
+  - `package.py` (new: `tags`, `attribute`, `RELATIONSHIPS`, `OVERRIDES`, `without_relationships`, `without_overrides`, `with_default`, each confirmed by re-parsing);
+  - `pptx.py` (`EMPTIED` only takes an extension with a `uri`; `_strip_part` checks every `a:ext` survives; `strip_videos` uses the helpers and refuses a video whose rels or content types can't be confirmed);
+  - `pictures.py` (paired Relationship tags retargeted; overrides and the JPEG Default via the helpers; unconfirmed content types leave the file unchanged);
+  - `tests/platform/test_package_edits.py` (new, 8); `docs/platform.md`; this file.
+- Completed:
+  - #124: a shape size written `<a:ext ...></a:ext>` no longer goes when a video is removed.
+  - #136: paired `<Relationship>`/`<Override>` tags for a removed video are removed; a rels part still naming the video after editing refuses the removal.
+  - #137: a prefixed `[Content_Types].xml` gets its JPEG Default in its own prefix; the old PNG override goes, paired or not.
+  - The 4 end-to-end tests fail on main and pass here; the 4 helper tests can't load on main.
+- Checks: 540 platform tests passed, 14 skipped; Ruff clean; mypy only reports `hypercorn` missing locally.
+- Known failures: none.
+- Unresolved: parts are still edited as bytes (to keep the rest of each part exactly as written), but every edit is now re-parsed and checked. Not tried against a real deck from another tool.
+- Decisions: none new.
+- Also opened, each on `main` and independent (no `.agent/` changes, so recorded here):
+  - #151 (#132): a failed Picker load is forgotten and retried; `tests/platform/test_picker_load.py` runs `app.js`'s own `loadPicker` under Node.
+  - #152 (#131): `WMT_REQUIRE_READERS=1` in both validity workflows makes a missing LibreOffice fail its tests; the DOCX job also fails on any skip.
+  - #154 (#130): the worker leads its own process group and a stopped job kills the whole group, parser included. Linux-only tests; draft PR #155 runs them on main's code to show they fail there (close it after).
+  - Filed #150 (an expired sign-in fails every remaining Publisher page), from Claude 2's review of #139.
+- Next task: #150; then the native parser issues (#126-#129) if a Linux build is available. Claude 2 has #119, #122, #123, #125 and #146. `pptx.py`/`pictures.py`/`package.py` are Platform-owned: say so if the Platform stream is active.
+- Warnings: in this environment, a heredoc passed through Python can lose a backslash level: after writing a regex that way, search the file for control characters (bytes 1 to 8), or write the edit with the Edit tool instead.
+---
+
+## Previous handoff
+
 - Agent: Claude Code (Publisher)
 - Date: 2026-09-30
 - Branch: `fix/publisher-mask-budget`, stacked on `fix/publisher-page-failures` (PR #139, itself on #138): merge #138, then #139, then this
@@ -37,32 +66,4 @@
   - #109 isn't live-verified; nesting by tabs isn't supported (Publisher's indent is set from its own margins).
 - Decisions: none new.
 - Next task: #111 (mask size cap), then the unclaimed Platform/PPTX audit issues.
-- Warnings: none new.
----
-
-## Previous handoff
-
-- Agent: Claude Code (Publisher)
-- Date: 2026-09-30
-- Branch: `fix/publisher-planning-crashes`, based on main `2d80316`
-- Objective: fix the high-priority Publisher audit issues #105, #106, #107 and #110 (claimed on each issue).
-- Files changed:
-  - `units.py` (`Frame.corners` no longer goes through `transform`);
-  - `publisher_slides.py` (`_image` refuses a picture with no area; `_shape` hands a flat rectangle/ellipse to the new `_flat`; `group_all` checks kinds at every depth and counts WordArt's wrapper; `_wordart` cleans its text; `_text` reports pictures set in a text box);
-  - `publisher_inline.py` (`marks` reads a text box's own `paragraphs`);
-  - `tests/platform/test_publisher_planning.py` (new, 12);
-  - `docs/publisher-renderer.md`, this file.
-- Completed:
-  - #105: a zero-height or zero-width element no longer crashes planning. A flat rectangle/ellipse is drawn as the line it looks like; a picture with no area is reported, not drawn.
-  - #106: a table inside a nested group stops every enclosing group being made.
-  - #110: WordArt inside an authored group is grouped; a control character in WordArt text is dropped instead of failing `check()`.
-  - #107: U+FFFC in text boxes is now counted, so a picture there can't be taken for a table's. A recovered text-box picture is reported as missing on its box (`inline-picture-missing`), not placed: its position in the text isn't known.
-  - All 12 new tests fail on main and pass here.
-- Checks: 519 platform tests passed, 14 skipped; Ruff clean. Mypy reports only `hypercorn` missing from the local venv (`server.py`, untouched). Pillow 12.3.0 (the pinned version) is now installed in the local `.venv`, so the Publisher tests run locally.
-- Known failures: none.
-- Unresolved:
-  - #107: placing text-box inline pictures properly would need their position in the laid-out text.
-  - Not live-verified against Slides.
-- Decisions: none new.
-- Next task: #108, #109, #111 (Publisher). A second Claude session is taking the DOCX issues (#114, #134, #113, then #55/#112/#115/#117/#135); don't edit `docx.py`/`docs.py` from here.
 - Warnings: none new.

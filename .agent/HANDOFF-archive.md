@@ -7,6 +7,33 @@ PR descriptions have the same detail in full.
 
 ---
 
+- Agent: Claude Code (Publisher)
+- Date: 2026-09-30
+- Branch: `fix/publisher-planning-crashes`, based on main `2d80316`
+- Objective: fix the high-priority Publisher audit issues #105, #106, #107 and #110 (claimed on each issue).
+- Files changed:
+  - `units.py` (`Frame.corners` no longer goes through `transform`);
+  - `publisher_slides.py` (`_image` refuses a picture with no area; `_shape` hands a flat rectangle/ellipse to the new `_flat`; `group_all` checks kinds at every depth and counts WordArt's wrapper; `_wordart` cleans its text; `_text` reports pictures set in a text box);
+  - `publisher_inline.py` (`marks` reads a text box's own `paragraphs`);
+  - `tests/platform/test_publisher_planning.py` (new, 12);
+  - `docs/publisher-renderer.md`, this file.
+- Completed:
+  - #105: a zero-height or zero-width element no longer crashes planning. A flat rectangle/ellipse is drawn as the line it looks like; a picture with no area is reported, not drawn.
+  - #106: a table inside a nested group stops every enclosing group being made.
+  - #110: WordArt inside an authored group is grouped; a control character in WordArt text is dropped instead of failing `check()`.
+  - #107: U+FFFC in text boxes is now counted, so a picture there can't be taken for a table's. A recovered text-box picture is reported as missing on its box (`inline-picture-missing`), not placed: its position in the text isn't known.
+  - All 12 new tests fail on main and pass here.
+- Checks: 519 platform tests passed, 14 skipped; Ruff clean. Mypy reports only `hypercorn` missing from the local venv (`server.py`, untouched). Pillow 12.3.0 (the pinned version) is now installed in the local `.venv`, so the Publisher tests run locally.
+- Known failures: none.
+- Unresolved:
+  - #107: placing text-box inline pictures properly would need their position in the laid-out text.
+  - Not live-verified against Slides.
+- Decisions: none new.
+- Next task: #108, #109, #111 (Publisher). A second Claude session is taking the DOCX issues (#114, #134, #113, then #55/#112/#115/#117/#135); don't edit `docx.py`/`docs.py` from here.
+- Warnings: none new.
+
+---
+
 - Agent: Claude Code (second session, DOCX stream)
 - Date: 2026-09-30
 - Branch: `fix/docx-placement-sections`, the top of a stack on main `2d80316`: `fix/docx-page-size` (#114) <- `fix/docx-same-page-geometry` (#134) <- this (#112, #115, #116, #117, #118, #135). `fix/docx-textbox-ends-container` (#113) is on main by itself.

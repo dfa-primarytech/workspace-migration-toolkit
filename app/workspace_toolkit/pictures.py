@@ -39,7 +39,7 @@ from xml.etree.ElementTree import Element  # nosec B405
 from PIL import Image
 
 from .config import Settings
-from .package import Format, Package
+from .package import RELATIONSHIPS, Format, Package, with_default, without_overrides
 
 PPI = 220
 EMU_PER_INCH = 914_400
@@ -53,9 +53,6 @@ PHOTO_COLOURS = 4096  # a 256 px sample with more distinct colours is a photogra
 
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 IMAGE_RELATIONSHIP = "/relationships/image"
-_Q = rb"(?:[A-Za-z_][\w.-]*:)?"
-RELATIONSHIP = re.compile(rb"<" + _Q + rb"Relationship\b[^>]*?/>")
-OVERRIDE = re.compile(rb"<" + _Q + rb"Override\b[^>]*?/>")
 
 
 def local(tag: str) -> str:
@@ -229,7 +226,7 @@ def _retarget(data: bytes, rid: str, old: str, new: str) -> bytes | None:
         value = target.group(3)[: -len(old.encode())] + new.encode()
         return tag[: target.start(3)] + value + tag[target.end(3) :]
 
-    result = RELATIONSHIP.sub(edit, data)
+    result = RELATIONSHIPS.sub(edit, data)  # empty or paired tags alike
     return result if changed else None
 
 
@@ -286,16 +283,21 @@ def compress(path: Path, settings: Settings, fmt: Format) -> dict:
                 "bytesBefore": before,
                 "bytesAfter": before,
             }
-        types = package.read("[Content_Types].xml")
-        if renames:
-            gone = {"/" + old.casefold() for old in renames}
-            types = OVERRIDE.sub(
-                lambda m: b"" if _part_name(m.group(0)) in gone else m.group(0), types
-            )
-            if not re.search(rb"Extension\s*=\s*[\"']jpeg[\"']", types, re.IGNORECASE):
-                types = types.replace(
-                    b"</Types>", b'<Default Extension="jpeg" ContentType="image/jpeg"/></Types>'
-                )
+        types: bytes | None = package.read("[Content_Types].xml")
+        if renames and types is not None:
+            # The old picture's override goes, and a JPEG is declared, in
+            # whatever prefix the file uses (#137). Unconfirmed: change nothing.
+            types = without_overrides(types, set(renames))
+            if types is not None:
+                types = with_default(types, "jpeg", "image/jpeg")
+        if types is None:
+            skipped["content types not editable"] = len(done)
+            return {
+                "picturesCompressed": [],
+                "skipped": skipped,
+                "bytesBefore": before,
+                "bytesAfter": before,
+            }
         edited["[Content_Types].xml"] = types
         temporary = path.with_name(path.name + ".smaller")
         with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as out:
@@ -314,11 +316,6 @@ def compress(path: Path, settings: Settings, fmt: Format) -> dict:
         "bytesBefore": before,
         "bytesAfter": path.stat().st_size,
     }
-
-
-def _part_name(tag: bytes) -> str:
-    match = re.search(rb"\sPartName\s*=\s*([\"'])(.*?)\1", tag)
-    return match.group(2).decode("utf-8", "replace").casefold() if match else ""
 
 
 def _entry(old: str, new: str, before: bytes, after: bytes, how: str) -> dict:
