@@ -1212,7 +1212,16 @@ void IrCollector::drawGraphicObject(const librevenge::RVNGPropertyList &props) {
   recordAssetUse(*element, element->assetId);
   doc_.counts.assetPlacements++;
 
-  const std::string settled = normaliseMime(mime);
+  // Classified by the type the asset settled on (its bytes, when they are
+  // recognised), not the one declared: a WMF declared as PNG is stored as a
+  // WMF and must not be called a raster (#128). Parser metadata only; the
+  // renderer checks the asset's own type before sending anything to Slides.
+  std::string settled = normaliseMime(mime);
+  for (const Asset &asset : doc_.assets) {
+    if (asset.id != element->assetId) continue;
+    settled = asset.mime;
+    break;
+  }
   if (isMetafileMime(settled)) {
     element->compatibility = Compatibility::Flattened;
     element->compatibilityEvidence =

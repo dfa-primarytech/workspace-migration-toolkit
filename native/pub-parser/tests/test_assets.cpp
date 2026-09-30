@@ -244,3 +244,33 @@ TEST(assets_metafiles_are_candidates_for_flattening_not_native) {
   CHECK_EQ(std::string(compatibilityName(doc.elements[0].compatibility)), std::string("FLATTENED"));
   CHECK(!doc.assets[0].hasPixelDimensions);
 }
+
+TEST(assets_a_metafile_declared_as_png_is_classified_by_its_bytes) {
+  // #128: the asset is stored as the WMF its bytes say it is, but the element
+  // was classified from the declared PNG and called NATIVE. Metadata only:
+  // the renderer checks the asset's own type before sending anything to Slides.
+  IrCollector collector;
+  collector.startDocument(RVNGPropertyList());
+  collector.startPage(page(8.0, 6.0));
+  collector.drawGraphicObject(graphicObject("\xd7\xcd\xc6\x9a rest of a wmf", "image/png",
+                                            1, 1, 2, 2));
+  collector.endPage();
+  collector.endDocument();
+  const Document &doc = collector.finish();
+
+  CHECK_EQ(doc.assets[0].mime, std::string("image/x-wmf"));
+  CHECK_EQ(std::string(compatibilityName(doc.elements[0].compatibility)), std::string("FLATTENED"));
+}
+
+TEST(assets_a_raster_declared_as_a_metafile_is_classified_by_its_bytes) {
+  IrCollector collector;
+  collector.startDocument(RVNGPropertyList());
+  collector.startPage(page(8.0, 6.0));
+  collector.drawGraphicObject(graphicObject(tinyPng(0x09), "image/x-wmf", 1, 1, 2, 2));
+  collector.endPage();
+  collector.endDocument();
+  const Document &doc = collector.finish();
+
+  CHECK_EQ(doc.assets[0].mime, std::string("image/png"));
+  CHECK_EQ(std::string(compatibilityName(doc.elements[0].compatibility)), std::string("NATIVE"));
+}
