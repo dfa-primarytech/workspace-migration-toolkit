@@ -9,6 +9,21 @@ PR descriptions have the same detail in full.
 
 - Agent: Claude Code (Publisher)
 - Date: 2026-09-30
+- Branch: `fix/publisher-mask-budget`, stacked on `fix/publisher-page-failures` (PR #139, itself on #138): merge #138, then #139, then this
+- Objective: #111, shape drawing's supersampled masks passing any memory bound.
+- Files changed: `publisher_art.py` (`MASK_BUDGET`, `_supersample`); `tests/platform/test_publisher_masks.py` (new, 6); `docs/publisher-renderer.md`; this file.
+- Completed: a coverage mask is drawn at 3x only while it stays within 40M pixels, else 2x, else 1x. The picture's own size is unchanged. A page-sized A5 shape keeps 3x. Mask sizes are tested by recording them, not by allocating a huge one.
+- Checks: 532 platform tests passed, 14 skipped; Ruff clean; mypy only reports `hypercorn` missing locally.
+- Known failures: none.
+- Unresolved: the finished RGBA picture can still be 25M pixels (about 100 MB, and briefly two of them while compositing). That is Slides' own limit and not changed here. No out-of-memory crash was ever reproduced (Codex's qualification).
+- Decisions: none new.
+- Next task: all the Publisher audit issues are now fixed or in PRs. Next, the unclaimed Platform/PPTX ones (#120, #121, #124, #130-#133, #136, #137): claim them first.
+- Warnings: none new.
+
+---
+
+- Agent: Claude Code (Publisher)
+- Date: 2026-09-30
 - Branch: `fix/publisher-page-failures`, stacked on `fix/publisher-planning-crashes` (PR #138): merge that first
 - Objective: #108 (one failed picture upload blanked every later page) and #109 (leading tabs in a list shifted every text range).
 - Files changed:

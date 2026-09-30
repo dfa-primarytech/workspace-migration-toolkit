@@ -343,13 +343,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 analysis = pipeline.analysis_report(manifest)
                                 analysis.setdefault("warnings", []).extend(beyond)
                                 return analysis
-                            if (
-                                request.headers.get("x-source-sha256")
-                                != manifest["source"]["sha256"]
-                            ):
+                            # Converting is one step (DECISIONS.md, 2026-09-29): a file
+                            # need not be checked first. A client that did check it
+                            # can still say which file it checked, and is held to it.
+                            expected = request.headers.get("x-source-sha256")
+                            if expected is not None and expected != manifest["source"]["sha256"]:
                                 raise ToolkitError(
                                     "source_changed",
-                                    "Please analyse this file before converting it.",
+                                    "This file changed since it was checked. Please try again.",
                                     409,
                                 )
                             report = await pipeline.convert(

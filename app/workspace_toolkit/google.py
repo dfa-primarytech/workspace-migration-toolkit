@@ -840,6 +840,8 @@ async def convert(
 def failed(report: dict, exc: ToolkitError) -> None:
     """Records why a conversion stopped, keeping whatever it already made."""
     report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
+    # The one line a person is shown beside the file: why it stopped.
+    report["stoppedBecause"] = exc.message
     report.setdefault("warnings", []).append(
         warning(exc.code, exc.message, classification=C.UNSUPPORTED, detail=exc.detail)
         if exc.detail
