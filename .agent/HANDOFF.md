@@ -32,7 +32,12 @@
     #122 (PR #157, `model.text_tokens` on both sides: autoText, runs joined within a shape, hyphen variants; a word holding `w:sym` is left out, not mapped);
     #125 (PR #158, validator: missing zIndex reported, self-parent reported);
     #123 (PR #159, comment and fixed status only; no test can fail on main, stated in the PR).
-- Next task: the empty-drawing residue (#20) the #113 tests ran into. #126-#129 need the native parser built (Docker); left alone. #150 is the Publisher session's.
+  - Then the native parser issues, handed over by the Publisher session; no local Linux build here, so each PR pushed its tests first and CI shows red, then green (run ids in each PR):
+    #126 (PR #161, id-to-element map in documentJson; output unchanged);
+    #127 (PR #162, covered cells share the cell cap; new maxTableRows);
+    #128 (PR #163, graphic objects classified by the asset's settled MIME; metadata only);
+    #129 (PR #164, top-level catch in main, exit 4, allocation-free last-resort report; PUBIR_FAIL_FOR_TESTING hook). Its green run was still queued at hand-off; it stays a draft until it passes.
+- Next task: the empty-drawing residue (#20) the #113 tests ran into. #150 is the Publisher session's (PR #160).
 - Warnings: merge the stack in order (#114, #134, then the placement PR); after a squash merge, the next branch needs rebasing onto main. #113 conflicts with nothing in the stack.
 
 ---
