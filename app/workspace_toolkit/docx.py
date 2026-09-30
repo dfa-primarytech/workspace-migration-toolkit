@@ -411,6 +411,16 @@ def _stated_length(size: Element, name: str, default: float) -> float:
     return value
 
 
+def body_blocks(container: Element | list[Element]):
+    """Body-level blocks in document order, looking inside content controls."""
+    for child in container:
+        yield child
+        if local(child.tag) == "sdt":
+            content = child.find(q("w", "sdtContent"))
+            if content is not None:
+                yield from body_blocks(content)
+
+
 def _section_breaks(container: Element | list[Element]):
     """Every mid-document <w:sectPr> that ends a section, in document order.
 
