@@ -1,5 +1,26 @@
 # Handoff
 
+- Agent: Claude Code (Claude 2, DOCX/platform/parser)
+- Date: 2026-09-30
+- Branch: `fix/docx-straddling-pictures`, based on main `7eaf26a` (PR #167)
+- Objective: #55's remaining criterion: a picture straddling two table columns was moved into one, chosen by its centre, and could then shrink.
+- Files changed: `docs.py` (`_place_above` needs the whole picture inside one column; `place_orphan_pictures` counts `picturesGeometryUncertain` and hands those anchors to `place_pictures_by_table_geometry`, which skips them; `transform` adds the two passes' uncertain counts instead of keeping only the second); `tests/platform/test_docx_straddling.py` (new, 5); `test_docx.py` (one test's margin corrected); this file and the archive.
+- Completed:
+  - A picture that overlaps a column but fits none is left floating and counted as uncertain. The rest of its stack is left too (rows are read from the whole stack) and counted unplaced. A picture clear of the table is unplaced, as before.
+  - Margin-strip anchors are covered: `_offset` already restates them from the paper's edge (#143).
+  - A picture both passes see is counted once.
+  - `test_a_page_relative_offset_is_measured_from_the_margin_not_the_paper` used a 457200 EMU margin against the section's 914400; it passed only through the centre rule. Corrected; it passes on main too.
+  - 4 of the 5 new tests fail on main; the fifth guards that a picture inside one column is still placed.
+- Checks: 621 platform tests passed, 17 skipped; Ruff clean; mypy clean.
+- Known failures: none.
+- Unresolved: `_place_above` measures columns from the text column's start and ignores a table's own `tblpPr` position or `tblInd`, so a floating or indented table's columns are misread there (the geometry pass does read `tblpPr`). Not changed here; worth an issue if it matters on real worksheets.
+- Decisions: none new; this applies the geometry pass's existing containment rule to the earlier pass.
+- Next task: none claimed. The live check on #166 (PUB-001, PUB-002, a real DOCX and PPTX through the test host) needs the owner.
+- Warnings: the scratchpad venv's `.pth` points at `wmt-docx-fixes/app`, and the worker subprocess gets a fixed environment without `PYTHONPATH`, so tests run from another checkout convert with this checkout's code.
+---
+
+## Previous handoff
+
 - Agent: Claude Code (Publisher session, on Platform/PPTX files by the owner's request)
 - Date: 2026-09-30
 - Branch: `fix/pptx-package-edits`, stacked on `fix/publisher-mask-budget` (PR #140): merge #138, #139, #140, then this
@@ -41,30 +62,4 @@
 - Unresolved: the finished RGBA picture can still be 25M pixels (about 100 MB, and briefly two of them while compositing). That is Slides' own limit and not changed here. No out-of-memory crash was ever reproduced (Codex's qualification).
 - Decisions: none new.
 - Next task: all the Publisher audit issues are now fixed or in PRs. Next, the unclaimed Platform/PPTX ones (#120, #121, #124, #130-#133, #136, #137): claim them first.
-- Warnings: none new.
----
-
-## Previous handoff
-
-- Agent: Claude Code (Publisher)
-- Date: 2026-09-30
-- Branch: `fix/publisher-page-failures`, stacked on `fix/publisher-planning-crashes` (PR #138): merge that first
-- Objective: #108 (one failed picture upload blanked every later page) and #109 (leading tabs in a list shifted every text range).
-- Files changed:
-  - `publisher_convert.py` (`Delivery`, `undelivered`; `build_page` marks a picture it can't send; the page loop also catches `ToolkitError`; the outer handler catches `httpx.HTTPError`; neutral `pages_failed` wording);
-  - `storage.py` (`Credentials.token` and `MetadataCredentials.email` raise `picture_delivery_failed`; `Bucket.delete` never raises);
-  - `publisher_slides.py` (`_without_leading_tabs`, used by `_laid`);
-  - tests: `test_publisher_convert.py` (+6, and a `store_fails` switch on the fake Google), `test_publisher_lists.py` (+1);
-  - `docs/publisher-renderer.md`, this file.
-- Completed:
-  - #108: a picture that can't be stored or signed becomes a marked box (`pictures_not_sent`), and later pages are still made. After 3 failures in a row the bucket isn't asked again. A page that fails another way is left blank and reported, and the rest carry on. Metadata-server errors are reported properly instead of escaping as `httpx` errors.
-  - #109: a list paragraph's leading tabs are dropped before any range is counted, so bullets and styles line up with the text Google keeps.
-  - All 7 new tests fail on main and pass here.
-- Checks: 526 platform tests passed, 14 skipped (with #138 underneath); Ruff clean; mypy only reports `hypercorn` missing locally.
-- Known failures: none.
-- Unresolved:
-  - #108's PPTX/Sheets half (`Google.upload` not wrapping `OSError`, `json.loads(render.json)`) is Platform-owned and not done here.
-  - #109 isn't live-verified; nesting by tabs isn't supported (Publisher's indent is set from its own margins).
-- Decisions: none new.
-- Next task: #111 (mask size cap), then the unclaimed Platform/PPTX audit issues.
 - Warnings: none new.

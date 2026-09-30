@@ -1298,11 +1298,21 @@ def _picture_only_paragraph(paragraph: Element) -> bool:
     return all(classify(a)[0] == "picture" for a in paragraph.iter(q("wp", "anchor")))
 
 
-def place_orphan_pictures(root: Element, ids: Ids, fallback: Element | None = None) -> dict:
-    """Moves a picture floating above a table into the cell it was drawn over."""
+def place_orphan_pictures(
+    root: Element,
+    ids: Ids,
+    fallback: Element | None = None,
+    uncertain: set[Element] | None = None,
+) -> dict:
+    """Moves a picture floating above a table into the cell it was drawn over.
+
+    A picture this pass reports as uncertain is added to `uncertain`, so the
+    geometry pass after it can leave it alone rather than count it again.
+    """
     parent_of = parents(root)
     sections = Sections(root, parent_of, fallback)
-    report = {"picturesPlaced": 0, "picturesUnplaced": 0}
+    report = {"picturesPlaced": 0, "picturesUnplaced": 0, "picturesGeometryUncertain": 0}
+    uncertain = set() if uncertain is None else uncertain
     for container in list(root.iter()):
         blocks = list(container)
         for index, block in enumerate(blocks[:-1]):
@@ -1322,7 +1332,7 @@ def place_orphan_pictures(root: Element, ids: Ids, fallback: Element | None = No
             if _page_relation(blocks, i + 1, index + 1) == "different":
                 report["picturesUnplaced"] += anchors
                 continue
-            _place_above(root, run, blocks[index + 1], parent_of, sections, ids, report)
+            _place_above(root, run, blocks[index + 1], parent_of, sections, ids, report, uncertain)
     return report
 
 
@@ -1334,6 +1344,7 @@ def _place_above(
     sections: Sections,
     ids: Ids,
     report: dict,
+    uncertain: set[Element],
 ) -> None:
     anchors = [anchor for paragraph in paragraphs for anchor in paragraph.iter(q("wp", "anchor"))]
     if not anchors:
@@ -1366,6 +1377,7 @@ def _place_above(
     margin = _margin(section, "left")
     placed: dict[int, list[tuple[int, Element]]] = {}
     frames: set[str] = set()
+    straddling: list[Element] = []
     for anchor in pictures:
         across, down = _offset(anchor, "H", geometry), _offset(anchor, "V", geometry)
         # _measure_emu takes the element that *holds* wp:extent, not the extent.
@@ -1384,12 +1396,28 @@ def _place_above(
             report["picturesUnplaced"] += len(anchors)
             return
         frames.add(down[0])
-        centre = start + drawn // 2
-        column = next((n for n, (left, right) in enumerate(edges) if left <= centre < right), None)
+        # The whole picture, not its centre (#55): one crossing a column
+        # boundary belongs to neither column for certain, and moving it into
+        # one would then shrink it to that column's width.
+        end = start + drawn
+        column = next(
+            (n for n, (left, right) in enumerate(edges) if left <= start and end <= right), None
+        )
         if column is None:
+            if any(start < right and end > left for left, right in edges):
+                straddling.append(anchor)
+                continue
             report["picturesUnplaced"] += len(anchors)
             return
         placed.setdefault(column, []).append((down[1], anchor))
+
+    if straddling:
+        # Which row each picture belongs to is read from the whole stack, so
+        # the ones that do fit are left too, as the geometry pass would.
+        report["picturesGeometryUncertain"] += len(straddling)
+        report["picturesUnplaced"] += len(anchors) - len(straddling)
+        uncertain.update(straddling)
+        return
 
     if len(frames) > 1:
         # Two origins ranked against each other would order the pictures
@@ -1600,7 +1628,10 @@ def _page_relation(blocks: list[Element], first: int, last: int, limit: int | No
 
 
 def place_pictures_by_table_geometry(
-    root: Element, ids: Ids, fallback: Element | None = None
+    root: Element,
+    ids: Ids,
+    fallback: Element | None = None,
+    reported: set[Element] | frozenset[Element] = frozenset(),
 ) -> dict:
     """Assigns a still-floating picture to the cell its rectangle sits
     inside, wherever in the document it was anchored -- unlike
@@ -1616,6 +1647,9 @@ def place_pictures_by_table_geometry(
     unless the two are on the same page (#134): a picture on page 5 at the
     spot a table fills on page 2 is not in that table. Where that cannot be
     shown, the picture stays where it is and is reported as uncertain.
+
+    A picture in `reported` was already left and reported by the pass
+    before this one, so it is skipped: it can only be uncertain here too.
     """
     parent_of = parents(root)
     sections = Sections(root, parent_of, fallback)
@@ -1647,6 +1681,8 @@ def place_pictures_by_table_geometry(
 
     for anchor in list(root.iter(q("wp", "anchor"))):
         if classify(anchor)[0] != "picture" or anchor.get("behindDoc") not in (None, *OFF_VALUES):
+            continue
+        if anchor in reported:
             continue
         section = sections.of(anchor)
         geometry = page_geometry(section)
@@ -1880,15 +1916,16 @@ def transform(root: Element, ids: Ids | None = None, fallback: Element | None = 
     # before they can be measured against the page.
     # Before the tables are measured: a picture that lands in a cell changes
     # how wide that table needs to be.
-    report.update(place_orphan_pictures(root, ids, fallback))
+    uncertain: set[Element] = set()
+    report.update(place_orphan_pictures(root, ids, fallback, uncertain))
     # A different reach than the pass above: by rectangle geometry rather
     # than document order, so it also catches a picture anchored nowhere
     # near its table in the XML -- but only for a table exact enough to
     # measure at all. Picture counts are summed, not replaced.
-    geometry = place_pictures_by_table_geometry(root, ids, fallback)
+    geometry = place_pictures_by_table_geometry(root, ids, fallback, uncertain)
     report["picturesPlaced"] += geometry["picturesPlaced"]
     report["picturesUnplaced"] += geometry["picturesUnplaced"]
-    report["picturesGeometryUncertain"] = geometry["picturesGeometryUncertain"]
+    report["picturesGeometryUncertain"] += geometry["picturesGeometryUncertain"]
     report.update(fit_tables_to_page(root, fallback))
     # After fitting: a picture #34 or #55 moved into a row may have just been
     # shrunk to the column, which changes whether the row still fits a page.

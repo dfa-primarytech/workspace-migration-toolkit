@@ -1460,8 +1460,10 @@ def test_two_vertical_origins_are_not_ranked_against_each_other():
 
 def test_a_page_relative_offset_is_measured_from_the_margin_not_the_paper():
     # Exact arithmetic rather than a guess, so it is worth recovering: the A4
-    # section's left margin comes off before the offset means anything.
-    margin = 457200
+    # section's left margin (1440 twips) comes off before the offset means
+    # anything. It was once written here as 457200, half that, and the test
+    # still passed only because a picture's centre used to choose its column.
+    margin = 1440 * 635
     body = para(
         floating(200000 + margin, 100000, frame_h="page"),
         floating(4000000 + margin, 100000, frame_h="page"),
