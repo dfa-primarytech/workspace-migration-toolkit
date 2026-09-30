@@ -219,3 +219,107 @@ TEST(limits_unsupported_callbacks_still_reach_the_report) {
   }
   CHECK(recorded);
 }
+
+namespace {
+
+// One table on one page: `open` ordinary cells, then `covered` covered ones,
+// all in a single row.
+const Document &tableOfCells(IrCollector &collector, int open, int covered) {
+  collector.startDocument(RVNGPropertyList());
+  collector.startPage(page(8.0, 6.0));
+  collector.startTableObject(box(1, 1, 4, 3));
+  collector.openTableRow(RVNGPropertyList());
+  for (int i = 0; i < open; i++) {
+    collector.openTableCell(RVNGPropertyList());
+    collector.closeTableCell();
+  }
+  for (int i = 0; i < covered; i++) collector.insertCoveredTableCell(RVNGPropertyList());
+  collector.closeTableRow();
+  collector.endTableObject();
+  collector.endPage();
+  collector.endDocument();
+  return collector.finish();
+}
+
+std::size_t cellsIn(const Document &doc) {
+  const auto tables = elementsOfType(doc, "table");
+  if (tables.empty()) return 0;
+  std::size_t cells = 0;
+  for (const TableRow &row : tables[0]->table.rows) cells += row.cells.size();
+  return cells;
+}
+
+} // namespace
+
+TEST(limits_covered_cells_up_to_the_cell_cap_are_kept) {
+  Limits limits;
+  limits.maxTableCells = 3;
+  IrCollector collector(limits);
+  const Document &doc = tableOfCells(collector, 0, 3);
+  CHECK(!doc.truncated);
+  CHECK_EQ(cellsIn(doc), std::size_t(3));
+}
+
+TEST(limits_covered_cells_count_against_the_cell_cap) {
+  // #127: a covered cell was counted but never checked, so a table of spans
+  // could hold ten times the cap before the callback limit stopped it.
+  Limits limits;
+  limits.maxTableCells = 3;
+  IrCollector collector(limits);
+  const Document &doc = tableOfCells(collector, 0, 4);
+  CHECK(doc.truncated);
+  CHECK_EQ(doc.truncationReason, std::string("limit-table-cells"));
+  CHECK_EQ(cellsIn(doc), std::size_t(3));
+}
+
+TEST(limits_open_and_covered_cells_share_one_cap) {
+  Limits limits;
+  limits.maxTableCells = 3;
+  IrCollector collector(limits);
+  const Document &doc = tableOfCells(collector, 2, 2);
+  CHECK(doc.truncated);
+  CHECK_EQ(doc.truncationReason, std::string("limit-table-cells"));
+  CHECK_EQ(cellsIn(doc), std::size_t(3));
+}
+
+TEST(limits_empty_rows_stop_at_the_row_cap) {
+  // #127: rows had no limit at all, so a stream of empty rows was bounded
+  // only by the callback limit.
+  Limits limits;
+  limits.maxTableRows = 2;
+  IrCollector collector(limits);
+  collector.startDocument(RVNGPropertyList());
+  collector.startPage(page(8.0, 6.0));
+  collector.startTableObject(box(1, 1, 4, 3));
+  for (int i = 0; i < 5; i++) {
+    collector.openTableRow(RVNGPropertyList());
+    collector.closeTableRow();
+  }
+  collector.endTableObject();
+  collector.endPage();
+  collector.endDocument();
+  const Document &doc = collector.finish();
+
+  CHECK(doc.truncated);
+  CHECK_EQ(doc.truncationReason, std::string("limit-table-rows"));
+  const auto tables = elementsOfType(doc, "table");
+  CHECK_EQ(tables.size(), std::size_t(1));
+  if (!tables.empty()) CHECK_EQ(tables[0]->table.rows.size(), std::size_t(2));
+}
+
+TEST(limits_rows_up_to_the_row_cap_are_kept) {
+  Limits limits;
+  limits.maxTableRows = 2;
+  IrCollector collector(limits);
+  collector.startDocument(RVNGPropertyList());
+  collector.startPage(page(8.0, 6.0));
+  collector.startTableObject(box(1, 1, 4, 3));
+  for (int i = 0; i < 2; i++) {
+    collector.openTableRow(RVNGPropertyList());
+    collector.closeTableRow();
+  }
+  collector.endTableObject();
+  collector.endPage();
+  collector.endDocument();
+  CHECK(!collector.finish().truncated);
+}
