@@ -51,6 +51,7 @@ from .docx import (
     parents,
     q,
     to_dxa,
+    twips,
 )
 from .errors import ToolkitError
 from .model import Compatibility as C
@@ -805,13 +806,12 @@ def _measure(element: Element | None, name: str) -> int | None:
     schema allows it, but `int()` refuses it -- so a real worksheet's `w:tblW`
     measured as nothing, the table's own width was left behind when its columns
     were narrowed, and the two then disagreed by three quarters of an inch.
+    A length with a unit ("210mm") is read too; see docx.twips.
     """
     if element is None:
         return None
-    try:
-        return round(float(element.get(q("w", name), "")))
-    except ValueError:
-        return None
+    value = twips(element.get(q("w", name)))
+    return None if value is None else round(value)
 
 
 def _final_section(root: Element) -> Element | None:

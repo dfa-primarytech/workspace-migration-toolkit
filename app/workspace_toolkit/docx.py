@@ -30,6 +30,7 @@ from pathlib import Path
 from xml.etree.ElementTree import Element, register_namespace  # nosec B405
 
 from .config import Settings
+from .errors import ToolkitError
 from .model import Compatibility as C
 from .model import emu_to_points, warning
 from .package import DOCX, Package, digest
@@ -366,15 +367,48 @@ def empty_manifest(filename: str, source_sha: str) -> dict:
     }
 
 
+# ST_TwipsMeasure and its signed form: a number of twips, or a number with one
+# of the universal-measure units. Word writes plain integers; other generators
+# write decimals ("11906.0") and units ("210mm").
+TWIPS_PER_UNIT = {"": 1.0, "pt": 20.0, "pc": 240.0, "pi": 240.0, "in": 1440.0}
+TWIPS_PER_UNIT |= {"mm": 1440 / 25.4, "cm": 1440 / 2.54}
+TWIPS_MEASURE = re.compile(r"\s*(-?\d+(?:\.\d*)?|-?\.\d+)\s*(mm|cm|in|pt|pc|pi)?\s*")
+
+
+def twips(value: str | None) -> float | None:
+    """A stated length in twips, or None if it is missing or unreadable."""
+    if value is None:
+        return None
+    match = TWIPS_MEASURE.fullmatch(value)
+    if not match:
+        return None
+    return float(match.group(1)) * TWIPS_PER_UNIT[(match.group(2) or "").lower()]
+
+
 def page_size(sect_pr: Element | None) -> dict:
-    """Page dimensions in points. A4 unless the document says otherwise."""
-    width, height = 11906, 16838
+    """Page dimensions in points. A4 unless the document says otherwise.
+
+    A size the document states but that cannot be read is refused, not
+    replaced by A4: laying the document out on a page it never had would
+    move everything on it.
+    """
+    width, height = 11906.0, 16838.0
     if sect_pr is not None:
         size = sect_pr.find(q("w", "pgSz"))
         if size is not None:
-            width = int(size.get(q("w", "w")) or width)
-            height = int(size.get(q("w", "h")) or height)
+            width = _stated_length(size, "w", width)
+            height = _stated_length(size, "h", height)
     return {"widthPt": width / DXA_PER_POINT, "heightPt": height / DXA_PER_POINT}
+
+
+def _stated_length(size: Element, name: str, default: float) -> float:
+    raw = size.get(q("w", name))
+    if not raw:
+        return default
+    value = twips(raw)
+    if value is None or value <= 0:
+        raise ToolkitError("invalid_page_size", "This document's page size cannot be read.")
+    return value
 
 
 def _section_breaks(container: Element | list[Element]):
