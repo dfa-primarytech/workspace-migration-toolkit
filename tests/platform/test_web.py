@@ -415,6 +415,11 @@ def test_a_drive_file_id_is_refused_when_picker_is_not_configured():
     assert response.json()["error"]["code"] == "picker_unavailable"
 
 
+async def unsized(self, file_id):
+    """Google.size for a test that fakes the download: Drive gives no size."""
+    return None
+
+
 def test_convert_downloads_a_drive_picked_file_instead_of_the_request_body(monkeypatch, pptx):
     """A Drive pick sends no body at all -- the server fetches the bytes
     itself by id (see Google.download), so nothing about the source ever
@@ -440,6 +445,7 @@ def test_convert_downloads_a_drive_picked_file_instead_of_the_request_body(monke
 
     pipeline = replace(resolve("x.pptx"), convert=converted)
     monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web.Google, "size", unsized)
     monkeypatch.setattr(web, "preflight", analysed)
     monkeypatch.setattr(web, "resolve", lambda name: pipeline)
     client = signed_client(configured(picker_api_key="test-picker-key"))
@@ -466,6 +472,7 @@ def test_an_empty_drive_file_is_refused_the_same_way_as_an_empty_upload(monkeypa
         return 0
 
     monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web.Google, "size", unsized)
     monkeypatch.setattr(web, "resolve", lambda name: resolve("x.pptx"))
     client = signed_client(configured(picker_api_key="test-picker-key"))
     response = client.post(
@@ -540,6 +547,7 @@ def _drive_convert(monkeypatch, reported_size, expires_in):
         return {"status": "completed"}
 
     monkeypatch.setattr(web.Google, "download", fake_download)
+    monkeypatch.setattr(web.Google, "size", unsized)
     monkeypatch.setattr(web, "preflight", analysed)
     monkeypatch.setattr(web, "resolve", lambda name: replace(resolve("x.pptx"), convert=converted))
     settings = configured(picker_api_key="test-picker-key")
@@ -617,3 +625,53 @@ def test_a_file_converts_in_one_step_without_being_checked_first(monkeypatch, pp
     response = client.post("/api/convert", content=pptx.read_bytes(), headers=headers)
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "completed"
+
+
+def test_a_drive_files_time_allowed_covers_its_download(monkeypatch):
+    # A 146 MB deck picked from Drive stopped at exactly the base 240 s in the
+    # live test: its size, and so its extra time, was only known once it had
+    # all arrived. Drive now says the size first.
+    import asyncio
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    asked = []
+
+    async def sized(self, file_id):
+        asked.append(file_id)
+        return 10_000
+
+    async def slow_download(self, file_id, destination, max_bytes):
+        await asyncio.sleep(1.5)  # longer than the base time allowed
+        destination.write_bytes(b"x" * 10_000)
+        return 10_000
+
+    async def analysed(root, settings, fmt, **options):
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        return {"status": "completed"}
+
+    monkeypatch.setattr(web.Google, "size", sized)
+    monkeypatch.setattr(web.Google, "download", slow_download)
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: replace(resolve("x.pptx"), convert=converted))
+    # 1 s base, plus 1 s per 2,500 bytes: 5 s for this file.
+    settings = configured(
+        picker_api_key="test-picker-key",  # pragma: allowlist secret -- synthetic fixture
+        job_timeout=1,
+        transfer_bytes_per_second=2_500,
+    )
+    response = signed_client(settings).post(
+        "/api/convert",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Drive-File-Id": "drive123",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert asked == ["drive123"]
