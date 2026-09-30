@@ -36,7 +36,7 @@
     #126 (PR #161, id-to-element map in documentJson; output unchanged);
     #127 (PR #162, covered cells share the cell cap; new maxTableRows);
     #128 (PR #163, graphic objects classified by the asset's settled MIME; metadata only);
-    #129 (PR #164, top-level catch in main, exit 4, allocation-free last-resort report; PUBIR_FAIL_FOR_TESTING hook). Its green run was still queued at hand-off; it stays a draft until it passes.
+    #129 (PR #164, top-level catch in main, exit 4, allocation-free last-resort report; PUBIR_FAIL_FOR_TESTING hook). Green in run 36713758504 and ready for review.
 - Next task: the empty-drawing residue (#20) the #113 tests ran into. #150 is the Publisher session's (PR #160).
 - Warnings: merge the stack in order (#114, #134, then the placement PR); after a squash merge, the next branch needs rebasing onto main. #113 conflicts with nothing in the stack.
 
