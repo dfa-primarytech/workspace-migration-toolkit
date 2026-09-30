@@ -7,7 +7,6 @@ import. Structural read-back uses the Sheets API through the existing narrow
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .errors import ToolkitError
@@ -149,22 +148,6 @@ async def convert(
         report["warnings"].append(warning(exc.code, exc.message, classification=C.UNSUPPORTED))
         report["verification"] = "incomplete"
 
-    if report.get("folderUrl"):
-        report_path = root / "conversion-report.json"
-        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        try:
-            saved = await google.upload(
-                report_path,
-                "Conversion report.json",
-                "application/json",
-                report["folderUrl"].rsplit("/", 1)[-1],
-            )
-            report["reportUrl"] = "https://drive.google.com/file/d/" + saved["id"] + "/view"
-        except ToolkitError:
-            report["warnings"].append(
-                warning(
-                    "report_upload_failed",
-                    "The report could not be saved to Drive. Download it from this page.",
-                )
-            )
+    # Saved to Drive by the caller, once, with everything added after this
+    # returns (see google.save_report and web.py, #121).
     return report

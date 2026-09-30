@@ -2236,22 +2236,6 @@ async def convert(
         )
         report["verification"] = "incomplete"
 
-    if report.get("folderUrl"):
-        path = root / "conversion-report.json"
-        path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        try:
-            saved = await google.upload(
-                path,
-                "Conversion report.json",
-                "application/json",
-                report["folderUrl"].rsplit("/", 1)[-1],
-            )
-            report["reportUrl"] = "https://drive.google.com/file/d/" + saved["id"] + "/view"
-        except ToolkitError:
-            report["warnings"].append(
-                warning(
-                    "report_upload_failed",
-                    "The report could not be saved to Drive. Download it from this page.",
-                )
-            )
+    # Saved to Drive by the caller, once, with everything added after this
+    # returns (see google.save_report and web.py, #121).
     return report

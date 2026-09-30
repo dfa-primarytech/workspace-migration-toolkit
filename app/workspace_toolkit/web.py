@@ -16,7 +16,7 @@ from starlette.staticfiles import StaticFiles
 from .auth import SESSION, STATE, Auth
 from .config import Settings
 from .errors import ToolkitError
-from .google import Google
+from .google import Google, save_report
 from .jobs import preflight, workspace
 from .model import Compatibility as C
 from .model import warning
@@ -367,6 +367,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             if smaller and outcome:
                                 report["pictures"], note = outcome
                                 report["warnings"].append(note)
+                            # Saved last, so the copy in Drive holds all of it.
+                            await save_report(root, report, google)
                             return report
                 except TimeoutError:
                     if progress.get("folderUrl"):

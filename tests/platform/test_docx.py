@@ -521,9 +521,15 @@ def converted_job(tmp_path, body, media=None, **kwargs):
     manifest = asyncio.run(preflight_manifest(root))
     google = FakeGoogle(**kwargs)
     from workspace_toolkit.docs import convert
+    from workspace_toolkit.google import save_report
 
-    report = asyncio.run(convert(root, manifest, google, original_name="Worksheet"))
-    return report, google
+    async def run():
+        # As web.py does: convert, then save the finished report once (#121).
+        report = await convert(root, manifest, google, original_name="Worksheet")
+        await save_report(root, report, google)
+        return report
+
+    return asyncio.run(run()), google
 
 
 async def preflight_manifest(root):

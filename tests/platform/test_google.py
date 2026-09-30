@@ -13,6 +13,7 @@ from workspace_toolkit.google import (
     asset_names,
     convert,
     google_text,
+    save_report,
     verify,
 )
 from workspace_toolkit.package import PPTX_MIME
@@ -143,12 +144,11 @@ def test_native_conversion_assets_and_report(pptx, tmp_path):
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await convert(
-                root,
-                manifest,
-                Google("test-token", client),
-                original_name="School assembly",
-            )
+            google = Google("test-token", client)
+            report = await convert(root, manifest, google, original_name="School assembly")
+            # Saved by the caller, as web.py does (#121).
+            await save_report(root, report, google)
+            return report
 
     report = asyncio.run(run())
     assert report["status"] == "completed_with_warnings"
