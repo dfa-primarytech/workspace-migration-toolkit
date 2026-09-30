@@ -571,3 +571,19 @@ technical report (`technicalNotes`, and each element's notes marked
 can only open files the person picked, so "a folder" means picking many files
 from it in the Picker (multi-select), not reading a folder's contents, unless
 a broader Drive scope is deliberately chosen (it needs Google's verification).
+
+## 2026-09-30: A picture joins a positioned table only on a shown common page (#134)
+
+Page coordinates repeat on every page, so the geometry pass (#55) moved a
+picture on one page into a table at the same spot on another. A picture and
+a table now count as on one page only when nothing between them ends a page
+(a page break, a paragraph set to start a page, a section break that is not
+continuous, or Word's own `w:lastRenderedPageBreak`). Where Word's record of
+its pages is absent, that is not enough on its own: nothing marks where a
+page ends in running text, so they must also be within three blocks of each
+other (`MAX_BLOCKS_APART`). Three is an unmeasured default, chosen because a
+picture beyond it is left in place and reported, never lost; revisit it
+against real worksheets. A page end inside either one, or too great a distance, leaves the
+picture floating and counts it in `picturesGeometryUncertain`, which now
+reaches the saved report (it was dropped before). The order-based pass
+refuses a run of pictures with a page break inside it.

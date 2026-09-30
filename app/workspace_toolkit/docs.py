@@ -45,6 +45,7 @@ from .docx import (
     analysis_report,
     anchor_extent,
     anchor_position,
+    body_blocks,
     classify,
     font_requirements,
     local,
@@ -1213,7 +1214,13 @@ def place_orphan_pictures(root: Element, ids: Ids) -> dict:
                 run.append(blocks[i])
                 i -= 1
             run.reverse()
-            if not any(list(p.iter(q("wp", "anchor"))) for p in run):
+            anchors = sum(len(list(p.iter(q("wp", "anchor")))) for p in run)
+            if not anchors:
+                continue
+            # A page break inside the run puts its first pictures on another
+            # page from the table, whatever their offsets say.
+            if _page_relation(blocks, i + 1, index + 1) == "different":
+                report["picturesUnplaced"] += anchors
                 continue
             _place_above(root, run, blocks[index + 1], parent_of, ids, report)
     return report
@@ -1422,6 +1429,71 @@ def _table_geometry(
     return col_edges, row_edges
 
 
+# Without Word's record of where its pages broke (w:lastRenderedPageBreak),
+# nothing says where a page ends, so only a picture anchored within this many
+# blocks of a table counts as on the same page -- the same few lines, not the
+# same document.
+MAX_BLOCKS_APART = 3
+
+
+def _starts_a_page(section: Element) -> bool:
+    kind = section.find(q("w", "type"))
+    return kind is None or kind.get(q("w", "val")) != "continuous"
+
+
+def _page_marks(block: Element) -> set[str]:
+    """What in this block says a page ends.
+
+    "before": the block's own paragraph starts a new page; "ends": it ends a
+    section that starts the next one on a new page; "inside": a page ends
+    somewhere within it. Only current properties are read: the old ones a
+    tracked change keeps (w:pPrChange, w:sectPrChange) sit a level deeper.
+    """
+    marks = set()
+    for paragraph in block.iter(q("w", "p")):
+        properties = paragraph.find(q("w", "pPr"))
+        if properties is None:
+            continue
+        own = paragraph is block
+        before = properties.find(q("w", "pageBreakBefore"))
+        if before is not None and before.get(q("w", "val")) not in OFF_VALUES:
+            marks.add("before" if own else "inside")
+        section = properties.find(q("w", "sectPr"))
+        if section is not None and _starts_a_page(section):
+            marks.add("ends" if own else "inside")
+    if any(br.get(q("w", "type")) == "page" for br in block.iter(q("w", "br"))):
+        marks.add("inside")
+    if block.find(".//" + q("w", "lastRenderedPageBreak")) is not None:
+        marks.add("inside")
+    return marks
+
+
+def _page_relation(blocks: list[Element], first: int, last: int, limit: int | None = None) -> str:
+    """Whether blocks[first] and blocks[last] are on one page: "same",
+    "different" or "unknown".
+
+    Different when a page ends between them; unknown when one ends inside
+    either of them (the picture's side of it is not known), or, given a
+    `limit`, when more blocks than that lie between them.
+    """
+    first, last = min(first, last), max(first, last)
+    # A content control's own marks are its blocks', which are listed after it.
+    for block in blocks[first + 1 : last]:
+        if local(block.tag) != "sdt" and _page_marks(block):
+            return "different"
+    head, tail = _page_marks(blocks[first]), _page_marks(blocks[last])
+    if first == last:
+        # A block's own start and end do not divide it.
+        return "unknown" if (head | tail) - {"before", "ends"} else "same"
+    if "ends" in head or "before" in tail:
+        return "different"
+    if head - {"before"} or tail - {"ends"}:
+        return "unknown"
+    if limit is not None and last - first - 1 > limit:
+        return "unknown"
+    return "same"
+
+
 def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
     """Assigns a still-floating picture to the cell its rectangle sits
     inside, wherever in the document it was anchored -- unlike
@@ -1432,18 +1504,36 @@ def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
     only a picture whose rectangle overlaps one of those tables is this
     pass's business at all. A picture nowhere near a measurable table --
     a letterhead logo, say -- is never even considered, let alone reported.
+
+    Page coordinates repeat on every page, so an overlap means nothing
+    unless the two are on the same page (#134): a picture on page 5 at the
+    spot a table fills on page 2 is not in that table. Where that cannot be
+    shown, the picture stays where it is and is reported as uncertain.
     """
     parent_of = parents(root)
     left_margin, top_margin = _margin(root, "left"), _margin(root, "top")
     report = {"picturesPlaced": 0, "picturesUnplaced": 0, "picturesGeometryUncertain": 0}
 
+    body = root.find(q("w", "body"))
+    blocks = list(body_blocks(body if body is not None else root))
+    order = {block: n for n, block in enumerate(blocks)}
+    # Word records where its pages broke when it saves. With that record, no
+    # break between two blocks means one page, however far apart they are.
+    rendered = root.find(".//" + q("w", "lastRenderedPageBreak")) is not None
+    limit = None if rendered else MAX_BLOCKS_APART
+
+    def block_index(element: Element | None) -> int | None:
+        while element is not None and element not in order:
+            element = parent_of.get(element)
+        return None if element is None else order[element]
+
     tables = []
     for table in root.iter(q("w", "tbl")):
         if _enclosing(parent_of, parent_of.get(table), "tbl") is not None:
             continue  # a nested table is bounded by its cell, not the page
-        geometry = _table_geometry(table, left_margin, top_margin)
-        if geometry is not None:
-            tables.append((table, *geometry))
+        measured = _table_geometry(table, left_margin, top_margin)
+        if measured is not None:
+            tables.append((table, *measured, block_index(table)))
     if not tables:
         return report
 
@@ -1461,34 +1551,50 @@ def place_pictures_by_table_geometry(root: Element, ids: Ids) -> dict:
         if x0 is None or y0 is None:
             continue
         x1, y1 = x0 + width, y0 + height
+        at = block_index(anchor)
 
-        for table, col_edges, row_edges in tables:
-            if (
+        overlapping = [
+            (table, col_edges, row_edges, table_at)
+            for table, col_edges, row_edges, table_at in tables
+            if not (
                 x1 <= col_edges[0][0]
                 or x0 >= col_edges[-1][1]
                 or y1 <= row_edges[0][0]
                 or y0 >= row_edges[-1][1]
-            ):
-                continue  # no overlap with this table -- not this pass's business
-            column = next(
-                (n for n, (left, right) in enumerate(col_edges) if left <= x0 and x1 <= right), None
             )
-            row = next(
-                (n for n, (top, bottom) in enumerate(row_edges) if top <= y0 and y1 <= bottom), None
-            )
-            if column is None or row is None:
+        ]
+        if not overlapping:
+            continue  # no overlap with any table -- not this pass's business
+        relations = [
+            "unknown"
+            if at is None or table_at is None
+            else _page_relation(blocks, at, table_at, limit)
+            for *_, table_at in overlapping
+        ]
+        if "same" not in relations:
+            if "unknown" in relations:
                 report["picturesGeometryUncertain"] += 1
-                break
-            cells = [
-                cell
-                for cell in table.findall(q("w", "tr"))[row].findall(q("w", "tc"))
-                if _enclosing(parent_of, parent_of.get(cell), "tbl") is table
-            ]
-            if column >= len(cells):
-                report["picturesGeometryUncertain"] += 1
-                break
-            _move_into_cell(cells[column], anchor, parent_of, ids, report)
-            break
+            continue  # every table it overlaps is on another page
+        table, col_edges, row_edges, _ = overlapping[relations.index("same")]
+
+        column = next(
+            (n for n, (left, right) in enumerate(col_edges) if left <= x0 and x1 <= right), None
+        )
+        row = next(
+            (n for n, (top, bottom) in enumerate(row_edges) if top <= y0 and y1 <= bottom), None
+        )
+        if column is None or row is None:
+            report["picturesGeometryUncertain"] += 1
+            continue
+        cells = [
+            cell
+            for cell in table.findall(q("w", "tr"))[row].findall(q("w", "tc"))
+            if _enclosing(parent_of, parent_of.get(cell), "tbl") is table
+        ]
+        if column >= len(cells):
+            report["picturesGeometryUncertain"] += 1
+            continue
+        _move_into_cell(cells[column], anchor, parent_of, ids, report)
     return report
 
 
@@ -1803,6 +1909,7 @@ def render(package: Package, destination: Path) -> dict:
         "picturesUnplaced": 0,
         "tablesNarrowed": 0,
         "picturesShrunk": 0,
+        "picturesGeometryUncertain": 0,
         "ink": 0,
         "legacyPictures": 0,
         "equations": 0,
@@ -1848,6 +1955,7 @@ def render(package: Package, destination: Path) -> dict:
             "picturesUnplaced",
             "tablesNarrowed",
             "picturesShrunk",
+            "picturesGeometryUncertain",
             "ink",
             "legacyPictures",
         ):
@@ -2270,6 +2378,7 @@ async def convert(
                 "picturesUnplaced",
                 "tablesNarrowed",
                 "picturesShrunk",
+                "picturesGeometryUncertain",
                 "ink",
                 # A family we swapped is a change to the document, and PROJECT.md
                 # says every change is reported. The Slides path has always shown
