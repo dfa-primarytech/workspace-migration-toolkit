@@ -99,7 +99,9 @@ class ParserRun:
         self.output_dir = output_dir
 
 
-def run_parser(parser: str, source: str, output_dir: str, *extra: str) -> ParserRun:
+def run_parser(
+    parser: str, source: str, output_dir: str, *extra: str, env: dict[str, str] | None = None
+) -> ParserRun:
     # S603 reviewed: an argument list, never a shell. The executable is the
     # in-repo build or PUBLISHER_PARSER_BIN, set by CI or the developer and
     # checked by parser_path(); every argument is chosen by the test. The
@@ -111,6 +113,7 @@ def run_parser(parser: str, source: str, output_dir: str, *extra: str) -> Parser
         text=True,
         timeout=PARSER_TIMEOUT_SECONDS,
         check=False,
+        env=None if env is None else {**os.environ, **env},
     )
     return ParserRun(completed.returncode, completed.stdout, completed.stderr, output_dir)
 
