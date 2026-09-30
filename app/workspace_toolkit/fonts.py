@@ -89,6 +89,7 @@ GOOGLE_FONT_CANDIDATES = frozenset(
         "Caveat",
         "Comic Neue",
         "Cousine",
+        "DM Serif Display",  # headings in a real resource bank's decks (live test, 2026-09-30)
         "EB Garamond",
         "Inter",
         "Lato",
