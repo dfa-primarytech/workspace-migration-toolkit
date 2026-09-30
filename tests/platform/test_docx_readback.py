@@ -33,9 +33,11 @@ from .test_docx import (
 def build_pdf(contents: list[bytes], object_stream: bool = False, nested: bool = False) -> bytes:
     """A small PDF with one page per content stream, compressed as Google's are.
 
-    With `object_stream`, the catalog, page tree and pages are stored inside a
-    compressed object stream, as PDF 1.5 allows. With `nested`, the first two
-    pages sit in a page tree of their own under the root.
+    With `object_stream`, it is laid out as a fully compressed PDF 1.5 file:
+    the catalog, page tree and pages inside a compressed object stream, and no
+    `trailer` at all -- the root is named only by a compressed cross-reference
+    stream. With `nested`, the first two pages sit in a page tree of their own
+    under the root.
     """
     count = len(contents)
     first_page = 3 if not nested else 4
@@ -66,7 +68,10 @@ def build_pdf(contents: list[bytes], object_stream: bool = False, nested: bool =
 
     out = bytearray(b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n")
 
+    offsets: dict[int, int] = {}
+
     def emit(number: int, body: bytes) -> None:
+        offsets[number] = len(out)
         out.extend(b"%d 0 obj\n" % number + body + b"\nendobj\n")
 
     def stream(dictionary: bytes, data: bytes) -> bytes:
@@ -83,15 +88,36 @@ def build_pdf(contents: list[bytes], object_stream: bool = False, nested: bool =
             offset = len(body)
         head = b" ".join(header) + b"\n"
         packed = zlib.compress(head + body)
+        holder = max([*dictionaries, *streams]) + 1
         emit(
-            max([*dictionaries, *streams]) + 1,
+            holder,
             stream(
                 b"<< /Type /ObjStm /N %d /First %d /Filter /FlateDecode >>"
                 % (len(numbers), len(head)),
                 packed,
             ),
         )
-        out.extend(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n")
+        # The cross-reference stream: type 1 rows give a file offset, type 2
+        # rows the object stream and index an object is packed at.
+        xref = holder + 1
+        size = xref + 1
+        rows = bytearray(b"\x00\x00\x00\x00\x00\xff\xff")  # object 0, free
+        for number in range(1, size):
+            if number in numbers:
+                rows += (
+                    b"\x02" + holder.to_bytes(4, "big") + numbers.index(number).to_bytes(2, "big")
+                )
+            else:
+                at = offsets.get(number, len(out))
+                rows += b"\x01" + at.to_bytes(4, "big") + b"\x00\x00"
+        emit(
+            xref,
+            stream(
+                b"<< /Type /XRef /Size %d /W [1 4 2] /Root 1 0 R /Filter /FlateDecode >>" % size,
+                zlib.compress(bytes(rows)),
+            ),
+        )
+        out.extend(b"startxref\n%d\n%%%%EOF\n" % offsets[xref])
     else:
         for number, dictionary in sorted(dictionaries.items()):
             emit(number, dictionary)
@@ -113,7 +139,10 @@ def test_pages_are_counted_and_a_page_with_nothing_drawn_is_flagged():
     assert found.probably_blank == [2]
 
 
-def test_pages_stored_in_an_object_stream_are_read_too():
+def test_a_fully_compressed_pdf_is_read_too():
+    # PDF 1.5+: pages packed in an object stream, and the root named only by a
+    # compressed cross-reference stream, with no trailer.
+
     from workspace_toolkit.pdf_pages import inspect_pdf
 
     found = inspect_pdf(build_pdf([BLANK, TEXT], object_stream=True))
