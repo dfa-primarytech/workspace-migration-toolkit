@@ -408,3 +408,31 @@ def test_a_worker_under_a_stricter_inherited_limit_still_runs(pptx, tmp_path):
     assert run.returncode == 0, (
         (output / "error.json").read_text() if (output / "error.json").exists() else run.stderr
     )
+
+
+def test_a_themes_standby_fonts_for_other_scripts_are_not_warned_about(tmp_path):
+    # Every Office theme lists a font for each writing system (Thai, Khmer,
+    # Japanese...). Each deck in the live test warned about 31 of them, which
+    # buried the one font it really used and Google doesn't have.
+    parts = fixture_parts()
+    parts["ppt/theme/theme1.xml"] = (
+        f'<a:theme xmlns:a="{NS["a"]}"><a:themeElements><a:fontScheme>'
+        '<a:majorFont><a:latin typeface="Aptos"/><a:ea typeface=""/><a:cs typeface=""/>'
+        '<a:font script="Thai" typeface="Angsana New"/><a:font script="Jpan" typeface="Yu Gothic"/>'
+        "</a:majorFont>"
+        '<a:minorFont><a:latin typeface="EDUK FS Me"/><a:font script="Khmr" typeface="DaunPenh"/>'
+        "</a:minorFont></a:fontScheme></a:themeElements></a:theme>"
+    )
+    manifest = analyse(write_pptx(tmp_path / "deck.pptx", parts), tmp_path / "out")
+    unknown = {w["font"] for w in manifest["warnings"] if w["code"] == "font_unknown"}
+    assert unknown == {"EDUK FS Me"}  # the theme's own body font is still checked
+    assert manifest["declaredFonts"] == ["Aptos", "EDUK FS Me"]
+
+
+def test_dm_serif_display_is_a_google_font():
+    # Used for headings throughout a real resource bank; it's in Google Fonts,
+    # so it needs no replacement and no warning.
+    from workspace_toolkit.fonts import FontStatus, compatibility
+
+    result = compatibility("DM Serif Display")
+    assert result["status"] == FontStatus.AVAILABLE and result["manualReview"] is False

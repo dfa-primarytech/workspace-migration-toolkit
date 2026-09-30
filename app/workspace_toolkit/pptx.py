@@ -216,10 +216,16 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
             part_assets[name] = sha
         if name.startswith("ppt/") and name.endswith(".xml"):
             root = package.xml(name)
+            theme = name.startswith("ppt/theme/")
             for node in root.iter():
                 typeface = node.get("typeface")
+                # A theme's <a:font script="..."> entries are Office's standby
+                # fonts for other writing systems, listed by every theme and
+                # used only for text in that script: not fonts the deck needs.
+                if theme and node.tag == f"{{{NS['a']}}}font":
+                    continue
                 if typeface and not typeface.startswith("+"):
-                    (declared_fonts if name.startswith("ppt/theme/") else fonts).add(typeface)
+                    (declared_fonts if theme else fonts).add(typeface)
             if name.startswith(
                 (
                     "ppt/slideMasters/",
