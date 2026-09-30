@@ -80,6 +80,15 @@ Register the exact redirect URI `PUBLIC_BASE_URL/auth/callback`. Configure:
   `LOG_LEVEL`.
 - Optional `PUBLISHER_BUCKET` and `PUBLISHER_SIGNER`: turn on Publisher
   conversion. Set up as in `docs/publisher-storage.md`.
+- Optional `WMT_DOCX_REPAIR_BLANK_PAGES` (`1`, `true`, `yes` or `on`): after a
+  Word conversion whose read-back found probably-blank pages, edit the new
+  Google Doc so its empty separator paragraphs (between two tables, or holding
+  only a page break) are 1 pt with no keep-together or spacing (#54). **Off by
+  default, and keep it off until the live test shows it works:**
+  `documents.batchUpdate` under `drive.file` is not verified live. The edit is
+  one update guarded by the document's revision, so a document someone has
+  changed is left alone; what it did, and the page counts before and after, go
+  into the saved report under `readBack.repair`, never on screen.
 - Optional `GOOGLE_PICKER_API_KEY`: a Cloud Console API key, restricted to the
   Google Picker API, with the Picker API enabled. Adds an "Add from Drive"
   option beside the local file chooser. Unlike the OAuth client secret, this

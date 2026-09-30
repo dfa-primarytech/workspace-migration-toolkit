@@ -63,6 +63,12 @@ class Settings:
     # Cloud Run it defaults to the one the service runs as.
     publisher_bucket: str = ""
     publisher_signer: str = ""
+    # After a Word conversion, fix the empty separator paragraphs that Google's
+    # import turned into blank pages, by editing the new Google Doc (#54).
+    # Off unless WMT_DOCX_REPAIR_BLANK_PAGES is set: it changes the person's
+    # document after it is made, and documents.batchUpdate under drive.file
+    # is not verified live.
+    docx_repair_blank_pages: bool = False
 
     def entry_limit(self, source_bytes: int) -> int:
         return max(self.max_entry_bytes, self.entry_scale * source_bytes)
@@ -143,4 +149,6 @@ class Settings:
             publisher_parser=os.getenv("PUBLISHER_PARSER_BIN", "/usr/local/bin/publisher-parser"),
             publisher_bucket=os.getenv("PUBLISHER_BUCKET", "").strip(),
             publisher_signer=os.getenv("PUBLISHER_SIGNER", "").strip(),
+            docx_repair_blank_pages=os.getenv("WMT_DOCX_REPAIR_BLANK_PAGES", "").strip().lower()
+            in {"1", "true", "yes", "on"},
         )

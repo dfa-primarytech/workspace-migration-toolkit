@@ -136,3 +136,132 @@ async def read_back(google, document_id: str, source: dict) -> dict[str, Any]:
         result["unavailable"] = unavailable
     result["findings"] = findings(source, document, pdf)
     return result
+
+
+# ------------------------------------------------ the optional repair (#54)
+
+ONE_POINT = {"magnitude": 1, "unit": "PT"}
+NO_SPACE = {"magnitude": 0, "unit": "PT"}
+REPAIRED_PARAGRAPH = {"keepLinesTogether": False, "spaceAbove": NO_SPACE, "spaceBelow": NO_SPACE}
+
+
+def separators(document: dict) -> list[dict]:
+    """The empty top-level paragraphs to repair, as ranges in this read.
+
+    Only paragraphs holding nothing but whitespace, and either sitting
+    directly between two tables or holding a page break: the separators Word
+    documents use, which Google's import can turn into blank pages. Never the
+    last block of a body, never anything inside a table, never a paragraph
+    with content, and never one already repaired, so a second run changes
+    nothing.
+    """
+    found = []
+    for tab in document.get("tabs") or [{"documentTab": document}]:
+        tab_id = (tab.get("tabProperties") or {}).get("tabId")
+        if "tabs" in document and not tab_id:
+            continue  # a range in a tabbed document must name its tab
+        content = ((tab.get("documentTab") or {}).get("body") or {}).get("content") or []
+        for index, block in enumerate(content[:-1]):
+            paragraph = block.get("paragraph")
+            if paragraph is None or not _empty(paragraph) or _repaired(paragraph):
+                continue
+            between_tables = (
+                index > 0 and "table" in content[index - 1] and "table" in content[index + 1]
+            )
+            breaks = any("pageBreak" in element for element in paragraph.get("elements") or [])
+            start, end = block.get("startIndex"), block.get("endIndex")
+            if (between_tables or breaks) and isinstance(start, int) and isinstance(end, int):
+                span = {"startIndex": start, "endIndex": end}
+                found.append({**span, "tabId": tab_id} if tab_id else span)
+    return found
+
+
+def _empty(paragraph: dict) -> bool:
+    for element in paragraph.get("elements") or []:
+        if "textRun" in element:
+            if (element["textRun"].get("content") or "").strip():
+                return False
+        elif "pageBreak" not in element:
+            return False
+    return True
+
+
+def _repaired(paragraph: dict) -> bool:
+    style = paragraph.get("paragraphStyle") or {}
+    if style.get("keepLinesTogether") is not False:
+        return False
+    for side in ("spaceAbove", "spaceBelow"):
+        if (style.get(side) or {}).get("magnitude", 0) != 0:
+            return False
+    runs = [e["textRun"] for e in paragraph.get("elements") or [] if "textRun" in e]
+    return all((run.get("textStyle") or {}).get("fontSize") == ONE_POINT for run in runs)
+
+
+def repair_requests(ranges: list[dict]) -> list[dict]:
+    requests: list[dict] = []
+    for span in ranges:
+        requests.append(
+            {
+                "updateTextStyle": {
+                    "range": span,
+                    "textStyle": {"fontSize": ONE_POINT},
+                    "fields": "fontSize",
+                }
+            }
+        )
+        requests.append(
+            {
+                "updateParagraphStyle": {
+                    "range": span,
+                    "paragraphStyle": REPAIRED_PARAGRAPH,
+                    "fields": "keepLinesTogether,spaceAbove,spaceBelow",
+                }
+            }
+        )
+    return requests
+
+
+async def repair_blank_pages(google, document_id: str, read: dict) -> dict[str, Any]:
+    """Repairs separator paragraphs when the read-back found blank pages.
+
+    `read` is the read-back's own result. The document is read again here and
+    every index comes from that read alone, sent with its revisionId as
+    `requiredRevisionId`, so an edit in between makes Google refuse the whole
+    update rather than apply it in the wrong place. Never raises: a repair
+    that can't run is reported as skipped, with Google's reason.
+    """
+    before = read.get("pdf")
+    if not before or not before["probablyBlank"]:
+        return {"status": "not_needed"}
+    try:
+        document = await google.document(document_id)
+        ranges = separators(document)
+        if not ranges:
+            return {"status": "nothing_to_repair"}
+        revision = document.get("revisionId")
+        if not revision:
+            return {"status": "skipped", "reason": "no_revision"}
+        await google.batch_update(document_id, repair_requests(ranges), revision)
+    except ToolkitError as exc:
+        return {"status": "skipped", "reason": exc.detail or exc.code}
+
+    result: dict[str, Any] = {
+        "status": "applied",
+        # Each paragraph's type size and spacing were replaced: PROJECT.md's
+        # word for a change made in place of the original.
+        "classification": "SUBSTITUTED",
+        "paragraphs": len(ranges),
+        "pagesBefore": before["pages"],
+        "blankBefore": before["probablyBlank"],
+    }
+    try:
+        after = inspect_pdf(await google.export_pdf(document_id))
+    except ToolkitError as exc:
+        result["after"] = exc.detail or exc.code
+        return result
+    if after is None:
+        result["after"] = "unreadable"
+    else:
+        result["pagesAfter"] = after.pages
+        result["blankAfter"] = after.probably_blank
+    return result
