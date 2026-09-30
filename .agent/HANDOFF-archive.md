@@ -9,6 +9,31 @@ PR descriptions have the same detail in full.
 
 - Agent: Claude Code (Publisher)
 - Date: 2026-09-30
+- Branch: `fix/publisher-page-failures`, stacked on `fix/publisher-planning-crashes` (PR #138): merge that first
+- Objective: #108 (one failed picture upload blanked every later page) and #109 (leading tabs in a list shifted every text range).
+- Files changed:
+  - `publisher_convert.py` (`Delivery`, `undelivered`; `build_page` marks a picture it can't send; the page loop also catches `ToolkitError`; the outer handler catches `httpx.HTTPError`; neutral `pages_failed` wording);
+  - `storage.py` (`Credentials.token` and `MetadataCredentials.email` raise `picture_delivery_failed`; `Bucket.delete` never raises);
+  - `publisher_slides.py` (`_without_leading_tabs`, used by `_laid`);
+  - tests: `test_publisher_convert.py` (+6, and a `store_fails` switch on the fake Google), `test_publisher_lists.py` (+1);
+  - `docs/publisher-renderer.md`, this file.
+- Completed:
+  - #108: a picture that can't be stored or signed becomes a marked box (`pictures_not_sent`), and later pages are still made. After 3 failures in a row the bucket isn't asked again. A page that fails another way is left blank and reported, and the rest carry on. Metadata-server errors are reported properly instead of escaping as `httpx` errors.
+  - #109: a list paragraph's leading tabs are dropped before any range is counted, so bullets and styles line up with the text Google keeps.
+  - All 7 new tests fail on main and pass here.
+- Checks: 526 platform tests passed, 14 skipped (with #138 underneath); Ruff clean; mypy only reports `hypercorn` missing locally.
+- Known failures: none.
+- Unresolved:
+  - #108's PPTX/Sheets half (`Google.upload` not wrapping `OSError`, `json.loads(render.json)`) is Platform-owned and not done here.
+  - #109 isn't live-verified; nesting by tabs isn't supported (Publisher's indent is set from its own margins).
+- Decisions: none new.
+- Next task: #111 (mask size cap), then the unclaimed Platform/PPTX audit issues.
+- Warnings: none new.
+
+---
+
+- Agent: Claude Code (Publisher)
+- Date: 2026-09-30
 - Branch: `fix/publisher-planning-crashes`, based on main `2d80316`
 - Objective: fix the high-priority Publisher audit issues #105, #106, #107 and #110 (claimed on each issue).
 - Files changed:
