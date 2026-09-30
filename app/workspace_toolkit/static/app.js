@@ -41,14 +41,24 @@ function resetChoice() {
   $('summary').replaceChildren(); $('result').replaceChildren();
   $('picked').textContent = source ? `Selected: ${source.name}` : '';
 }
+// One load at a time, shared while it runs or once it worked. A failed load
+// is forgotten, and its script removed, so the next try starts again (#132).
 function loadPicker() {
   if (gapiLoading) return gapiLoading;
+  let script = null;
   gapiLoading = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
+    const failed = () => reject(new Error('Could not load Google Drive picker.'));
+    const picker = () => gapi.load('picker', {callback: resolve, onerror: failed});
+    if (typeof gapi !== 'undefined') return picker();  // the script came, the picker didn't
+    script = document.createElement('script');
     script.src = 'https://apis.google.com/js/api.js';
-    script.onload = () => gapi.load('picker', {callback: resolve, onerror: () => reject(new Error('Could not load Google Drive picker.'))});
-    script.onerror = () => reject(new Error('Could not load Google Drive picker.'));
+    script.onload = picker;
+    script.onerror = failed;
     document.head.append(script);
+  }).catch(error => {
+    gapiLoading = null;
+    if (script && typeof gapi === 'undefined') script.remove();
+    throw error;
   });
   return gapiLoading;
 }
