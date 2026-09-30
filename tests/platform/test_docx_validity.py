@@ -19,6 +19,8 @@ installs it, which is where this check is meant to run.
 
 from __future__ import annotations
 
+import functools
+import os
 import shutil
 import subprocess  # nosec B404 -- fixed argv, no shell, CI-only tool
 from pathlib import Path
@@ -53,14 +55,33 @@ from .test_docx_sections import (
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
 PDFTOTEXT = shutil.which("pdftotext")
 
-needs_soffice = pytest.mark.skipif(
-    SOFFICE is None,
-    reason="LibreOffice not installed; this check runs in CI",
-)
+REQUIRE = "WMT_REQUIRE_READERS"  # set in CI: a missing reader fails, never skips
 
-needs_pdftotext = pytest.mark.skipif(
+
+def needs(missing: bool, reason: str):
+    """Skips a test when its reader is missing, so local runs stay fast. Where
+    REQUIRE is set (the validity workflows), it fails instead: a skip there
+    would report green while checking nothing (#131)."""
+
+    def mark(test):
+        if not missing:
+            return test
+        if os.environ.get(REQUIRE) != "1":
+            return pytest.mark.skip(reason=reason)(test)
+
+        @functools.wraps(test)
+        def fails(*args, **kwargs):
+            pytest.fail(f"{reason}, and {REQUIRE} says it must run here")
+
+        return fails
+
+    return mark
+
+
+needs_soffice = needs(SOFFICE is None, "LibreOffice not installed; this check runs in CI")
+needs_pdftotext = needs(
     SOFFICE is None or PDFTOTEXT is None,
-    reason="LibreOffice and poppler-utils not installed; this check runs in CI",
+    "LibreOffice and poppler-utils not installed; this check runs in CI",
 )
 
 
@@ -410,3 +431,32 @@ def test_a_deliberately_broken_package_is_rejected(tmp_path):
 
     with pytest.raises(AssertionError):
         soffice_convert(broken, "pdf", tmp_path / "bad")
+
+
+# ------------------------------------------------------------------ the markers themselves
+
+
+def test_a_missing_reader_skips_a_local_run(monkeypatch):
+    monkeypatch.delenv(REQUIRE, raising=False)
+
+    def check():
+        return "ran"
+
+    marked = needs(True, "no reader")(check)
+    assert [m.name for m in marked.pytestmark] == ["skip"]
+
+
+def test_a_missing_reader_fails_where_it_is_required(monkeypatch):
+    monkeypatch.setenv(REQUIRE, "1")
+    marked = needs(True, "no reader")(lambda: None)
+    with pytest.raises(pytest.fail.Exception, match="must run here"):
+        marked()
+
+
+def test_a_reader_that_is_there_changes_nothing(monkeypatch):
+    monkeypatch.setenv(REQUIRE, "1")
+
+    def check():
+        return "ran"
+
+    assert needs(False, "no reader")(check) is check

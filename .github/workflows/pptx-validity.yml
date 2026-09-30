@@ -14,6 +14,7 @@ on:
       - 'app/workspace_toolkit/pictures.py'
       - 'app/workspace_toolkit/publisher_deck.py'
       - 'tests/platform/test_pptx_*.py'
+      - 'tests/platform/test_docx_validity.py'  # its reader markers
       - '.github/workflows/pptx-validity.yml'
   pull_request:
     paths:
@@ -22,6 +23,7 @@ on:
       - 'app/workspace_toolkit/pictures.py'
       - 'app/workspace_toolkit/publisher_deck.py'
       - 'tests/platform/test_pptx_*.py'
+      - 'tests/platform/test_docx_validity.py'  # its reader markers
       - '.github/workflows/pptx-validity.yml'
   workflow_dispatch:
 
@@ -56,7 +58,10 @@ jobs:
       - name: Convert and re-read with LibreOffice
         # A skipped test here would report green while checking nothing, so a
         # skip fails the job. pytest has no option for that; the summary line
-        # is checked instead.
+        # is checked instead. WMT_REQUIRE_READERS also makes a missing reader
+        # fail its test rather than skip it.
+        env:
+          WMT_REQUIRE_READERS: '1'
         run: |
           set -o pipefail
           python -m pytest tests/platform/test_pptx_validity.py -v -ra --strict-markers | tee pytest.log
