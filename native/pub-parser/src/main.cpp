@@ -10,10 +10,18 @@
 #include <libmspub/libmspub.h>
 #include <librevenge-stream/librevenge-stream.h>
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <memory>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -83,9 +91,73 @@ int failEarly(const pubir::Document &doc, const pubir::Limits &limits,
   return 2;
 }
 
+// Exit status when the parser itself failed (an exception escaped), as
+// opposed to refusing its input (2) or failing to parse it (1).
+constexpr int kInternalFailure = 4;
+
+// The output directory as given on the command line: argv's own storage, so
+// the last-resort path below can use it without allocating.
+const char *gOutputDir = nullptr;
+
+// The last resort when an exception reaches main (#129). It may run because
+// memory ran out, so it allocates nothing: a fixed line on stderr, then at
+// most a short report.json built in stack buffers, the one field the app
+// reads (failureCode) included. Best effort only -- if the directory cannot
+// be made or the file already exists, the exit status alone says it failed.
+void lastResortReport(const char *code, const char *message) {
+  std::fprintf(stderr, "publisher-parser: %s: %s\n", code, message);
+  if (gOutputDir == nullptr) return;
+  ::mkdir(gOutputDir, 0700);
+  char path[4096];
+  const int pathLength = std::snprintf(path, sizeof path, "%s/report.json", gOutputDir);
+  if (pathLength < 0 || static_cast<std::size_t>(pathLength) >= sizeof path) return;
+  // O_EXCL: never overwrite a report, or anything, that is already there.
+  const int fd = ::open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  if (fd < 0) return;
+  char body[512];
+  const int bodyLength = std::snprintf(
+      body, sizeof body,
+      "{\"schemaVersion\": \"%s\", \"status\": \"failed\", \"failureCode\": \"%s\", "
+      "\"failureMessage\": \"%s\"}\n",
+      pubir::kSchemaVersion, code, message);
+  if (bodyLength > 0 && static_cast<std::size_t>(bodyLength) < sizeof body) {
+    const ssize_t written = ::write(fd, body, static_cast<std::size_t>(bodyLength));
+    (void)written;
+  }
+  ::close(fd);
+}
+
+// Lets a test make the parser throw once it has read its input, standing in
+// for an allocation that fails on a large document, which cannot be produced
+// on demand. Unset in normal use; the variable is read, never the document.
+void failForTesting() {
+  const char *failure = std::getenv("PUBIR_FAIL_FOR_TESTING");
+  if (failure == nullptr) return;
+  if (std::strcmp(failure, "bad-alloc") == 0) throw std::bad_alloc();
+  if (std::strcmp(failure, "exception") == 0) throw std::runtime_error("injected for testing");
+}
+
+int run(int argc, char **argv);
+
 } // namespace
 
 int main(int argc, char **argv) {
+  // Without this, an escaping exception -- std::bad_alloc from a large but
+  // within-limit document most plausibly -- ended in std::terminate: an
+  // abort, no report, and a signal where the app expects an exit status.
+  try {
+    return run(argc, argv);
+  } catch (const std::bad_alloc &) {
+    lastResortReport("out-of-memory", "the parser ran out of memory");
+  } catch (...) {
+    lastResortReport("internal-error", "the parser stopped on an unexpected internal error");
+  }
+  return kInternalFailure;
+}
+
+namespace {
+
+int run(int argc, char **argv) {
   pubir::Limits limits;
   bool force = false;
   std::vector<std::string> positional;
@@ -144,6 +216,7 @@ int main(int argc, char **argv) {
       return 2;
     }
     positional.push_back(arg);
+    if (positional.size() == 2) gOutputDir = argv[i];
   }
 
   if (positional.size() != 2) {
@@ -187,6 +260,7 @@ int main(int argc, char **argv) {
                      "the input file could not be read in full");
   }
   input.close();
+  failForTesting();
 
   doc.sourceByteLength = static_cast<long long>(bytes.size());
   doc.sourceSha256 = pubir::Sha256::of(bytes);
@@ -276,3 +350,5 @@ int main(int argc, char **argv) {
               model.callbackTotal, status.c_str());
   return model.truncated ? 3 : 0;
 }
+
+} // namespace
