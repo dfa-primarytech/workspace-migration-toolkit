@@ -322,10 +322,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             google = Google(session["access_token"], client)
 
                             destination = root / pipeline.source_name
-                            if drive_file_id:
-                                size = await google.download(
-                                    drive_file_id, destination, settings.max_upload_bytes
-                                )
+
+                            def allow_for(size: int) -> None:
                                 allowed = settings.job_timeout_for(size)
                                 require_time(session, do_convert, allowed)
                                 deadline.reschedule(
@@ -333,6 +331,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     + allowed
                                     - (time.monotonic() - began)
                                 )
+
+                            if drive_file_id:
+                                # Sized first, so the time allowed covers the
+                                # download too: fetched unsized, a large file
+                                # spent the base 240 s just arriving.
+                                announced = await google.size(drive_file_id)
+                                if announced:
+                                    allow_for(announced)
+                                size = await google.download(
+                                    drive_file_id, destination, settings.max_upload_bytes
+                                )
+                                allow_for(size)
                             else:
                                 size = 0
                                 with destination.open("xb") as stream:

@@ -139,6 +139,21 @@ class Google:
             raise ValueError("Unexpected Google response")
         return result
 
+    async def size(self, file_id: str) -> int | None:
+        """A Drive file's size before it is fetched, so the time allowed can
+        cover the download itself. None when Drive won't say: the download
+        then decides, as before."""
+        try:
+            response = await self.client.get(
+                DRIVE + f"/files/{file_id}",
+                headers=self.headers,
+                params={"fields": "size", "supportsAllDrives": "true"},
+            )
+            response.raise_for_status()
+            return int(response.json()["size"])
+        except (httpx.HTTPError, KeyError, TypeError, ValueError):
+            return None
+
     async def download(self, file_id: str, destination: Path, max_bytes: int | None) -> int:
         """Downloads a Drive file (picked, not one this app made) into
         `destination`, chunked, and stopped at `max_bytes` if a deployment set
@@ -155,7 +170,7 @@ class Google:
                 "GET",
                 DRIVE + f"/files/{file_id}",
                 headers=self.headers,
-                params={"alt": "media"},
+                params={"alt": "media", "supportsAllDrives": "true"},
             ) as response:
                 response.raise_for_status()
                 size = 0

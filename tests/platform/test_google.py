@@ -222,6 +222,7 @@ def test_download_writes_the_file_and_returns_its_size(tmp_path):
     def handler(request):
         assert request.url.path == "/drive/v3/files/file123"
         assert request.url.params["alt"] == "media"
+        assert request.url.params["supportsAllDrives"] == "true"
         return httpx.Response(200, content=b"a real docx body" * 100)
 
     async def run():
@@ -816,3 +817,28 @@ def test_a_stopped_conversion_says_why_in_one_line():
     failed(report, ToolkitError("picture_delivery_failed", "Pictures could not be sent.", 502))
     assert report["status"] == "failed_with_partial_outputs"
     assert report["stoppedBecause"] == "Pictures could not be sent."
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (httpx.Response(200, json={"size": "145734004"}), 145_734_004),
+        (httpx.Response(200, json={}), None),  # a Google Docs file has no size
+        (httpx.Response(404, json={"error": {"code": 404}}), None),
+    ],
+)
+def test_a_drive_files_size_is_asked_for_before_it_is_fetched(reply, expected):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url)
+        return reply
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await Google("private-token", client).size("file123")
+
+    assert asyncio.run(run()) == expected
+    assert seen[0].path.endswith("/files/file123")
+    assert seen[0].params["fields"] == "size"
+    assert seen[0].params["supportsAllDrives"] == "true"  # picked from a shared drive too
