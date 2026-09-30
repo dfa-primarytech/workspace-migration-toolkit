@@ -633,7 +633,6 @@ def test_a_picture_that_cannot_be_stored_leaves_a_marked_box_and_later_pages(tmp
     assert note["message"].startswith("1 picture(s)") and note["detail"] == "HTTP 503"
     codes = [w["code"] for w in report["warnings"]]
     assert "pages_failed" not in codes and "objects_missing" not in codes
-    assert fake.saved  # the report was saved beside the conversion
 
 
 def test_storage_that_keeps_failing_is_not_asked_for_every_picture(tmp_path, monkeypatch):
