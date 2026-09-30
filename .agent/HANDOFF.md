@@ -18,7 +18,12 @@
 - Known failures: none.
 - Unresolved: parts are still edited as bytes (to keep the rest of each part exactly as written), but every edit is now re-parsed and checked. Not tried against a real deck from another tool.
 - Decisions: none new.
-- Next task: unclaimed Platform audit issues (#120, #121, #130-#133); claim first. `pptx.py`/`pictures.py`/`package.py` are Platform-owned: say so if the Platform stream is active.
+- Also opened, each on `main` and independent (no `.agent/` changes, so recorded here):
+  - #151 (#132): a failed Picker load is forgotten and retried; `tests/platform/test_picker_load.py` runs `app.js`'s own `loadPicker` under Node.
+  - #152 (#131): `WMT_REQUIRE_READERS=1` in both validity workflows makes a missing LibreOffice fail its tests; the DOCX job also fails on any skip.
+  - #154 (#130): the worker leads its own process group and a stopped job kills the whole group, parser included. Linux-only tests; draft PR #155 runs them on main's code to show they fail there (close it after).
+  - Filed #150 (an expired sign-in fails every remaining Publisher page), from Claude 2's review of #139.
+- Next task: #150; then the native parser issues (#126-#129) if a Linux build is available. Claude 2 has #119, #122, #123, #125 and #146. `pptx.py`/`pictures.py`/`package.py` are Platform-owned: say so if the Platform stream is active.
 - Warnings: in this environment, a heredoc passed through Python can lose a backslash level: after writing a regex that way, search the file for control characters (bytes 1 to 8), or write the edit with the Edit tool instead.
 ---
 
