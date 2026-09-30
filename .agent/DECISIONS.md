@@ -581,7 +581,9 @@ a table now count as on one page only when nothing between them ends a page
 continuous, or Word's own `w:lastRenderedPageBreak`). Where Word's record of
 its pages is absent, that is not enough on its own: nothing marks where a
 page ends in running text, so they must also be within three blocks of each
-other. A page end inside either one, or too great a distance, leaves the
+other (`MAX_BLOCKS_APART`). Three is an unmeasured default, chosen because a
+picture beyond it is left in place and reported, never lost; revisit it
+against real worksheets. A page end inside either one, or too great a distance, leaves the
 picture floating and counts it in `picturesGeometryUncertain`, which now
 reaches the saved report (it was dropped before). The order-based pass
 refuses a run of pictures with a page break inside it.
