@@ -9,6 +9,7 @@ The manifest privacy boundary is now documented accurately. Follow-ups still
 include dimension-based limit overestimation, index consistency and the unused
 workspace sweeper. Live Sheets import remains unverified.
 
+0. Audit issues still open after the Publisher and DOCX fixes: platform (#120, #121, #130-#133) and PPTX package editing (#124, #136, #137, one PR with an XML parser). Claim by issue comment.
 1. Verify the shared font catalogue against a live Google Workspace test tenant,
    compare representative before/after layouts, and add school-configurable aliases.
 2. Harden the PPTX parser and mocked Google boundary tests; expand deterministic fixtures.

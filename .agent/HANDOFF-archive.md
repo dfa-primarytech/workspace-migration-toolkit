@@ -9,6 +9,33 @@ PR descriptions have the same detail in full.
 
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-29
+- Branch: `feat/publisher-tables`, based on main `bc0a4be` (#99 merged)
+- Objective: PUB-002's tables: grid lines and the book covers missing from their cells.
+- Files changed:
+  - `publisher_slides.py` (`grid_borders`; `_inline`, `_with_room`, `rough_height`; U+FFFC dropped from text);
+  - `publisher_inline.py` (new), `publisher_art.py` (`Prepared.inline`), `publisher.py`;
+  - parser: `main.cpp`, `model.h`, `collector.h`, `bundle.cpp` write `drawing-pictures.bin` (EscherDelayStm); `tests/test_bundle.cpp`;
+  - tests: `test_publisher_inline.py` (new, 6), `test_publisher_slides.py`;
+  - `docs/publisher-parser.md`, `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - Grid: no record in either booklet holds a border (dumped with a debug libmspub build), yet all print a thin black grid (the owner's print previews). Tables get 0.75 pt black on every cell.
+  - Covers: all 7 recovered (inline pictures; libmspub drops shapes not on a page) and placed over their cells.
+  - Verified live on PUB-002: pages 11, 12 and 14 match the Publisher screenshots.
+- Checks: 502 platform tests passed, 12 skipped; Ruff and mypy clean; the app image builds with the parser's C++ tests passing.
+- Known failures: none.
+- Unresolved:
+  - Page 3's table runs off the page: table rows aren't fitted to their text as text boxes are (next task).
+  - Page 18's bullets sit tight against centred text.
+  - The on-screen summaries show the reader's internal notes.
+  - The debug libmspub patch (table dumps) is only in `/root/wmt-test/dbg` on CT 203, never in the repo.
+- Decisions: DECISIONS.md, 2026-09-29 (table grids, and pictures set in text).
+- Next task: fit table rows to the page (page 3); the bullet gap; hide internal notes from staff.
+- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 20:42 UTC). `wmt-test-live` runs `wmt-test/app:pub14`. Parsed PUB-002 bundles are under `/root/wmt-test/private`; never commit them.
+
+---
+
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
 - Branch: `feat/publisher-lists`, based on main `077c206` (#98 merged)
 - Objective: Publisher lists (route A: a patched libmspub), and PUB-002's "took too long to analyse".
 - Files changed:
