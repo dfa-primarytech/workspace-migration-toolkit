@@ -1,5 +1,7 @@
 #include "serialise.h"
 
+#include <unordered_map>
+
 namespace pubir {
 namespace {
 
@@ -322,6 +324,14 @@ Json documentJson(const Document &doc) {
   callbacks.set("counts", callbackCountsJson(doc));
   root.set("callbacks", std::move(callbacks));
 
+  // Each page lists its elements by id. Finding each by scanning every
+  // element was quadratic, and it runs after the collector's own time limit
+  // has stopped looking (#126). The first element with an id wins, as the
+  // scan's did; each page is still written in its own order.
+  std::unordered_map<std::string, const Element *> byId;
+  byId.reserve(doc.elements.size());
+  for (const Element &element : doc.elements) byId.emplace(element.id, &element);
+
   Json pages = Json::array();
   for (const Page &page : doc.pages) {
     Json p = Json::object();
@@ -350,12 +360,8 @@ Json documentJson(const Document &doc) {
     // z-order harder to read, not easier.
     Json elements = Json::array();
     for (const std::string &id : page.elementIds) {
-      for (const Element &element : doc.elements) {
-        if (element.id == id) {
-          elements.push(elementJson(element));
-          break;
-        }
-      }
+      const auto found = byId.find(id);
+      if (found != byId.end()) elements.push(elementJson(*found->second));
     }
     p.set("elements", std::move(elements));
     p.set("warnings", notesJson(page.warnings));
