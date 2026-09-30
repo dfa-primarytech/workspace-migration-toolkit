@@ -207,6 +207,24 @@ def test_header_content_survives_the_multi_part_rewrite(tmp_path):
 
 
 @needs_pdftotext
+def test_a_box_alone_in_a_cell_and_a_header_still_opens_and_renders(tmp_path):
+    """#113: the box's table was left as the last thing in its cell or
+    header. Word always ends those with a paragraph; this is the independent
+    reader's view of the repaired output."""
+    lone = anchor(TEXTBOX, h=("column", offset(0)), v=("paragraph", offset(0)))
+    cell = (
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='5000'/></w:tblGrid>"
+        f"<w:tr><w:tc><w:tcPr/>{lone}</w:tc></w:tr></w:tbl>"
+    )
+    body = cell + "<w:p><w:r><w:t>Body copy</w:t></w:r></w:p>" + SECTION
+    converted = convert_fixture(tmp_path, body, header=lone)
+    pdf = soffice_convert(converted, "pdf", tmp_path / "out")
+    content = rendered_text(pdf)
+    assert "Body copy" in content
+    assert "Card text" in content, f"the boxes' text did not reach the page; got: {content!r}"
+
+
+@needs_pdftotext
 def test_a_box_on_the_section_break_is_laid_out_on_its_own_sections_page(tmp_path):
     """The section fix, checked on the page rather than in our own XML.
 
