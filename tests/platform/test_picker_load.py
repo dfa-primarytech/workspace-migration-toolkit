@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="needs Node to run app.js")
 
 
 def run(scenario: str) -> dict:
-    done = subprocess.run(  # nosec B603 -- fixed arguments, no shell
+    done = subprocess.run(  # noqa: S603  # nosec B603 -- fixed argv, no shell
         [str(NODE), str(HARNESS), str(APP_JS), scenario],
         capture_output=True,
         text=True,
