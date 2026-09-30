@@ -6,12 +6,21 @@ import zipfile
 
 import pytest
 from workspace_toolkit.errors import ToolkitError
+from workspace_toolkit.google import save_report
 from workspace_toolkit.package import XLSM, XLSX
-from workspace_toolkit.sheets import SHEETS_MIME, convert, verify
+from workspace_toolkit.sheets import SHEETS_MIME, verify
+from workspace_toolkit.sheets import convert as convert_only
 from workspace_toolkit.xlsx import NS, analyse, analysis_report
 
 from .test_web import configured, signed_client
 from .test_xlsx import workbook_parts
+
+
+async def convert(root, manifest, google):
+    """Converts, then saves the report as web.py does once a pipeline returns."""
+    report = await convert_only(root, manifest, google)
+    await save_report(root, report, google)
+    return report
 
 
 def generated_workbook(path, *, chart_sheet=False):

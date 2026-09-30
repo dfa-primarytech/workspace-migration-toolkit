@@ -823,7 +823,8 @@ async def convert(
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:
         failed(report, exc)
-    await save_report(root, report, google)
+    # Saved to Drive by the caller, once, with everything added after this
+    # returns (see save_report and web.py, #121).
     return report
 
 
@@ -839,7 +840,14 @@ def failed(report: dict, exc: ToolkitError) -> None:
 
 
 async def save_report(root: Path, report: dict, google: Google) -> None:
-    """Saves the report beside the conversion, once there is a folder for it."""
+    """Saves the report beside the conversion, once there is a folder for it.
+
+    Called once, by web.py, after every format's conversion and after the
+    notes added around it (what happened in Drive, the import limit, the
+    pictures made smaller), so the copy in Drive is the report the person is
+    shown (#121). Only the report's own link, and a failure to save it, are
+    known later than that, and they are added to what is shown.
+    """
     if not report.get("folderUrl"):
         return
     report_path = root / "conversion-report.json"

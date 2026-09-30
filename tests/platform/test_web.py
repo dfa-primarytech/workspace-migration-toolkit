@@ -277,6 +277,71 @@ def test_what_happened_in_drive_reaches_the_report(monkeypatch, pptx):
     assert [w["code"] for w in response.json()["warnings"]] == ["own", "library_duplicated"]
 
 
+def test_the_report_saved_to_drive_is_the_report_shown(monkeypatch, pptx):
+    """#121: the report used to be uploaded inside each pipeline, before web.py
+    added what happened in Drive, the import-limit note and the pictures
+    result, so the copy in Drive, where the notes are read, lacked all three."""
+    import json
+    from dataclasses import replace
+
+    from workspace_toolkit import web
+    from workspace_toolkit.pipelines import resolve
+
+    async def analysed(root, settings, fmt, **options):
+        result = root / "result"
+        result.mkdir(parents=True, exist_ok=True)
+        (result / "pictures.json").write_text(
+            json.dumps(
+                {"picturesCompressed": [{"part": "p"}], "bytesBefore": 9_000_000, "bytesAfter": 1}
+            ),
+            encoding="utf-8",
+        )
+        return {"source": {"sha256": "abc"}}
+
+    async def converted(root, manifest, google, progress, original_name=""):
+        google.warnings.append({"code": "library_duplicated", "message": "two folders"})
+        return {
+            "status": "completed_with_warnings",
+            "folderUrl": "https://drive.google.com/drive/folders/folder-1",
+            "warnings": [{"code": "own"}],
+        }
+
+    uploaded: list[dict] = []
+
+    async def upload(self, path, name, mime, parent, **options):
+        assert (name, parent) == ("Conversion report.json", "folder-1")
+        uploaded.append(json.loads(path.read_text(encoding="utf-8")))
+        return {"id": "report-1"}
+
+    monkeypatch.setattr(web, "preflight", analysed)
+    monkeypatch.setattr(web, "resolve", lambda name: replace(resolve("x.pptx"), convert=converted))
+    monkeypatch.setattr(web, "IMPORT_LIMITS", {"pptx": ("Google Slides", 1)})
+    monkeypatch.setattr(web.Google, "upload", upload)
+    response = signed_client(configured()).post(
+        "/api/convert",
+        content=pptx.read_bytes(),
+        headers={
+            "Content-Type": PPTX_MIME,
+            "X-Upload-Filename": "x.pptx",
+            "X-CSRF-Token": "test-csrf",
+            "X-Source-SHA256": "abc",
+            "X-Compress-Pictures": "1",
+        },
+    )
+    assert response.status_code == 200, response.text
+    shown = response.json()
+
+    assert len(uploaded) == 1, "the report is saved once"
+    saved = uploaded[0]
+    codes = [w["code"] for w in saved["warnings"]]
+    assert codes == ["own", "beyond_import_limit", "library_duplicated", "pictures_compressed"]
+    assert saved["warnings"] == shown["warnings"]
+    assert saved["pictures"] == shown["pictures"]
+    # Only the report's own link is known after it is saved.
+    assert shown["reportUrl"] == "https://drive.google.com/file/d/report-1/view"
+    assert {k: v for k, v in shown.items() if k != "reportUrl"} == saved
+
+
 def test_session_advertises_picker_availability():
     signed_in = signed_client(configured(picker_api_key="test-picker-key"))
     body = signed_in.get("/api/session").json()
