@@ -215,7 +215,10 @@ each video to the conversion folder anyway. The video's part, its relationships
 and the markup that plays it are removed; the picture element stays, so the
 slide shows the video's poster frame where the video was. Audio is left alone.
 A video also used as a picture, or in a part whose edit cannot be confirmed by
-re-parsing, is kept. The report lists what was removed (`videosRemoved`), warns
+re-parsing, is kept. Its relationships and content-type override are removed whether written
+as empty or paired tags, and under any prefix, and each edit is read back to
+confirm it (`package.py`: #124, #136, #137); a shape's size tag (`a:ext`) is
+never taken for an empty extension. The report lists what was removed (`videosRemoved`), warns
 `videos_removed`, and warns `removed_video_not_saved` if a removed video's Drive
 copy failed -- its original file then still has it. The import-limit warning
 judges the file Google receives, not the upload.
@@ -242,7 +245,8 @@ converted copy (`pictures.py`); the person's own file is untouched. Each picture
 in a plain picture frame is reduced to the size it is drawn at, at 220 ppi
 (PowerPoint's Compress Pictures default), allowing for its crop, and a photo
 stored as PNG is re-saved as JPEG (the part is renamed and its relationships and
-content types follow). Left alone: pictures under 100 KB, formats other than PNG
+content types follow, in whatever prefix the file uses; if its content types
+can't be edited and confirmed, no picture is changed). Left alone: pictures under 100 KB, formats other than PNG
 and JPEG, JPEGs with an EXIF rotation, CMYK, pictures with transparency or few
 colours (diagrams, screenshots, text), pictures used anywhere but a picture
 frame or inside a group, anything over 60 megapixels (refused undecoded), and

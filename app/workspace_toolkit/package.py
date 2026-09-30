@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import posixpath
+import re
 import stat
 import zipfile
 from dataclasses import dataclass
@@ -331,3 +332,98 @@ class Package:
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+# ------------------------------------------------------------------ editing parts
+#
+# Package parts are edited as bytes, so the rest of each part stays exactly as
+# written, and every edit is then read back with the XML parser. A tag may carry
+# any prefix, and may be empty (<x/>) or paired (<x></x>): both are valid
+# (#136, #137). An edit that can't be confirmed returns None and is not made.
+
+_PREFIX = rb"(?:[A-Za-z_][\w.-]*:)?"
+_ATTRIBUTE = rb"\s{}\s*=\s*([\"'])(.*?)\1"
+
+
+def tags(name: bytes) -> re.Pattern[bytes]:
+    """Every <name> element, with or without a prefix, empty or paired."""
+    return re.compile(
+        rb"<(?P<q>" + _PREFIX + name + rb")\b(?P<attrs>[^>]*?)(?:/>|>.*?</(?P=q)\s*>)", re.S
+    )
+
+
+def attribute(tag: bytes, name: str) -> str | None:
+    found = re.search(_ATTRIBUTE.replace(b"{}", re.escape(name.encode())), tag)
+    return found.group(2).decode("utf-8", "replace") if found else None
+
+
+RELATIONSHIPS = tags(b"Relationship")
+OVERRIDES = tags(b"Override")
+
+
+def _parsed(data: bytes) -> Element | None:
+    try:
+        return SafeET.fromstring(data)
+    except (SafeET.ParseError, DefusedXmlException):
+        return None
+
+
+def without_relationships(data: bytes, ids: set[str]) -> bytes | None:
+    """A .rels part without these relationships, checked."""
+    result = RELATIONSHIPS.sub(
+        lambda m: b"" if attribute(m["attrs"], "Id") in ids else m.group(0), data
+    )
+    root = _parsed(result)
+    if root is None or any(rel.get("Id") in ids for rel in root):
+        return None
+    return result
+
+
+def without_overrides(types: bytes, parts: set[str]) -> bytes | None:
+    """[Content_Types].xml without the overrides for these parts, checked.
+    `parts` are part names as in the zip (no leading slash)."""
+    gone = {"/" + part.casefold() for part in parts}
+    result = OVERRIDES.sub(
+        lambda m: (
+            b"" if (attribute(m["attrs"], "PartName") or "").casefold() in gone else m.group(0)
+        ),
+        types,
+    )
+    root = _parsed(result)
+    if root is None or any(
+        (node.get("PartName") or "").casefold() in gone
+        for node in root.iter(f"{{{CONTENT_NS}}}Override")
+    ):
+        return None
+    return result
+
+
+def with_default(types: bytes, extension: str, content_type: str) -> bytes | None:
+    """[Content_Types].xml declaring a content type for an extension, checked.
+    The new Default takes the root's own prefix, so a prefixed document stays
+    in the content-types namespace."""
+    root = _parsed(types)
+    if root is None or root.tag != f"{{{CONTENT_NS}}}Types":
+        return None
+    for node in root.iter(f"{{{CONTENT_NS}}}Default"):
+        if (node.get("Extension") or "").casefold() == extension.casefold():
+            return types
+    closing = list(re.finditer(rb"</(" + _PREFIX + rb")Types\s*>", types))
+    if not closing:
+        return None  # an empty <Types/> never holds a picture's part
+    end = closing[-1]
+    prefix = end.group(1)
+    added = b'<%sDefault Extension="%s" ContentType="%s"/>' % (
+        prefix,
+        extension.encode(),
+        content_type.encode(),
+    )
+    result = types[: end.start()] + added + types[end.start() :]
+    checked = _parsed(result)
+    if checked is None or not any(
+        (node.get("Extension") or "").casefold() == extension.casefold()
+        and node.get("ContentType") == content_type
+        for node in checked.iter(f"{{{CONTENT_NS}}}Default")
+    ):
+        return None
+    return result

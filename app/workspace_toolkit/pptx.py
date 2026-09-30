@@ -17,7 +17,7 @@ from .errors import ToolkitError
 from .fonts import FontStatus, catalogue, compatibility
 from .model import Compatibility as C
 from .model import emu_to_points, warning
-from .package import PPTX, Package, digest
+from .package import PPTX, Package, digest, without_overrides, without_relationships
 
 NS = {
     "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -580,23 +580,18 @@ REFERENCE = re.compile(rb"\s" + _Q + rb"(?:link|embed)\s*=\s*([\"'])(.*?)\1")
 TIMING_VIDEO = re.compile(rb"<(?P<q>" + _Q + rb"video)\b[^>]*>(?P<body>.*?)</(?P=q)>", re.S)
 SHAPE_TARGET = re.compile(rb"\sspid\s*=\s*([\"'])(.*?)\1")
 # Left empty once their only child is gone. An empty p:ext is invalid (it
-# must hold one element); an empty list is merely untidy.
-EMPTIED = re.compile(rb"<(?P<q>" + _Q + rb"(?:ext|extLst|childTnLst))\b[^>]*>\s*</(?P=q)>")
-RELATIONSHIP = re.compile(rb"<" + _Q + rb"Relationship\b[^>]*?/>")
-OVERRIDE = re.compile(rb"<" + _Q + rb"Override\b[^>]*?/>")
-ATTRIBUTE = re.compile(rb"\s(Id|PartName)\s*=\s*([\"'])(.*?)\2")
+# must hold one element); an empty list is merely untidy. Only an extension
+# (which always names its uri) counts: DrawingML's size tag is also "ext",
+# and may be written <a:ext cx=".." cy=".."></a:ext> (#124).
+EMPTIED = re.compile(
+    rb"<(?P<q>" + _Q + rb"(?:ext(?=\s[^>]*\buri\s*=)|extLst|childTnLst))\b[^>]*>\s*</(?P=q)>"
+)
+SIZE = f"{{{NS['a']}}}ext"
 
 
 def _rels_name(part: str) -> str:
     folder, _, base = part.rpartition("/")
     return f"{folder}/_rels/{base}.rels" if folder else f"_rels/{base}.rels"
-
-
-def _attribute(tag: bytes, name: bytes) -> str | None:
-    for match in ATTRIBUTE.finditer(tag):
-        if match.group(1) == name:
-            return match.group(3).decode("utf-8", "replace")
-    return None
 
 
 def _values(pattern: re.Pattern[bytes], text: bytes) -> set[str]:
@@ -642,17 +637,13 @@ def _strip_part(data: bytes, rids: set[str]) -> bytes | None:
     pictures = f"{{{NS['p']}}}pic"
     if sum(1 for _ in after.iter(pictures)) != sum(1 for _ in before.iter(pictures)):
         return None  # every picture, poster frames included, must survive
+    if sum(1 for _ in after.iter(SIZE)) != sum(1 for _ in before.iter(SIZE)):
+        return None  # and every shape's size
     r = f"{{{NS['r']}}}"
     for node in after.iter():
         if any(key.startswith(r) and value in rids for key, value in node.attrib.items()):
             return None
     return result
-
-
-def _strip_relationships(data: bytes, rids: set[str]) -> bytes:
-    return RELATIONSHIP.sub(
-        lambda m: b"" if _attribute(m.group(0), b"Id") in rids else m.group(0), data
-    )
 
 
 def strip_videos(package: Package, parts: dict[str, bytes]) -> list[dict]:
@@ -686,29 +677,30 @@ def strip_videos(package: Package, parts: dict[str, bytes]) -> list[dict]:
         for part, rids in sorted(by_part.items()):
             source = parts.get(part) or package.read(part, package.settings.max_xml_bytes)
             stripped = _strip_part(source, rids)
-            if stripped is None:
+            rels = _rels_name(part)
+            links = (
+                None
+                if stripped is None
+                else without_relationships(parts.get(rels) or package.read(rels), rids)
+            )
+            if stripped is None or links is None:
                 refused |= {t for t in videos if any(p == part for p, _, _ in references[t])}
                 continue
             edited[part] = stripped
-            rels = _rels_name(part)
-            edited[rels] = _strip_relationships(parts.get(rels) or package.read(rels), rids)
+            edited[rels] = links
         if refused:
             videos -= refused
             continue
+        types = without_overrides(
+            parts.get("[Content_Types].xml") or package.read("[Content_Types].xml"), videos
+        )
+        if types is None:
+            return []  # nothing is changed: `parts` is only updated below
+        edited["[Content_Types].xml"] = types
         parts.update(edited)
         break
     if not videos:
         return []
-    overrides = {"/" + target.casefold() for target in videos}
-    types = parts.get("[Content_Types].xml") or package.read("[Content_Types].xml")
-    parts["[Content_Types].xml"] = OVERRIDE.sub(
-        lambda m: (
-            b""
-            if (_attribute(m.group(0), b"PartName") or "").casefold() in overrides
-            else m.group(0)
-        ),
-        types,
-    )
     return [
         {
             "part": target,
