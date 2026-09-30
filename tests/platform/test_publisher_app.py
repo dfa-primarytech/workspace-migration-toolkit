@@ -124,13 +124,13 @@ bundle.mkdir(parents=True)
 if mode == "slow":
     time.sleep(30)
 report = {{"status": "ok", "failureCode": None, "diagnostics": []}}
-if mode in ("refuse", "fail"):
-    report = {{"status": "failed", "failureCode": "unsupported-document" if mode == "refuse" else "parse-failed"}}
+failures = {{"refuse": ("unsupported-document", 2), "fail": ("parse-failed", 1),
+            "oom": ("out-of-memory", 4), "crash": ("internal-error", 4)}}
+if mode in failures:
+    report = {{"status": "failed", "failureCode": failures[mode][0]}}
 (bundle / "report.json").write_text(json.dumps(report))
-if mode == "refuse":
-    sys.exit(2)
-if mode == "fail":
-    sys.exit(1)
+if mode in failures:
+    sys.exit(failures[mode][1])
 (bundle / "document.json").write_text(json.dumps({document}))
 (bundle / "assets.json").write_text(json.dumps({{"assets": [{{"id": "asset_0001", "filename": "assets/" + "0" * 64 + ".png", "mimeType": "image/png"}}, {{"id": "asset_0002", "filename": "assets/" + "1" * 64 + ".jpg", "mimeType": "image/jpeg"}}]}}))
 """
@@ -210,7 +210,13 @@ def test_a_publisher_file_is_read_and_summarised(tmp_path):
 
 @pytest.mark.parametrize(
     "mode, code, status",
-    [("refuse", "unsupported_document", 400), ("fail", "parse_failed", 422)],
+    [
+        ("refuse", "unsupported_document", 400),
+        ("fail", "parse_failed", 422),
+        # The parser's last-resort report (#129): not a bad file.
+        ("oom", "out_of_memory", 422),
+        ("crash", "internal_error", 500),
+    ],
 )
 def test_a_file_the_reader_refuses_says_so_plainly(tmp_path, mode, code, status):
     output = tmp_path / "result"

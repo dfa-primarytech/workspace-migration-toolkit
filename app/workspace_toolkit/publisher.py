@@ -37,7 +37,12 @@ REFUSALS = {
     "input-unreadable": "This file could not be read.",
     "input-too-large": "This file is too large to read.",
     "parse-failed": "This Publisher file could not be read completely.",
+    # The parser's last resort (#129): not the file's fault as such, so not 400.
+    "out-of-memory": "This Publisher file is too complex to read on this server.",
+    "internal-error": "This Publisher file could not be read because of a problem on our side.",
 }
+# The status for each of those that is not a problem with the file itself.
+FAILURE_STATUS = {"parse-failed": 422, "out-of-memory": 422, "internal-error": 500}
 
 
 def _run(settings: Settings, source: Path, bundle: Path) -> int:
@@ -86,7 +91,7 @@ def analyse(source: Path, output: Path, settings: Settings) -> dict:
         raise ToolkitError(
             failure.replace("-", "_"),
             REFUSALS.get(failure, "This Publisher file could not be read."),
-            422 if failure == "parse-failed" else 400,
+            FAILURE_STATUS.get(failure, 400),
         )
     document = json.loads((bundle / "document.json").read_text(encoding="utf-8"))
     assets = json.loads((bundle / "assets.json").read_text(encoding="utf-8"))
