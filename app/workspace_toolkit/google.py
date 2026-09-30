@@ -39,6 +39,9 @@ READ_DELAY = 1.0  # seconds before the second try, doubled after, plus jitter
 # A longer wait than Google asks for here is not waited out: the job has its
 # own deadline, and a person is waiting on the page.
 MAX_RETRY_AFTER = 30.0
+# Drive refuses to export more than 10 MB itself; this only stops a read that
+# goes on past anything Drive would send (#53).
+PDF_EXPORT_LIMIT = 16 * 1024 * 1024
 
 
 # One lock per event loop -- in production, one per process. It is shared by
@@ -357,6 +360,51 @@ class Google:
                 "verification_unavailable",
                 "The converted file could not be read back for checking.",
                 502,
+            ) from exc
+
+    async def document(self, document_id: str) -> dict:
+        """A converted Google Doc as the Docs API describes it, every tab.
+
+        drive.file reaches this for a document this app created (DECISIONS
+        2026-09-28). The answer holds the document's text: the caller counts
+        from it and keeps none of it (see readback.py).
+        """
+        return await self.request(
+            "GET",
+            f"https://docs.googleapis.com/v1/documents/{document_id}",
+            params={"includeTabsContent": "true"},
+        )
+
+    async def export_pdf(self, file_id: str, max_bytes: int = PDF_EXPORT_LIMIT) -> bytes:
+        """A converted file exported as PDF, for the read-back's page checks.
+
+        Stops reading at `max_bytes` rather than holding whatever arrives.
+        """
+        try:
+            async with self.client.stream(
+                "GET",
+                DRIVE + f"/files/{file_id}/export",
+                headers=self.headers,
+                params={"mimeType": "application/pdf"},
+            ) as response:
+                response.raise_for_status()
+                received = bytearray()
+                async for chunk in response.aiter_bytes():
+                    received.extend(chunk)
+                    if len(received) > max_bytes:
+                        raise ToolkitError(
+                            "readback_unavailable",
+                            "The converted file was too large to read back.",
+                            502,
+                            detail="export_too_large",
+                        )
+                return bytes(received)
+        except httpx.HTTPError as exc:
+            raise ToolkitError(
+                "readback_unavailable",
+                "The converted file could not be read back for checking.",
+                502,
+                detail=failure_detail(exc),
             ) from exc
 
     async def inspect(self, presentation_id: str) -> dict:

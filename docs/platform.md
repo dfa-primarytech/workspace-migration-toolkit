@@ -13,6 +13,13 @@ parser or custom PowerPoint renderer is included.
 - Browser sign-in, analysis, conversion and report download. Native Google Drive
   import performs the rendering; Slides read-back checks count, dimensions and
   a whitespace-normalized text-token multiset per slide.
+- A converted Word document is read back after import (#53): the Docs API
+  (`documents.get`, every tab) and a PDF export. Fixed rules compare what came
+  back with what was sent: pictures still floating, top-level tables lost,
+  paragraphs that only break a page, a page count unlike Word's saved one, and
+  pages that draw nothing. The findings go only into the saved report
+  (`readBack`), never on screen, and carry counts and page numbers, never text.
+  A read that fails is recorded as unavailable; the conversion still stands.
 - Every extracted media/embedded payload is saved privately alongside the deck.
   Audio/video are not silently dropped if the native importer omits them.
 - Per-operation temporary workspaces, bounded subprocess analysis, cleanup and
@@ -293,6 +300,12 @@ idempotency across browser retries remain future work.
   transitions are detected and marked IGNORED; risky content is reported.
 - Text comparison detects missing tokens, not reading order, styling, clipping or
   image/text identity. Every conversion retains a visual-review warning.
+- The Word read-back (#53) is tested against a fake Google and PDFs built in
+  the tests, not against live Google: the answers it reads are the documented
+  shapes. Its PDF reading is deliberately small (page tree and content streams,
+  Flate only), so a page it can't decode is never called blank, and a PDF it
+  can't read gives no page findings. "Probably blank" means nothing drawn but
+  lines or shapes; it is a place to look, not proof.
 - Master/layout/theme inventories and text are retained, but the manifest is not
   a lossless reproduction of all XML features.
 - No real private PPTX regression corpus supplied yet. Current fixtures are

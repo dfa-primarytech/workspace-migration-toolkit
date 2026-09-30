@@ -63,6 +63,7 @@ from .errors import ToolkitError
 from .model import UNCOMPARABLE, text_tokens, warning
 from .model import Compatibility as C
 from .package import DOCX, Package
+from .readback import read_back
 
 DEFAULT_WRAP_GAP_DXA = 180
 WRAP_ELEMENTS = ("wrapNone", "wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom")
@@ -2077,6 +2078,28 @@ def apply_theme_substitutions(root: Element, mapping: dict[str, str]) -> Counter
     return applied
 
 
+EXTENDED_PROPERTIES = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"
+)
+EXTENDED_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+
+
+def saved_page_count(package: Package) -> int | None:
+    """The page count Word saved in docProps/app.xml, or None.
+
+    Word's own count from its last layout, so evidence for the read-back to
+    compare against (#53), not a rule: another program may not write it, and
+    may write it wrong.
+    """
+    for relationship in package.relationships(""):
+        if relationship["type"] != EXTENDED_PROPERTIES or not relationship["resolved"]:
+            continue
+        pages = package.xml(relationship["resolved"]).find("{" + EXTENDED_NS + "}Pages")
+        text = (pages.text or "").strip() if pages is not None else ""
+        return int(text) if text.isdigit() and int(text) > 0 else None
+    return None
+
+
 def render(package: Package, destination: Path) -> dict:
     """Writes a Google-ready .docx beside the original and reports what changed."""
     ids = Ids()
@@ -2121,6 +2144,15 @@ def render(package: Package, destination: Path) -> dict:
             # include headers, so counting them would invent mismatches.
             tokens = Counter(source_text(root).split())
         part_report = transform(root, ids, None if name == DOCX.main_part else last_section)
+        if name == DOCX.main_part:
+            # What is uploaded, after the transform: a text box that became a
+            # table is a table Google should have too (#53).
+            body = root.find(q("w", "body"))
+            report["topLevelTables"] = sum(
+                1
+                for block in body_blocks(body if body is not None else [])
+                if local(block.tag) == "tbl"
+            )
         # Every part, unlike the token comparison above: that is body-only
         # because comparing header text would invent mismatches, which says
         # nothing about where an equation can be. An equation in a letterhead
@@ -2173,6 +2205,7 @@ def render(package: Package, destination: Path) -> dict:
         for (original, replacement), count in sorted(applied.items())
     }
     report["tokens"] = dict(tokens)
+    report["sourcePages"] = saved_page_count(package)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as out:
@@ -2579,6 +2612,16 @@ async def convert(
             }
         }
         report["conversion"]["unsupportedKept"] = render_report.get("unsupported", {})
+        # Where to look, for whoever reads the saved report: never on screen,
+        # and never a claim that the layout is right (#53).
+        report["readBack"] = await read_back(
+            google,
+            uploaded["id"],
+            {
+                "pages": render_report.get("sourcePages"),
+                "tables": render_report.get("topLevelTables"),
+            },
+        )
         report["verification"] = "text_checked"
         report["status"] = "completed_with_warnings"
     except ToolkitError as exc:
