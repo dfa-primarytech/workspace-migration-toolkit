@@ -180,7 +180,7 @@ def test_a_page_that_cannot_be_decoded_is_not_called_blank():
 # ----------------------------------------------------- the Doc read back
 
 
-SECRET = "Pupil name: CONFIDENTIAL"
+PUPIL_TEXT = "Pupil name: CONFIDENTIAL"
 
 
 def paragraph(*elements):
@@ -313,7 +313,7 @@ def test_blank_pages_and_page_break_paragraphs_are_reported_with_their_pages(tmp
 
 
 def test_the_findings_stay_off_screen_and_carry_no_document_text(tmp_path):
-    content = [paragraph(text(SECRET + "\n")), paragraph(PAGE_BREAK, text("\n"))]
+    content = [paragraph(text(PUPIL_TEXT + "\n")), paragraph(PAGE_BREAK, text("\n"))]
     google = ReadingGoogle(docs_document(content, positioned=1), build_pdf([TEXT, BLANK]))
     report = job_with(tmp_path, para(), google)
 
@@ -324,7 +324,7 @@ def test_the_findings_stay_off_screen_and_carry_no_document_text(tmp_path):
     assert not any(
         w["code"].startswith(("pictures_still", "pages_probably")) for w in report["warnings"]
     )
-    assert SECRET not in json.dumps(report)
+    assert PUPIL_TEXT not in json.dumps(report)
     assert "Question 1" not in json.dumps(report)
 
 
