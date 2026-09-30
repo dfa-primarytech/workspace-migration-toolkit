@@ -633,3 +633,28 @@ explicitly instead of leaving it as an unstated placeholder. No GCP
 resources were created by this change -- it is a deployment intention
 recorded ahead of the actual Cloud Run setup work (see the outstanding
 GCP-setup checklist in HANDOFF.md).
+
+## 2026-09-30: Read the converted Word document back, into the report only (#53)
+
+After a Word conversion, the app reads the new Google Doc (`documents.get`,
+every tab) and exports it as a PDF, then applies fixed rules: pictures still
+floating, top-level tables lost against what was uploaded, paragraphs that
+only break a page, a page count unlike the one Word saved in
+`docProps/app.xml`, and pages that draw no text and no picture.
+
+- **Report only.** The findings go into the saved conversion report under
+  `readBack`, not into `warnings`, which the screen shows (see "Built for a
+  frustrated educator"). They carry counts and page numbers, never text.
+- **Never a failure.** The conversion has already worked when these run. A
+  read Google refuses, or a PDF that can't be read, is recorded under
+  `readBack.unavailable` and the status is unchanged.
+- **Our own small PDF reader, not a dependency.** Only the page tree and each
+  page's content stream are read, Flate only, with sizes capped. A page it
+  can't decode is never called blank; a PDF it can't read gives no page
+  findings rather than a count of zero.
+- **Word's page count is evidence, not a rule.** It is Word's own last
+  layout, and other programs may not write it.
+- **Not verified live.** Tested against a fake Google and PDFs built in the
+  tests; the scope spike above showed `drive.file` reaches both calls, not
+  what real answers look like for real worksheets. PPTX and Sheets read-back
+  are left for later.

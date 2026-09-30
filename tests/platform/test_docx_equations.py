@@ -67,6 +67,12 @@ class FakeGoogle:
         # which is the very uncertainty the warning exists to cover.
         return ""
 
+    async def document(self, document_id: str) -> dict:
+        return {"body": {"content": []}}
+
+    async def export_pdf(self, file_id: str) -> bytes:
+        return b""
+
 
 MATH_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 

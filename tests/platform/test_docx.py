@@ -513,6 +513,12 @@ class FakeGoogle:
     async def export_text(self, file_id):
         return self.exported
 
+    async def document(self, document_id):
+        return {"body": {"content": []}}
+
+    async def export_pdf(self, file_id):
+        return b""
+
 
 def converted_job(tmp_path, body, media=None, **kwargs):
     root = tmp_path / "job"
