@@ -9,6 +9,33 @@ PR descriptions have the same detail in full.
 
 - Agent: Claude Code / QuietHeron (Publisher)
 - Date: 2026-09-29
+- Branch: `feat/publisher-table-fit`, based on main `e356d7d` (#100 merged)
+- Objective: keep PUB-002's tables on the page (page 3's ran off it; so did 7, 8 and 9).
+- Files changed:
+  - `publisher_slides.py` (`_table_layout`, `room_below`, `TableLayout`, `measured_as`; `rough_height` takes spacing and scale);
+  - `publisher_fit.py` (`fit_with`, the search `fit` now uses);
+  - `font_metrics/calibri.json`, `arial.json` (new, from Carlito and Liberation Sans) and its README;
+  - tests: `test_publisher_table_fit.py` (new, 4), `test_publisher_fit.py`;
+  - `docs/publisher-renderer.md`, DECISIONS.md, this file.
+- Completed:
+  - Measured in the Slides editor: Google pads a cell's text 6.2 to 6.5 pt above and below. With that, the row estimates of all eight tables came within 13 pt of Google's drawing.
+  - Tables grow into free space (down to what is below, a box they sit in, or 10 pt from the edge), and only past that is their text made closer, then smaller.
+  - Verified live: all eight tables stay on their pages (page 9: 721 to 482 pt).
+  - The owner chose readable text over Publisher's exact bottom edge.
+- Checks: 506 platform tests passed, 12 skipped; Ruff and mypy clean.
+- Known failures: none.
+- Unresolved:
+  - Page 18's bullets sit tight against centred text.
+  - The on-screen summaries show the reader's internal notes.
+  - The owner wants no Check file button in the final version.
+- Decisions: DECISIONS.md, 2026-09-29 (keep tables on the page, readable text first).
+- Next task: the bullet gap, then hiding internal notes from staff.
+- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 20:42 UTC). `wmt-test-live` runs `wmt-test/app:pub17`. Parsed PUB-002 bundles are under `/root/wmt-test/private`; never commit them.
+
+---
+
+- Agent: Claude Code / QuietHeron (Publisher)
+- Date: 2026-09-29
 - Branch: `feat/publisher-tables`, based on main `bc0a4be` (#99 merged)
 - Objective: PUB-002's tables: grid lines and the book covers missing from their cells.
 - Files changed:

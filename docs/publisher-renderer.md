@@ -62,6 +62,13 @@ link. `Plan.keys_for(page)` lists the keys one page needs, so step 3 can
 upload, sign and send a page at a time within the 15-minute link lifetime.
 `check(plan, bound=True)` fails on any picture left without a link.
 
+A picture that can't be stored or signed doesn't cost its page, or the pages
+after it: it becomes the same marked box as a picture Slides refuses, and the
+report says how many (`pictures_not_sent`). After three failures in a row the
+bucket is taken to be down (a signer without permission, say), and the rest
+of the pictures are marked without asking it again. A page that fails some
+other way is left blank and reported, and the pages after it are still made.
+
 Slides fits a picture inside the size it is given without distorting it.
 So each picture is given a size in its own proportions, and the transform
 stretches it to the frame.
@@ -86,7 +93,7 @@ reported (`picture-stretched`).
 
 ## Known limits
 
-- **Lists** come from the patched libmspub (docs/publisher-parser.md); the stock 0.1.4 never passes them on. Each run of consecutive list paragraphs of one kind becomes one `createParagraphBullets`, sent before the paragraph styles so Publisher's own hanging indents are the ones kept. Numbering maps to the nearest Slides preset (1. and 1), I., A.); anything else is shown as 1, 2, 3 and reported, and so is a bullet other than a dot and a list that started past 1, which Slides can't do. Verified live on PUB-002's 12 bulleted lists. A list item with a margin but no hanging indent (PUB-002 page 18) has its margin taken as the gap from bullet to text, as Publisher draws it: the bullet at the edge, the text at the margin (0.25 in when there is none). Slides would otherwise set the text straight after the bullet.
+- **Lists** come from the patched libmspub (docs/publisher-parser.md); the stock 0.1.4 never passes them on. Each run of consecutive list paragraphs of one kind becomes one `createParagraphBullets`, sent before the paragraph styles so Publisher's own hanging indents are the ones kept. Numbering maps to the nearest Slides preset (1. and 1), I., A.); anything else is shown as 1, 2, 3 and reported, and so is a bullet other than a dot and a list that started past 1, which Slides can't do. Verified live on PUB-002's 12 bulleted lists. A list item with a margin but no hanging indent (PUB-002 page 18) has its margin taken as the gap from bullet to text, as Publisher draws it: the bullet at the edge, the text at the margin (0.25 in when there is none). Slides would otherwise set the text straight after the bullet. A list paragraph's leading tabs are dropped before any range is counted: `createParagraphBullets` removes them itself (taking them as nesting), which shifted every range after them (#109).
 
 - **Crops** are applied only when they fit their frame (see above). An outward crop (padding), which Publisher allows, is not handled and leaves the picture uncropped.
 - **Mirrored pictures** are reported, not flipped (the reader can't tell which way).

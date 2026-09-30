@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from workspace_toolkit.publisher_slides import KNOWN, list_requests, paragraph_style
 
+from .test_publisher_slides import document, paragraph, planned, requests, text_box
+from .test_publisher_slides import run as text_run
+
 WHERE = {"objectId": "box"}
 
 
@@ -116,3 +119,41 @@ def test_a_list_items_indent_is_the_gap_from_bullet_to_text():
     assert hanging == {"indentStart": 36.0, "indentFirstLine": 18.0}
     # Not a list: a margin is a margin.
     assert styled(fo_margin_left="0.25in") == {"indentStart": 18.0, "indentFirstLine": 18.0}
+
+
+# ------------------------------------------------------------------ leading tabs (#109)
+
+
+def tabbed_box():
+    listed = {"librevenge:list-type": "unordered", "librevenge:bullet-codepoint": "8226"}
+    return document(
+        [
+            text_box(
+                "el_1",
+                0,
+                (10, 10, 300, 200),
+                paragraph(text_run("\tFirst"), **listed),
+                paragraph(text_run("\t"), text_run("\tSecond", bold=True), **listed),
+                paragraph(text_run("\tPlain")),
+            )
+        ]
+    )
+
+
+def test_a_list_paragraphs_leading_tabs_are_left_out_before_ranges_are_counted():
+    result = planned(tabbed_box())
+    (inserted,) = requests(result, "insertText")
+    # Slides would take the list's tabs away itself, moving every range after them.
+    assert inserted["text"] == "First\nSecond\n\tPlain"
+    (bullets,) = requests(result, "createParagraphBullets")
+    assert (bullets["textRange"]["startIndex"], bullets["textRange"]["endIndex"]) == (0, 12)
+    styled = {
+        (r["textRange"]["startIndex"], r["textRange"]["endIndex"]): r["style"].get("bold")
+        for r in requests(result, "updateTextStyle")
+    }
+    assert styled[(0, 5)] is False and styled[(6, 12)] is True
+    paragraphs = [
+        (r["textRange"]["startIndex"], r["textRange"]["endIndex"])
+        for r in requests(result, "updateParagraphStyle")
+    ]
+    assert paragraphs == [(0, 5), (6, 12), (13, 19)]

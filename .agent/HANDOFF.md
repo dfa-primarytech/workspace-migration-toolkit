@@ -2,6 +2,32 @@
 
 - Agent: Claude Code (Publisher)
 - Date: 2026-09-30
+- Branch: `fix/publisher-page-failures`, stacked on `fix/publisher-planning-crashes` (PR #138): merge that first
+- Objective: #108 (one failed picture upload blanked every later page) and #109 (leading tabs in a list shifted every text range).
+- Files changed:
+  - `publisher_convert.py` (`Delivery`, `undelivered`; `build_page` marks a picture it can't send; the page loop also catches `ToolkitError`; the outer handler catches `httpx.HTTPError`; neutral `pages_failed` wording);
+  - `storage.py` (`Credentials.token` and `MetadataCredentials.email` raise `picture_delivery_failed`; `Bucket.delete` never raises);
+  - `publisher_slides.py` (`_without_leading_tabs`, used by `_laid`);
+  - tests: `test_publisher_convert.py` (+6, and a `store_fails` switch on the fake Google), `test_publisher_lists.py` (+1);
+  - `docs/publisher-renderer.md`, this file.
+- Completed:
+  - #108: a picture that can't be stored or signed becomes a marked box (`pictures_not_sent`), and later pages are still made. After 3 failures in a row the bucket isn't asked again. A page that fails another way is left blank and reported, and the rest carry on. Metadata-server errors are reported properly instead of escaping as `httpx` errors.
+  - #109: a list paragraph's leading tabs are dropped before any range is counted, so bullets and styles line up with the text Google keeps.
+  - All 7 new tests fail on main and pass here.
+- Checks: 526 platform tests passed, 14 skipped (with #138 underneath); Ruff clean; mypy only reports `hypercorn` missing locally.
+- Known failures: none.
+- Unresolved:
+  - #108's PPTX/Sheets half (`Google.upload` not wrapping `OSError`, `json.loads(render.json)`) is Platform-owned and not done here.
+  - #109 isn't live-verified; nesting by tabs isn't supported (Publisher's indent is set from its own margins).
+- Decisions: none new.
+- Next task: #111 (mask size cap), then the unclaimed Platform/PPTX audit issues.
+- Warnings: none new.
+---
+
+## Previous handoff
+
+- Agent: Claude Code (Publisher)
+- Date: 2026-09-30
 - Branch: `fix/publisher-planning-crashes`, based on main `2d80316`
 - Objective: fix the high-priority Publisher audit issues #105, #106, #107 and #110 (claimed on each issue).
 - Files changed:
@@ -67,31 +93,3 @@
     #129 (PR #164, top-level catch in main, exit 4, allocation-free last-resort report; PUBIR_FAIL_FOR_TESTING hook). Green in run 36713758504 and ready for review.
 - Next task: the empty-drawing residue (#20) the #113 tests ran into. #150 is the Publisher session's (PR #160).
 - Warnings: merge the stack in order (#114, #134, then the placement PR); after a squash merge, the next branch needs rebasing onto main. #113 conflicts with nothing in the stack.
----
-
-## Previous handoff
-
-- Agent: Claude Code / QuietHeron (Publisher)
-- Date: 2026-09-29
-- Branch: `feat/publisher-table-fit`, based on main `e356d7d` (#100 merged)
-- Objective: keep PUB-002's tables on the page (page 3's ran off it; so did 7, 8 and 9).
-- Files changed:
-  - `publisher_slides.py` (`_table_layout`, `room_below`, `TableLayout`, `measured_as`; `rough_height` takes spacing and scale);
-  - `publisher_fit.py` (`fit_with`, the search `fit` now uses);
-  - `font_metrics/calibri.json`, `arial.json` (new, from Carlito and Liberation Sans) and its README;
-  - tests: `test_publisher_table_fit.py` (new, 4), `test_publisher_fit.py`;
-  - `docs/publisher-renderer.md`, DECISIONS.md, this file.
-- Completed:
-  - Measured in the Slides editor: Google pads a cell's text 6.2 to 6.5 pt above and below. With that, the row estimates of all eight tables came within 13 pt of Google's drawing.
-  - Tables grow into free space (down to what is below, a box they sit in, or 10 pt from the edge), and only past that is their text made closer, then smaller.
-  - Verified live: all eight tables stay on their pages (page 9: 721 to 482 pt).
-  - The owner chose readable text over Publisher's exact bottom edge.
-- Checks: 506 platform tests passed, 12 skipped; Ruff and mypy clean.
-- Known failures: none.
-- Unresolved:
-  - Page 18's bullets sit tight against centred text.
-  - The on-screen summaries show the reader's internal notes.
-  - The owner wants no Check file button in the final version.
-- Decisions: DECISIONS.md, 2026-09-29 (keep tables on the page, readable text first).
-- Next task: the bullet gap, then hiding internal notes from staff.
-- Warnings: CT 203's `/root/wmt-test/live` holds the OAuth client secret, the Picker key and a picture token (expires 20:42 UTC). `wmt-test-live` runs `wmt-test/app:pub17`. Parsed PUB-002 bundles are under `/root/wmt-test/private`; never commit them.

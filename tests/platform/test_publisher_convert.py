@@ -175,8 +175,17 @@ def test_credentials_are_the_apps_own_and_never_a_key_file(tmp_path, monkeypatch
 class FakeGoogle:
     """Just enough of Drive, Slides, Cloud Storage and IAM to convert against."""
 
-    def __init__(self, *, refuse: set[str] = frozenset(), page_size=A5_EMU, lose_reply=False):
+    def __init__(
+        self,
+        *,
+        refuse: set[str] = frozenset(),
+        page_size=A5_EMU,
+        lose_reply=False,
+        store_fails=lambda n: False,
+    ):
         self.refuse = refuse  # objectIds whose pictures Slides "cannot fetch"
+        self.store_fails = store_fails  # given the upload's number (from 1): answer 503?
+        self.uploads = 0
         self.page_size = page_size
         self.lose_reply = lose_reply
         self.slides: dict[str, list[dict]] = {}
@@ -233,6 +242,9 @@ class FakeGoogle:
         if "signBlob" in request.url.path:
             return httpx.Response(200, json={"signedBlob": base64.b64encode(b"\x01\x02").decode()})
         if request.method == "POST":
+            self.uploads += 1
+            if self.store_fails(self.uploads):
+                return httpx.Response(503, json={})
             name = request.url.params["name"]
             assert request.url.params["ifGenerationMatch"] == "0"
             assert name.startswith("publisher/") and re.fullmatch(
@@ -589,3 +601,97 @@ def test_the_readers_own_notes_stay_out_of_the_summary_people_read():
     report = {"elements": [{"pageIndex": 0, "status": "NATIVE", "notes": notes}], "warnings": []}
     summary = summarise(Plan({}, [], [], {}, [], report))
     assert [n["code"] for n in summary] == ["text-made-smaller"]
+
+
+# ------------------------------------------------------------------ when storage fails (#108)
+
+
+def picture_pages(tmp_path, count: int):
+    (tmp_path / "result").mkdir()
+    prepared = pictures(tmp_path / "result", **{f"p{i}": (40, 40) for i in range(count)})
+    pages = [
+        [
+            text_box(f"el_t{i}", 0, (10, 10, 200, 40), paragraph(run(f"Page {i + 1}"))),
+            image(f"el_p{i}", 1, (10, 80, 100, 100), f"p{i}"),
+        ]
+        for i in range(count)
+    ]
+    return job(tmp_path, document(*pages), prepared)
+
+
+def test_a_picture_that_cannot_be_stored_leaves_a_marked_box_and_later_pages(tmp_path, monkeypatch):
+    fake = FakeGoogle(store_fails=lambda n: n == 2)  # page 2's picture
+    root, manifest = picture_pages(tmp_path, 3)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert report["status"] == "completed_with_warnings"
+    assert fake.order == ["wmt_page_0001", "wmt_page_0002", "wmt_page_0003"]
+    assert fake.slides["wmt_page_0002"] == ["wmt_el_t1", "wmt_el_p1"]
+    assert "picture from the original" in fake.objects["wmt_el_p1"]["text"]
+    assert fake.slides["wmt_page_0003"] == ["wmt_el_t2", "wmt_el_p2"]  # built after it
+    assert "text" not in fake.objects["wmt_el_p2"]  # a real picture
+    (note,) = [w for w in report["warnings"] if w["code"] == "pictures_not_sent"]
+    assert note["message"].startswith("1 picture(s)") and note["detail"] == "HTTP 503"
+    codes = [w["code"] for w in report["warnings"]]
+    assert "pages_failed" not in codes and "objects_missing" not in codes
+
+
+def test_storage_that_keeps_failing_is_not_asked_for_every_picture(tmp_path, monkeypatch):
+    fake = FakeGoogle(store_fails=lambda n: True)
+    root, manifest = picture_pages(tmp_path, 6)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert fake.uploads == publisher_convert.STORAGE_GIVE_UP
+    assert len(fake.order) == 6
+    assert all(
+        "picture from the original" in fake.objects[f"wmt_el_p{i}"]["text"] for i in range(6)
+    )
+    (note,) = [w for w in report["warnings"] if w["code"] == "pictures_not_sent"]
+    assert note["message"].startswith("6 picture(s)")
+
+
+def test_a_page_that_fails_another_way_does_not_stop_the_rest(tmp_path, monkeypatch):
+    fake = FakeGoogle()
+    root, manifest = picture_pages(tmp_path, 3)
+    real = publisher_convert.undelivered
+    calls = []
+
+    def once(requests, urls):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ToolkitError("picture_delivery_failed", "It went wrong.", 502)
+        return real(requests, urls)
+
+    monkeypatch.setattr(publisher_convert, "undelivered", once)
+    report = convert(tmp_path, fake, root, manifest, monkeypatch=monkeypatch)
+    assert report["status"] == "completed_with_warnings"
+    assert fake.slides["wmt_page_0001"] == []
+    assert fake.slides["wmt_page_0003"] == ["wmt_el_t2", "wmt_el_p2"]
+    (note,) = [w for w in report["warnings"] if w["code"] == "pages_failed"]
+    assert note["message"] == "Page 1 could not be made in Google Slides, and is left blank."
+    assert report["conversion"]["refusals"] == [{"page": 1, "error": "picture_delivery_failed"}]
+
+
+@pytest.mark.parametrize("call", ["email", "token"])
+def test_the_metadata_server_failing_is_a_plain_error(call):
+    def handle(request):
+        return httpx.Response(500, text="no")
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            creds = storage.MetadataCredentials(client)
+            return await getattr(creds, call)()
+
+    with pytest.raises(ToolkitError) as caught:
+        asyncio.run(go())
+    assert caught.value.code == "picture_delivery_failed" and caught.value.detail == "HTTP 500"
+
+
+def test_a_copy_is_given_up_quietly_when_the_token_cannot_be_had():
+    class Broken(Credentials):
+        async def _fetch(self):
+            raise KeyError("access_token")
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: None)) as client:
+            return await Bucket("b", SIGNER, Broken(client), client).delete("publisher/x.png")
+
+    assert asyncio.run(go()) is False

@@ -78,7 +78,10 @@ class Credentials:
 
     async def token(self) -> str:
         if time.time() > self._expires - 60:
-            self._token, lifetime = await self._fetch()
+            try:
+                self._token, lifetime = await self._fetch()
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
+                raise failed("The app's own Google account could not be reached.", exc) from exc
             self._expires = time.time() + lifetime
         return self._token
 
@@ -96,8 +99,13 @@ class MetadataCredentials(Credentials):
         return body["access_token"], float(body.get("expires_in", 300))
 
     async def email(self) -> str:
-        response = await self.client.get(METADATA + "/email", headers={"Metadata-Flavor": "Google"})
-        response.raise_for_status()
+        try:
+            response = await self.client.get(
+                METADATA + "/email", headers={"Metadata-Flavor": "Google"}
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise failed("The app's own Google account could not be reached.", exc) from exc
         return response.text.strip()
 
 
@@ -258,5 +266,5 @@ class Bucket:
                 headers=await self._headers(),
             )
             return response.status_code in {200, 204, 404}
-        except httpx.HTTPError:
+        except (httpx.HTTPError, ToolkitError):
             return False

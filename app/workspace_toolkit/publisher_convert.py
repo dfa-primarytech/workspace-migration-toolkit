@@ -13,7 +13,9 @@ The worker has already parsed the file, drawn its pictures and written
    the right slide, with its text.
 
 A picture Slides refuses is replaced by a marked box and the page sent
-again, rather than losing the page. The report never carries a signed link
+again, rather than losing the page. So is a picture that could not be stored
+or signed; once the bucket has failed several times in a row, later pictures
+are marked without trying it again. The report never carries a signed link
 or anything Google echoed back about one.
 """
 
@@ -24,6 +26,7 @@ import json
 import logging
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -36,7 +39,7 @@ from .model import warning
 from .package import PPTX_MIME
 from .publisher import analysis_report
 from .publisher_deck import blank_deck
-from .publisher_slides import CREATES, Plan, bind, check, missing_picture
+from .publisher_slides import CREATES, PICTURE, Plan, bind, check, missing_picture
 from .storage import Bucket, MetadataCredentials, credentials
 from .units import EMU_PER_POINT
 
@@ -47,6 +50,7 @@ logger = logging.getLogger(__name__)
 ATTEMPTS = 3
 MAX_REPLACED = 20  # pictures swapped for a marked box before a page is given up
 PAGE_SIZE_TOLERANCE = 1.0  # points
+STORAGE_GIVE_UP = 3  # pictures in a row the bucket fails before it is left alone
 
 
 class Refused(Exception):
@@ -127,25 +131,76 @@ async def send(google: Google, presentation: str, slide: str, requests: list[dic
 # ------------------------------------------------------------------ one page
 
 
+@dataclass
+class Delivery:
+    """How storing pictures is going, across the whole conversion. A failure
+    that keeps happening (a signer without permission, an expired token) is
+    not asked again for every page: after STORAGE_GIVE_UP in a row, the rest
+    are marked boxes without trying."""
+
+    in_a_row: int = 0
+    failures: int = 0
+    reason: str = ""
+
+    @property
+    def down(self) -> bool:
+        return self.in_a_row >= STORAGE_GIVE_UP
+
+    def failed(self, exc: ToolkitError) -> None:
+        self.in_a_row += 1
+        self.failures += 1
+        self.reason = exc.detail or exc.code
+
+
+def undelivered(requests: list[dict], urls: dict[str, str]) -> tuple[list[dict], list[str]]:
+    """The requests with each picture that has no link made a marked box."""
+    out: list[dict] = []
+    marked: list[str] = []
+    for request in requests:
+        image = request.get("createImage")
+        if image and image["url"].startswith(PICTURE) and image["url"][len(PICTURE) :] not in urls:
+            marked.append(image["objectId"])
+            out += missing_picture(image["objectId"], image["elementProperties"])
+        else:
+            out.append(request)
+    return out, marked
+
+
 async def build_page(
-    google: Google, bucket: Bucket, presentation: str, plan: Plan, index: int
-) -> tuple[list[str], int]:
-    """Sends one page. Returns the pictures replaced by a marked box, and how
-    many stored copies could not be deleted (the lifecycle rule has them)."""
+    google: Google,
+    bucket: Bucket,
+    presentation: str,
+    plan: Plan,
+    index: int,
+    delivery: Delivery | None = None,
+) -> tuple[list[str], list[str]]:
+    """Sends one page. Returns the pictures replaced by a marked box because
+    Slides refused them, and those marked because they could not be sent.
+    Stored copies that could not be deleted are counted in the plan's report
+    (the lifecycle rule has them)."""
+    delivery = delivery or Delivery()
     stored: list[str] = []
     replaced: list[str] = []
     try:
         urls = {}
         for key in plan.keys_for(index):
+            if delivery.down:
+                break
             picture = plan.pictures[key]
-            name = await bucket.upload(picture.path, picture.mime)
-            stored.append(name)
-            urls[key] = await bucket.sign(name)
-        requests = bind(plan.pages[index], urls)
+            try:
+                name = await bucket.upload(picture.path, picture.mime)
+                stored.append(name)
+                urls[key] = await bucket.sign(name)
+            except ToolkitError as exc:
+                delivery.failed(exc)
+                continue
+            delivery.in_a_row = 0
+        requests, marked = undelivered(plan.pages[index], urls)
+        requests = bind(requests, urls)
         while True:
             try:
                 await send(google, presentation, plan.slides[index], requests)
-                return replaced, 0
+                return replaced, marked
             except Refused as refusal:
                 at = refusal.index
                 if (
@@ -381,15 +436,24 @@ async def convert(
             bucket = Bucket(settings.publisher_bucket, signer, creds, client)
             failed_pages: list[int] = []
             refusals: list[dict] = []
+            delivery = Delivery()
+            unsent: set[str] = set()
             for index in range(len(plan.pages)):
                 try:
-                    swapped, _ = await build_page(google, bucket, presentation, plan, index)
+                    swapped, marked = await build_page(
+                        google, bucket, presentation, plan, index, delivery
+                    )
                     replaced.update(swapped)
+                    unsent.update(marked)
                 except Refused as refusal:
                     failed_pages.append(index + 1)
                     refusals.append(
                         {"page": index + 1, "status": refusal.status, "request": refusal.kind}
                     )
+                except ToolkitError as exc:
+                    # One page's failure is not every later page's.
+                    failed_pages.append(index + 1)
+                    refusals.append({"page": index + 1, "error": exc.code})
         notes = summarise(plan)
         if size_note:
             notes.append(size_note)
@@ -402,13 +466,25 @@ async def convert(
                     classification=C.UNSUPPORTED,
                 )
             )
+        if unsent:
+            notes.append(
+                warning(
+                    "pictures_not_sent",
+                    f"{len(unsent)} picture(s) could not be sent to Google Slides; a marked "
+                    "box shows where each one was.",
+                    classification=C.UNSUPPORTED,
+                    detail=delivery.reason,
+                )
+            )
         if failed_pages:
             notes.append(
                 warning(
                     "pages_failed",
-                    "Google Slides refused page "
+                    "Page "
                     + ", ".join(map(str, failed_pages))
-                    + ", which is left blank.",
+                    + " could not be made in Google Slides, and "
+                    + ("is" if len(failed_pages) == 1 else "are")
+                    + " left blank.",
                     classification=C.UNSUPPORTED,
                 )
             )
@@ -422,7 +498,7 @@ async def convert(
                 )
             )
         readback = await google.request("GET", f"{SLIDES_API}/{presentation}")
-        notes += verify(plan, readback, replaced)
+        notes += verify(plan, readback, replaced | unsent)
         # The checker's notes about single elements are in the plan's own, with
         # what was done about them; keep only those about the whole document.
         report["warnings"] = [w for w in report.get("warnings", []) if "elementId" not in w] + notes
@@ -436,7 +512,7 @@ async def convert(
         report["status"] = "completed_with_warnings" if notes else "completed"
     except ToolkitError as exc:
         failed(report, exc)
-    except (KeyError, ValueError, OSError) as exc:
+    except (KeyError, ValueError, OSError, httpx.HTTPError) as exc:
         failed(
             report,
             ToolkitError(

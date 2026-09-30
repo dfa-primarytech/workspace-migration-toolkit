@@ -422,8 +422,27 @@ def paragraph_text(paragraph: dict) -> list[tuple[str, dict]]:
     return pieces
 
 
+def _without_leading_tabs(pieces: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+    """A list paragraph's text as Slides keeps it. createParagraphBullets
+    removes a paragraph's leading tabs (taking them as nesting), which would
+    shift every range after them. Publisher sets a list's indent itself
+    (paragraph_style), so the tabs are dropped here, before any range is
+    counted, and the list stays at its own level."""
+    out = []
+    leading = True
+    for text, run in pieces:
+        if leading:
+            text = text.lstrip("\t")
+            leading = not text
+        out.append((text, run))
+    return out
+
+
 def _laid(paragraphs: list[dict]) -> tuple[list[dict], list[list[tuple[str, dict]]]]:
-    laid = [paragraph_text(p) for p in paragraphs]
+    laid = [
+        _without_leading_tabs(pieces) if _list_of(p) else pieces
+        for p, pieces in ((p, paragraph_text(p)) for p in paragraphs)
+    ]
     while laid and not "".join(t for t, _ in laid[-1]):
         laid.pop()  # a trailing empty paragraph adds nothing Slides can show
     return paragraphs[: len(laid)], laid
