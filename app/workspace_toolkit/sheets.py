@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .errors import ToolkitError
 from .google import DRIVE, SEPARATOR, clean_name
+from .macros import UPLOADED
 from .model import Compatibility as C
 from .model import warning
 from .package import XLSM, XLSX
@@ -38,7 +39,7 @@ NOT_CONVERTED_BECAUSE = {
     "forms_need_manual_migration": "it has form controls",
     "activex_need_manual_migration": "it has ActiveX controls",
     "embedded_objects_need_manual_migration": "it has embedded objects",
-    "vba_needs_manual_migration": "it has macros, which Google Sheets can't run",
+    "macros_not_removable": "its macros couldn't be taken out safely",
     "dialog_sheet_needs_manual_migration": "it has a dialog sheet",
     "macro_sheet_needs_manual_migration": "it has an Excel 4 macro sheet",
     "external_workbook_links": "it links to other workbooks",
@@ -55,6 +56,28 @@ def not_converted_because(manifest: dict) -> str:
         return "Not converted: it needs moving into Google Sheets by hand. The report in the folder says why."
     listed = reasons[0] if len(reasons) == 1 else ", ".join(reasons[:-1]) + " and " + reasons[-1]
     return f"Not converted: {listed}. The original is saved in the folder."
+
+
+async def save_macros(folder_path: Path, google, folder: str, report: dict) -> None:
+    """Puts the macros, as written by macros.prepare, in the person's folder.
+    A copy that fails is noted; the Sheet itself has already converted."""
+    for name, shown in UPLOADED.items():
+        path = folder_path / name
+        if not path.exists():
+            continue
+        try:
+            saved = await google.upload(path, shown, "text/plain", folder)
+        except ToolkitError:
+            report["warnings"].append(
+                warning(
+                    "macros_not_saved",
+                    f'"{shown}" couldn\'t be saved in the folder. The original workbook there '
+                    "still has the macros.",
+                    classification=C.UNSUPPORTED,
+                )
+            )
+            continue
+        report["assetOutputs"].append({"kind": "macros", "name": shown, "id": saved["id"]})
 
 
 async def uk_settings(google, spreadsheet_id: str, time_zone: str | None) -> dict | None:
@@ -181,20 +204,23 @@ async def convert(
             formats = await google.request(
                 "GET", DRIVE + "/about", params={"fields": "importFormats"}
             )
-            if SHEETS_MIME not in formats.get("importFormats", {}).get(fmt.mime, []):
+            # Always sent as .xlsx: the worker wrote a macro workbook again
+            # without its macros (macros.py), as Google converts no .xlsm.
+            if SHEETS_MIME not in formats.get("importFormats", {}).get(XLSX.mime, []):
                 raise ToolkitError(
                     "conversion_unavailable",
                     "Google does not currently offer Excel conversion for this account.",
                     422,
                 )
             uploaded = await google.upload(
-                root / "result" / ("converted" + fmt.suffix),
+                root / "result" / "converted.xlsx",
                 output_name,
-                fmt.mime,
+                XLSX.mime,
                 folder,
                 convert=True,
                 target=SHEETS_MIME,
             )
+            await save_macros(root / "result" / "macros", google, folder, report)
             report["outputs"].append({"kind": "spreadsheet", "id": uploaded["id"]})
             report["spreadsheetId"] = uploaded["id"]
             report["url"] = "https://docs.google.com/spreadsheets/d/" + uploaded["id"] + "/edit"

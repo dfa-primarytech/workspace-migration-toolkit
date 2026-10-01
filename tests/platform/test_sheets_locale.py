@@ -121,10 +121,10 @@ def test_a_workbook_kept_for_moving_by_hand_says_why(tmp_path):
     # The page used to say "Converted." for these, with nothing to open.
     root = tmp_path / "job"
     (root / "result").mkdir(parents=True)
-    manifest = analyse(write_workbook(root / "source.xlsm"), root / "result")
+    manifest = analyse(write_workbook(root / "source.xlsx", features=("forms",)), root / "result")
     report = asyncio.run(convert(root, manifest, SettingsGoogle()))
     assert report["status"] == "manual_migration_required"
-    assert report["stoppedBecause"].startswith("Not converted: it has macros")
+    assert report["stoppedBecause"].startswith("Not converted: it has form controls")
     assert "url" not in report
 
 

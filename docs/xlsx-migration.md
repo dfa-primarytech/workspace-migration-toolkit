@@ -57,14 +57,25 @@ Per-file outcomes are:
 - `manual_migration_required`: a known limit or unsupported automation/data
   feature prevents safe automatic conversion
 
-VBA projects are read from the package only to calculate a content-free
-inventory (count, byte length and digest). They are never executed, translated,
-logged, placed in the conversion report or uploaded separately. Macro-enabled
-workbooks containing VBA are archived to the customer's private Drive folder and
-assigned `manual_migration_required`; they are not imported as a Google Sheet.
-An `.xlsm` container without VBA or other blocking features can proceed to native
-import if Google advertises that source MIME type for the account. An unsupported
-source type returns a report retaining the archived original's link.
+Macro-enabled workbooks convert (DECISIONS.md, 2026-10-01). Google converts no
+`.xlsm` at all: in the live test Drive listed no import for its type. So the
+worker writes every workbook again as a plain `.xlsx` (`macros.macro_free`):
+- the macro project and every relationship, override and default that declares
+  it are taken out;
+- the workbook part is declared as an ordinary workbook;
+- the result is opened again as an `.xlsx` before it is used.
+
+If that can't be done safely, the workbook needs moving by hand
+(`macros_not_removable`). The original `.xlsm`, macros and all, is archived in
+the person's folder as before.
+
+The macros are read (`vba.py`, following [MS-CFB] and [MS-OVBA], with limits)
+but never run. Their source is saved as text in the person's own conversion
+folder, and recorded macros are written as Apps Script beside it
+(`apps_script.py`). Neither file is logged or placed in the report, which gets
+counts only: `macroCode` in the manifest, and one of `macros_translated`,
+`macros_partly_translated`, `macros_not_translated` or `macros_unreadable` as a
+finding.
 
 Chart sheets are inventoried separately from worksheet grids and preserved in
 the source package. They remain `UNSUPPORTED` findings requiring review: the
@@ -85,11 +96,24 @@ The sheet kinds follow Microsoft's
 and [Office macro-format specification](https://officeprotocoldoc.z19.web.core.windows.net/files/MS-OFFMACRO/%5BMS-OFFMACRO%5D.pdf).
 This describes source structure, not verified Google import behaviour.
 
-No Apps Script is generated in this MVP. Any later bounded script generation
-must live behind a separate Google API interface, require explicit user or
-administrator authorisation, store no generated source in reports, and have
-mocked tests proving that lack of authorisation prevents creation. General VBA
-transpilation is out of scope.
+The Apps Script is bounded to what Excel's macro recorder writes:
+- select, fill down, copy and paste, clear;
+- set a value or formula, bold, italic, underline, font, colour and fill;
+- switch sheet, insert or delete rows, columns or cells;
+- show a message.
+
+Window-only steps such as scrolling are dropped. Any other line is kept as a
+"Not translated" comment and counted, never guessed at. The script adds a
+Macros menu.
+
+The app does **not** attach the script to the Sheet: the person pastes it in
+under Extensions → Apps Script, as the report explains. Attaching it
+automatically would need the Apps Script API, a new sign-in permission
+(`script.projects`) and a per-person Apps Script setting. That is deferred, and
+if it is built, it must still require explicit authorisation, keep the source
+out of reports, and have tests proving that no project is created without
+authorisation. General VBA translation (variables, loops, conditions, events)
+remains out of scope.
 
 ## Locale, time zone and text dates
 
@@ -107,7 +131,8 @@ report.
    workbook.
 2. The credential-free worker validates the package and writes a structural,
    temporary manifest. It serialises no cell values, formula expressions or
-   VBA source.
+   VBA source. A macro workbook's source and its Apps Script are written as two
+   files in the temporary workspace, for upload to the person's own folder only.
 3. Conversion creates a private folder in the user's Drive. By default the
    original workbook is archived there before native import. The
    `delete_after_conversion` policy hook skips that archive for deployments

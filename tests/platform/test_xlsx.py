@@ -122,7 +122,8 @@ def test_google_limits_and_unsupported_features_escalate(tmp_path):
         "forms_need_manual_migration",
         "activex_need_manual_migration",
         "embedded_objects_need_manual_migration",
-        "vba_needs_manual_migration",
+        # The fixture's macro project is not a real one: reported, never fatal.
+        "macros_unreadable",
         "charts_need_review",
     } <= codes
     assert analysis_report(manifest)["migrationTier"] == "manual_migration_required"
@@ -248,7 +249,8 @@ def test_native_google_import_archives_original_and_reads_structure(tmp_path):
     assert [item["mimeType"] for item in uploads[:2]] == [XLSX.mime, SHEETS_MIME]
 
 
-def test_macro_workbook_is_archived_but_not_imported(tmp_path):
+def test_a_macro_workbook_is_converted_without_its_macros(tmp_path):
+    # It used to be archived and never imported (DECISIONS.md, 2026-10-01).
     root = tmp_path / "job"
     result = root / "result"
     result.mkdir(parents=True)
@@ -258,6 +260,7 @@ def test_macro_workbook_is_archived_but_not_imported(tmp_path):
     class FakeGoogle:
         def __init__(self):
             self.uploads = []
+            self.warnings = []
 
         async def folder(self, name="Conversion"):
             return "folder"
@@ -266,11 +269,17 @@ def test_macro_workbook_is_archived_but_not_imported(tmp_path):
             self.uploads.append((path.name, mime, kwargs))
             return {"id": "saved" + str(len(self.uploads))}
 
-        async def request(self, *args, **kwargs):
-            raise AssertionError("manual migration must not call Google import")
+        async def request(self, method, url, **kwargs):
+            if url.endswith("/about"):
+                return {"importFormats": {XLSX.mime: [SHEETS_MIME]}}
+            return {"sheets": [{"properties": {"title": "Class data", "sheetType": "GRID"}}]}
 
     google = FakeGoogle()
     report = asyncio.run(convert(root, manifest, google))
-    assert report["status"] == "manual_migration_required"
-    assert google.uploads[0][0] == "source.xlsm"
-    assert all(not kwargs.get("convert") for _, _, kwargs in google.uploads)
+    assert report["status"] == "converted_with_review"
+    assert google.uploads[0][:2] == ("source.xlsm", XLSM.mime)  # the original, kept
+    assert google.uploads[1][:2] == ("converted.xlsx", XLSX.mime)
+    assert google.uploads[1][2]["convert"] is True
+    # The fixture's project isn't real VBA: said so, and nothing else is saved.
+    assert "macros_unreadable" in {w["code"] for w in report["warnings"]}
+    assert len(google.uploads) == 2
