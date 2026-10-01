@@ -50,3 +50,12 @@ def test_no_answer_at_all_is_explained_in_plain_words():
     assert run("offline")["message"] == (
         "Couldn’t reach the converter. Check your connection and try again."
     )
+
+
+def test_a_workbooks_macro_notice_is_shown_under_its_link():
+    result = run("macros")
+    assert result["row"] == "[Open in Google Sheets] · [Folder]"
+    assert result["notices"] == [
+        "This workbook uses macros. We’ve converted them for Google Sheets."
+    ]
+    assert run("converted")["notices"] == []

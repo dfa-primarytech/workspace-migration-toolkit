@@ -8,14 +8,16 @@ Structural read-back uses the Sheets API through the existing narrow
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .errors import ToolkitError
 from .google import DRIVE, SEPARATOR, clean_name
-from .macros import UPLOADED
+from .macros import BOUND_NAME, MACRO_LIST, SCRIPT_NAME, UPLOADED
 from .model import Compatibility as C
 from .model import warning
 from .package import XLSM, XLSX
+from .script_projects import SETTINGS_URL, attach
 from .xlsx import analysis_report, tier
 
 SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
@@ -78,6 +80,119 @@ async def save_macros(folder_path: Path, google, folder: str, report: dict) -> N
             )
             continue
         report["assetOutputs"].append({"kind": "macros", "name": shown, "id": saved["id"]})
+
+
+PASTE_NOTES = {"macros_translated", "macros_partly_translated"}
+
+
+def macro_notice(report: dict) -> str | None:
+    """What the page tells the person, beside the link, about a workbook's
+    macros: the one note shown on screen (DECISIONS.md, 2026-10-01), because
+    someone has to approve them in Google, or find them in the folder."""
+    codes = {w["code"] for w in report.get("warnings", [])}
+    attached = report.get("appsScript", {})
+    if codes & {"macros_not_translated", "macros_unreadable"}:
+        return (
+            "This workbook uses macros that couldn't be converted automatically. "
+            "The original code is saved in the folder."
+        )
+    if not codes & (PASTE_NOTES | {"macros_attached", "macros_partly_attached"}):
+        return None
+    partly = bool(codes & {"macros_partly_translated", "macros_partly_attached"})
+    some = " A few steps couldn't be converted and are marked in the script." if partly else ""
+    start = "This workbook uses macros. We've converted them for Google Sheets"
+    if attached.get("attached"):
+        return (
+            f"{start}: find them under Extensions → Macros. The first time you run one, "
+            f"Google will ask you to approve it.{some}"
+        )
+    if attached.get("reason") == "setting_off":
+        return (
+            f"{start}. To have them added to the Sheet for you, turn on the Apps Script API "
+            f"({SETTINGS_URL}) and convert again. Until then they're saved in the folder.{some}"
+        )
+    if attached.get("reason") == "not_allowed":
+        return (
+            f"{start}. They're saved in the folder to add by hand. To have them added for "
+            f"you, sign out, sign in again and allow Apps Script.{some}"
+        )
+    return (
+        f"{start}. They couldn't be added to the Sheet for you, so they're saved in the "
+        f"folder to add by hand.{some}"
+    )
+
+
+async def add_macros(
+    google, spreadsheet_id: str, title: str, script: Path, zone: str, allowed: bool, report: dict
+) -> None:
+    """Puts the translated macros in the Sheet itself, when the person allowed
+    it at sign-in; otherwise, or if Google refuses, says how to add them.
+    Without the permission, the Apps Script API is never called."""
+    if not allowed:
+        report["appsScript"] = {"attached": False, "reason": "not_allowed"}
+        report["warnings"].append(
+            warning(
+                "macros_not_attached",
+                "To have macros added to the Sheet for you next time, sign out and sign in "
+                "again, allowing the app to manage Apps Script. For now, add them as described "
+                "in the other note.",
+                classification=C.IGNORED,
+            )
+        )
+        return
+    # The bound version: declared in the manifest as Google Sheets macros, so
+    # they appear under Extensions > Macros, with no menu of their own.
+    bound, listed = script.with_name(BOUND_NAME), script.with_name(MACRO_LIST)
+    result = await attach(
+        google.client,
+        google.headers,
+        spreadsheet_id,
+        f"{title} – macros",
+        (bound if bound.exists() else script).read_text(encoding="utf-8"),
+        zone,
+        json.loads(listed.read_text(encoding="utf-8")) if listed.exists() else [],
+    )
+    if result.script_id:
+        report["appsScript"] = {"attached": True, "scriptId": result.script_id}
+        for note in report["warnings"]:
+            if note["code"] in PASTE_NOTES:
+                note.update(attached_note(note))
+        return
+    report["appsScript"] = {"attached": False, "reason": result.reason}
+    why = (
+        "the Apps Script API is turned off in your Google settings. Turn it on at "
+        f"{SETTINGS_URL} and convert again,"
+        if result.reason == "setting_off"
+        else "Google refused it. You can"
+    )
+    report["warnings"].append(
+        warning(
+            "macros_not_attached",
+            f"The macros couldn't be added to the Sheet for you, because {why} "
+            "or add them by hand as described in the other note.",
+            reason=result.reason,
+            classification=C.UNSUPPORTED,
+        )
+    )
+
+
+def attached_note(note: dict) -> dict:
+    """The paste-in note, rewritten for macros already in the Sheet."""
+    total = note.get("macroCount", 1)
+    them = "macros are" if total > 1 else "macro is"
+    message = (
+        f"The workbook's {them} in the Google Sheet: open it and choose Extensions → Macros. "
+        "The first time a macro runs, Google asks you to allow it."
+    )
+    lines = note.get("untranslatedLines")
+    if lines:
+        message += (
+            f" {lines} line{'s' if lines != 1 else ''} couldn't be translated: "
+            f'{"they are" if lines != 1 else "it is"} marked "Not translated" in the '
+            "script, under Extensions → Apps Script."
+        )
+    code = "macros_attached" if not lines else "macros_partly_attached"
+    return {"code": code, "message": message}
 
 
 async def uk_settings(google, spreadsheet_id: str, time_zone: str | None) -> dict | None:
@@ -173,6 +288,7 @@ async def convert(
     dependencies_resolved: bool = False,
     original_name: str = "",
     time_zone: str | None = None,
+    attach_macros: bool = False,
 ) -> dict:
     if original_policy not in ORIGINAL_POLICIES:
         raise ValueError("Unknown original workbook policy")
@@ -236,6 +352,12 @@ async def convert(
                         classification=C.UNSUPPORTED,
                     )
                 )
+            script = root / "result" / "macros" / SCRIPT_NAME
+            if script.exists():
+                zone = (settings or {}).get("timeZone", DEFAULT_TIME_ZONE)
+                await add_macros(
+                    google, uploaded["id"], output_name, script, zone, attach_macros, report
+                )
             spreadsheet = await google.request(
                 "GET",
                 SHEETS + uploaded["id"],
@@ -250,6 +372,8 @@ async def convert(
             # this (docs/xlsx-migration.md), not for a workbook with no notes.
             report["status"] = "converted_with_review"
             report["migrationTier"] = report["status"]
+            if notice := macro_notice(report):
+                report["notice"] = notice
     except ToolkitError as exc:
         report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
         report["warnings"].append(warning(exc.code, exc.message, classification=C.UNSUPPORTED))

@@ -14,6 +14,7 @@ counts. Nothing is run.
 
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
 
@@ -39,6 +40,9 @@ DEFAULTS = tags(b"Default")
 VBA_TYPES = ("vbaproject", "macroenabled", "vbadata")
 ORIGINAL_NAME = "original-vba.txt"
 SCRIPT_NAME = "apps-script.txt"
+# For adding to the Sheet itself (script_projects): never uploaded as files.
+BOUND_NAME = "apps-script-bound.gs"
+MACRO_LIST = "sheets-macros.json"
 # What each file is called in the person's folder.
 UPLOADED = {
     ORIGINAL_NAME: "Macros – original Excel VBA.txt",
@@ -150,6 +154,8 @@ def prepare(package: Package, output: Path) -> tuple[dict, list[dict]]:
     if translation.macros:
         (folder / SCRIPT_NAME).write_text(translation.script, encoding="utf-8")
         files.append(SCRIPT_NAME)
+        (folder / BOUND_NAME).write_text(translation.bound_script, encoding="utf-8")
+        (folder / MACRO_LIST).write_text(json.dumps(translation.sheets_macros()), encoding="utf-8")
     summary = {"read": True, "modules": len(modules), **counts, "files": files}
     return summary, notes(counts, bool(original))
 
