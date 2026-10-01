@@ -91,6 +91,16 @@ administrator authorisation, store no generated source in reports, and have
 mocked tests proving that lack of authorisation prevents creation. General VBA
 transpilation is out of scope.
 
+## Locale, time zone and text dates
+
+Every converted Sheet is set to the UK locale (`en_GB`) and to the person's
+own time zone, from their browser, or `Europe/London` (DECISIONS.md,
+2026-10-01). Without that, a Sheet in a US locale reads a date typed as text,
+such as "31/07/2023", as no date at all, and formulas built on it give
+`#VALUE!`. The preflight counts those cells (`textDates`,
+`dates_stored_as_text`) without reading their text into the manifest or the
+report.
+
 ## Data lifecycle
 
 1. The web request creates an isolated `wmt-*` temporary directory for one

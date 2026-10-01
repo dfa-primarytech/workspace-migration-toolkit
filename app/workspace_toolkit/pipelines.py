@@ -30,6 +30,7 @@ class Pipeline:
     # Whether this deployment can convert it, not only check it.
     ready: Callable[[Settings], bool] = lambda settings: True
     needs_settings: bool = False  # its convert() takes settings=
+    needs_time_zone: bool = False  # its convert() takes time_zone=
 
     def convertible(self, settings: Settings) -> bool:
         return self.ready(settings)
@@ -73,6 +74,8 @@ PIPELINES: dict[str, Pipeline] = {
         convert=sheets.convert,
         kind="spreadsheet",
         destination="Google Sheets",
+        # Each Sheet is given the person's own time zone (see web.time_zone).
+        needs_time_zone=True,
     ),
     ".xlsm": Pipeline(
         fmt=XLSM,
@@ -80,6 +83,8 @@ PIPELINES: dict[str, Pipeline] = {
         convert=sheets.convert,
         kind="spreadsheet",
         destination="Google Sheets",
+        # Each Sheet is given the person's own time zone (see web.time_zone).
+        needs_time_zone=True,
     ),
 }
 

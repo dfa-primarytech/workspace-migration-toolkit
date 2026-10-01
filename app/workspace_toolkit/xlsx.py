@@ -89,6 +89,24 @@ def _shared_string_lengths(package: Package) -> list[int]:
     return [_text_length(item) for item in package.xml(name).findall(q("x", "si"))]
 
 
+# A date typed so Excel keeps it as text: 31/07/2023, 1.9.25, 07-31-2023.
+DATE_TEXT = re.compile(r"\s*\d{1,2}[/.\-]\d{1,2}[/.\-](?:\d{2}|\d{4})\s*")
+
+
+def _shared_string_dates(package: Package) -> set[int]:
+    """Indexes of shared strings that are dates written as text. Only the
+    indexes are kept: the text itself never reaches the manifest."""
+    name = "xl/sharedStrings.xml"
+    if name not in package.names:
+        return set()
+    items = package.xml(name).findall(q("x", "si"))
+    return {
+        i
+        for i, item in enumerate(items)
+        if DATE_TEXT.fullmatch("".join(node.text or "" for node in item.iter(q("x", "t"))))
+    }
+
+
 def _external_target(package: Package, link_part: str) -> str | None:
     for rel in package.relationships(link_part):
         if rel["type"] != REL_EXTERNAL or not rel["external"]:
@@ -132,6 +150,7 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
         )
     relationships = {rel["id"]: rel for rel in package.relationships(package.format.main_part)}
     shared_lengths = _shared_string_lengths(package)
+    shared_dates = _shared_string_dates(package)
     features = _feature_inventory(package)
     external_targets = [
         target
@@ -178,7 +197,7 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
         declared_rows, declared_columns = range_size(
             dimension.get("ref") if dimension is not None else None
         )
-        actual_rows = actual_columns = populated = formulas = errors = 0
+        actual_rows = actual_columns = populated = formulas = errors = text_dates = 0
         for cell in root.iter(q("x", "c")):
             position = cell_position(cell.get("r", ""))
             if position:
@@ -203,6 +222,11 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
                     raise ToolkitError(
                         "invalid_workbook", "A shared string reference is invalid."
                     ) from None
+                if formula is None and shared_index in shared_dates:
+                    text_dates += 1
+            elif cell.get("t") == "inlineStr" and inline is not None and formula is None:
+                if DATE_TEXT.fullmatch("".join(n.text or "" for n in inline.iter(q("x", "t")))):
+                    text_dates += 1
             elif cell.get("t") == "str" and value is not None:
                 length = len(value.text or "")
             if formula is not None:
@@ -223,6 +247,7 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
                 "populatedCells": populated,
                 "formulaCells": formulas,
                 "errorCells": errors,
+                "textDates": text_dates,
                 "mergedRanges": sum(1 for _ in root.iter(q("x", "mergeCell"))),
                 "conditionalFormats": sum(1 for _ in root.iter(q("x", "conditionalFormatting"))),
                 "dataValidations": sum(1 for _ in root.iter(q("x", "dataValidation"))),
@@ -237,6 +262,7 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
         "declaredGridCells": declared_grid_cells,
         "populatedCells": sum(s.get("populatedCells", 0) for s in sheets),
         "formulaCells": sum(s.get("formulaCells", 0) for s in sheets),
+        "textDates": sum(s.get("textDates", 0) for s in sheets),
         "chartSheets": sum(s["sheetType"] == "chartsheet" for s in sheets),
         "dialogSheets": sum(s["sheetType"] == "dialogsheet" for s in sheets),
         "macroSheets": sum(s["sheetType"] in {"macrosheet", "intlMacrosheet"} for s in sheets),
@@ -352,6 +378,20 @@ def findings(inventory: dict, sheets: list[dict], external_count: int) -> list[d
                 "Formula results may change after import and need review.",
                 formulaCount=inventory["formulaCells"],
                 errorCellCount=inventory["errorCells"],
+                classification=C.SUBSTITUTED,
+            )
+        )
+    if inventory.get("textDates"):
+        count = inventory["textDates"]
+        result.append(
+            warning(
+                "dates_stored_as_text",
+                f"{count} date{'s are' if count > 1 else ' is'} typed as text, not as "
+                f"{'dates' if count > 1 else 'a date'}. The Sheet is set to read dates the UK "
+                "way, so formulas can use them, but they won't sort or filter as dates. "
+                "Retype them to be sure.",
+                cellCount=count,
+                sheets=[s["index"] for s in sheets if s.get("textDates")],
                 classification=C.SUBSTITUTED,
             )
         )
@@ -479,6 +519,7 @@ def analysis_report(manifest: dict) -> dict:
                 "formulaCells",
                 "errorCells",
                 "oversizedCells",
+                "textDates",
             )
         },
         "featureCounts": {

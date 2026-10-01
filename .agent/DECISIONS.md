@@ -682,3 +682,28 @@ spacing. #54 instead repairs them in the new Google Doc.
 - **Idempotent.** A paragraph already at 1 pt with no keep-together or
   spacing isn't a candidate, so a second run changes nothing.
 - **Reported, not shown:** `readBack.repair`, classified SUBSTITUTED.
+
+## 2026-10-01: Converted Sheets use the UK locale and the person's time zone
+
+Owner's decision. A nursery calculator typed its dates of birth as text
+("31/07/2023"). UK Excel reads that as 31 July. A Google Sheet in a US locale
+reads it as no date at all, and every formula built on those dates gave
+`#VALUE!`.
+
+- **Locale: always `en_GB`.** This is a UK-schools tool. The locale decides how
+  typed dates are read, so it doesn't follow the browser: a teacher on a
+  US-English laptop at a UK school would get the wrong dates.
+- **Time zone: the person's own,** sent by the browser
+  (`Intl.DateTimeFormat().resolvedOptions().timeZone`, header `X-Time-Zone`).
+  `TODAY()` and `NOW()` then follow their day. The server only accepts a name
+  shaped like an IANA zone. If there is none, or Google refuses it, the Sheet
+  gets `Europe/London`. If neither can be set, the Sheet still converts and the
+  report says `locale_not_set`.
+- **Set after import,** with one `spreadsheets.batchUpdate`
+  (`updateSpreadsheetProperties`) on the Sheet the app has just made. That
+  works under `drive.file` and needs no new permission. Recorded in the
+  report as `spreadsheetSettings`.
+- **Dates typed as text are counted, never quoted:** `dates_stored_as_text`,
+  with a count and sheet indexes only. The UK locale lets formulas read them,
+  but they don't sort or filter as dates, so the note asks for them to be
+  retyped.

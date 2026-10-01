@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -35,6 +36,18 @@ IMPORT_LIMITS = {
     "pptx": ("Google Slides", 100_000_000),
     "xlsx": ("Google Sheets", 100_000_000),
 }
+
+
+# An IANA name such as Europe/London or America/Argentina/Buenos_Aires.
+ZONE_NAME = re.compile(r"(?:[A-Za-z][A-Za-z0-9_+-]*/){0,2}[A-Za-z][A-Za-z0-9_+-]*")
+
+
+def time_zone(header: str | None) -> str | None:
+    """The browser's time zone, if it looks like one: a converted Sheet is
+    given it so TODAY() and NOW() follow the person's own clock. Google is
+    the final judge; sheets.convert falls back to London if it is refused."""
+    value = (header or "").strip()
+    return value if len(value) <= 64 and ZONE_NAME.fullmatch(value) else None
 
 
 def import_limit_warning(key: str, size: int) -> list[dict]:
@@ -288,6 +301,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and request.headers.get("x-compress-pictures") == "1"
             and pipeline.fmt.key in {"pptx", "docx"}
         )
+        zone = time_zone(request.headers.get("x-time-zone"))
         if drive_file_id and not settings.picker_ready:
             raise ToolkitError(
                 "picker_unavailable", "Adding a file from Drive is not available.", 503
@@ -393,6 +407,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 progress,
                                 original_name=Path(filename).stem,
                                 **({"settings": settings} if pipeline.needs_settings else {}),
+                                **({"time_zone": zone} if pipeline.needs_time_zone else {}),
                             )
                             # Added here rather than in each pipeline, so every
                             # format reports what happened in Drive the same way.
