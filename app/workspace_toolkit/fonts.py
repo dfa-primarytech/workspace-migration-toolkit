@@ -100,8 +100,10 @@ GOOGLE_FONT_CANDIDATES = frozenset(
         "Montserrat",
         "Noto Sans",
         "Noto Serif",
+        "NTR",  # these two: a real resource bank's decks (live test, 2026-10-01)
         "Open Sans",
         "Patrick Hand",
+        "Poppins",
         "Roboto",
         "Roboto Mono",
         "Roboto Slab",
@@ -188,10 +190,45 @@ _GOOGLE_BY_KEY = {normalise_family(name): name for name in GOOGLE_FONT_CANDIDATE
 _NATIVE_BY_KEY = {normalise_family(name): name for name in DOCS_NATIVE}
 
 
+def _font_list(original: str) -> dict[str, object]:
+    """A CSS-style list such as "Arial,Sans-Serif", which content pasted from
+    the web leaves as a typeface: no font is called that, so Google draws its
+    default. The first family is the one meant, so it is judged instead, and
+    named as the replacement so the file is given a font Google knows."""
+    first = original.split(",", 1)[0].strip().strip("'\"").strip()
+    result = compatibility(first) if first else {"status": FontStatus.UNKNOWN}
+    if result["status"] == FontStatus.UNKNOWN:
+        return {
+            "name": original,
+            "status": FontStatus.UNKNOWN,
+            "replacement": None,
+            "confidence": None,
+            "basis": "no-reviewed-mapping",
+            "workspaceAvailability": "unverified",
+            "manualReview": True,
+        }
+    if result["status"] == FontStatus.SUBSTITUTED:
+        return {**result, "name": original}
+    return {
+        "name": original,
+        "status": FontStatus.SUBSTITUTED,
+        "replacement": result.get("replacement")
+        or _NATIVE_BY_KEY.get(normalise_family(first), result["name"]),
+        "confidence": Confidence.HIGH,
+        "reason": "the first family of a font list",
+        "metricCompatible": True,
+        "basis": "first-family-of-a-font-list",
+        "workspaceAvailability": result["workspaceAvailability"],
+        "manualReview": False,
+    }
+
+
 def compatibility(family: str) -> dict[str, object]:
     """Return a deterministic recommendation without silently inventing one."""
     original = " ".join(family.strip().strip("'\"").split())
     key = normalise_family(family)
+    if "," in original:
+        return _font_list(original)
     # Checked before any substitution: a family Docs already has must never be
     # replaced, whatever mapping might once have existed for it.
     if key in _NATIVE_BY_KEY:
