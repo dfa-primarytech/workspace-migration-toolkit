@@ -2,6 +2,32 @@
 
 - Agent: Claude Code (Claude 1, platform/Publisher)
 - Date: 2026-10-01
+- Branch: `docs/handoff-macros`, based on main `b0bcdd4`. All my PRs are merged: #185, #186, #187.
+- Objective: a real nursery workbook whose formulas broke in Google, and its macros. The owner asked for macro workbooks to convert, with the macros working in Google.
+- Files changed:
+  - #185: `sheets.py` (after import, `batchUpdate` sets locale `en_GB` and the person's time zone from `X-Time-Zone`, else Europe/London); `xlsx.py` (text-date note); `static/app.js` ("Not converted" row for a report with nothing to open; plain words for "Failed to fetch"); `web.py`, `pipelines.py` (`needs_time_zone`). Tests `test_sheets_locale.py`, `test_page_results.py`, `results_harness.js`.
+  - #186: new `vba.py` (bounded MS-CFB reader, MS-OVBA decompression, module sources); new `apps_script.py` (rule-based translator for recorded macros: select, autofill, values, formulas, copy/paste, insert/delete rows/columns/cells, font, fill, MsgBox; anything else is copied as a comment and counted); new `macros.py` (`macro_free` rewrites `.xlsm` as `.xlsx`, as Drive imports no `.xlsm`; `prepare` writes `result/macros/`); `xlsx.py`, `sheets.py` (uploads `converted.xlsx`; saves "Macros – original Excel VBA.txt" and "Macros for Google Sheets (Apps Script).txt" in the folder). Test `test_vba_macros.py`.
+  - #187: `auth.py` (optional `script.projects` scope; session `scripts`); new `script_projects.py` (`attach`: a bound project on the Sheet, manifest with `spreadsheets.currentonly`, `script.container.ui` and `sheets.macros`, so the macros show under Extensions → Macros); `sheets.py` (`add_macros`, `macro_notice`: `report["notice"]`, the one note shown on screen); `static/app.js`, `style.css` (the notice under the row). Test `test_script_projects.py`.
+- Completed:
+  - Live, on the owner's real workbook: it converts in one step, no `#VALUE!` left (dates typed as text now read as UK dates), the macro attached and runs from Extensions → Macros, the notice shows. The owner confirmed ("works like a charm").
+  - Apps Script API enabled on the Google Cloud project. Each person must also turn it on at script.google.com/home/usersettings; without it the report says `macros_not_attached` (`setting_off`) and the script stays as a text file in the folder.
+- Checks: 743 platform tests pass on main after #187; Ruff, mypy and the secret scan clean. Test container rebuilt from main `b0bcdd4`.
+- Known failures: none.
+- Unresolved:
+  - The workbook's "Repair Columns" button comes across as a drawing, but the file holds no link from it to the macro, so it does nothing in Google. Proposed, awaiting the owner: link it with `Drawing.setOnAction` when the file has a link; otherwise only when exactly one macro exists and the label starts with its name. Not built.
+  - Only recorded-style macros translate. Hand-written VBA (loops, variables, UserForms, events) is kept as comments and reported as `macros_partly_translated` / `macros_not_translated`.
+  - The new scope means everyone already signed in sees a consent screen again on next sign-in.
+- Decisions: DECISIONS 2026-10-01: macro workbooks convert (supersedes 2026-09-28); macros attached when allowed; one note on screen for macros.
+- Next task: none claimed. The button rule waits on the owner.
+- Warnings:
+  - Copies of the owner's nursery workbook (children's details) are in their Drive from the live test. Never put its contents, names or dates in issues, PRs or tests; the tests use synthetic workbooks.
+  - The test host's gcloud needs `gcloud auth login` now and then (organisation reauthentication policy) before the picture token can be renewed.
+---
+
+## Previous handoff
+
+- Agent: Claude Code (Claude 1, platform/Publisher)
+- Date: 2026-10-01
 - Branch: `docs/handoff-live-test`, based on main `85c51df`. All my PRs are merged: #175, #176, #177, #180, #181, #182 (#178), #183 (#179).
 - Objective: run the live test (#174) against real Google, fix what it found, and convert a real resource bank in bulk for the owner.
 - Files changed:
@@ -31,30 +57,6 @@
   - `/root/wmt-test/bulk` keeps the bulk script, its log, listing and state: file and folder names only, no credentials.
   - Drive for Desktop (`G:`) refuses bursts of reads of online-only files with `FileNotFoundError`. Copy the files out first, with retries.
   - In Git Bash, a Python heredoc still loses backslashes (`'\n'` becomes `n`). Use the Edit tool.
----
-
-## Previous handoff
-
-- Agent: Claude Code / QuietHeron (platform UI)
-- Date: 2026-09-29
-- Branch: `feat/one-step-convert`, based on main `2d80316` (#103 merged)
-- Objective: the owner's direction (DECISIONS.md, 2026-09-29): a teacher picks files, presses Convert, gets Google files; no notes on screen; bulk conversion.
-- Files changed: `static/app.js` (rewritten), `static/index.html`, `static/style.css`, `web.py` (the source fingerprint is optional), `tests/platform/test_web.py`, this file.
-- Completed:
-  - One screen for every format: choose files (several at once, or from Drive with multi-select, folders browsable), then one Convert button.
-  - Files convert one after another, each row showing "Converting…", then "Open in Google Slides/Docs/Sheets · Folder", or "Couldn't convert: <reason>".
-  - No Check file button, no summary, no notes list, no report download on screen: the report is in each conversion's folder.
-  - `/api/convert` no longer needs a prior check. A client that sends `X-Source-Sha256` is still held to it (409 `source_changed`).
-  - `/api/analyse` and the CLI are unchanged.
-- Checks: 510 platform tests passed, 12 skipped; Ruff and mypy clean. The page was previewed in the browser pane with sample files, at desktop and phone width, with no console errors. No real conversion was run through the new page: the picture token had expired and the pane was signed out.
-- Known failures: none.
-- Unresolved:
-  - A live run of several files, one from Drive, through the new page.
-  - Google's sign-in lasts an hour: a long batch may need the teacher to sign in again part-way. Each file checks this before it starts.
-  - "A whole folder" means selecting every file in the picker (drive.file scope), not pointing at a folder.
-- Decisions: DECISIONS.md, 2026-09-29 (built for a frustrated educator).
-- Next task: a live run; then decide whether `/api/analyse` stays at all.
-- Warnings: this changes the screen every format shares. DOCX, PPTX and XLSX conversion code is untouched. CT 203's `wmt-test-live` runs `wmt-test/app:pub19`; its picture token has expired.
 ---
 
 ## Previous handoff

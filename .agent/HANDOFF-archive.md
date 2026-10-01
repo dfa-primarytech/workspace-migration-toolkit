@@ -7,6 +7,28 @@ PR descriptions have the same detail in full.
 
 ---
 
+- Agent: Claude Code / QuietHeron (platform UI)
+- Date: 2026-09-29
+- Branch: `feat/one-step-convert`, based on main `2d80316` (#103 merged)
+- Objective: the owner's direction (DECISIONS.md, 2026-09-29): a teacher picks files, presses Convert, gets Google files; no notes on screen; bulk conversion.
+- Files changed: `static/app.js` (rewritten), `static/index.html`, `static/style.css`, `web.py` (the source fingerprint is optional), `tests/platform/test_web.py`, this file.
+- Completed:
+  - One screen for every format: choose files (several at once, or from Drive with multi-select, folders browsable), then one Convert button.
+  - Files convert one after another, each row showing "Converting…", then "Open in Google Slides/Docs/Sheets · Folder", or "Couldn't convert: <reason>".
+  - No Check file button, no summary, no notes list, no report download on screen: the report is in each conversion's folder.
+  - `/api/convert` no longer needs a prior check. A client that sends `X-Source-Sha256` is still held to it (409 `source_changed`).
+  - `/api/analyse` and the CLI are unchanged.
+- Checks: 510 platform tests passed, 12 skipped; Ruff and mypy clean. The page was previewed in the browser pane with sample files, at desktop and phone width, with no console errors. No real conversion was run through the new page: the picture token had expired and the pane was signed out.
+- Known failures: none.
+- Unresolved:
+  - A live run of several files, one from Drive, through the new page.
+  - Google's sign-in lasts an hour: a long batch may need the teacher to sign in again part-way. Each file checks this before it starts.
+  - "A whole folder" means selecting every file in the picker (drive.file scope), not pointing at a folder.
+- Decisions: DECISIONS.md, 2026-09-29 (built for a frustrated educator).
+- Next task: a live run; then decide whether `/api/analyse` stays at all.
+- Warnings: this changes the screen every format shares. DOCX, PPTX and XLSX conversion code is untouched. CT 203's `wmt-test-live` runs `wmt-test/app:pub19`; its picture token has expired.
+---
+
 - Agent: Claude Code (Publisher session, on Platform/PPTX files by the owner's request)
 - Date: 2026-09-30
 - Branch: `fix/pptx-package-edits`, stacked on `fix/publisher-mask-budget` (PR #140): merge #138, #139, #140, then this
