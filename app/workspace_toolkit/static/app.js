@@ -6,7 +6,11 @@
 const $ = id => document.getElementById(id);
 let session, gapiLoading, chosen = [];
 async function request(url, options = {}) {
-  const response = await fetch(url, options);
+  // fetch() itself fails only when no answer came back at all; its own words
+  // ("Failed to fetch") mean nothing to a teacher.
+  const response = await fetch(url, options).catch(() => {
+    throw new Error('Couldn’t reach the converter. Check your connection and try again.');
+  });
   // A proxy's 413 or a plain-text server error is not JSON; show our own words, not a parse error.
   const body = await response.json().catch(() => null);
   if (!response.ok || !body) throw new Error(body?.error?.message || 'The request failed. Please try again.');
@@ -111,6 +115,8 @@ async function openPicker() {
 function send(src) {
   const headers = {'X-Upload-Filename': encodeURIComponent(src.name), 'X-CSRF-Token': session.csrfToken};
   if ($('smaller').checked) headers['X-Compress-Pictures'] = '1';
+  // A converted Sheet keeps the person's own time zone, so TODAY() is their day.
+  try { const zone = Intl.DateTimeFormat().resolvedOptions().timeZone; if (zone) headers['X-Time-Zone'] = zone; } catch {}
   if (src.driveId) {
     headers['Content-Type'] = 'application/octet-stream';
     headers['X-Drive-File-Id'] = src.driveId;
@@ -138,6 +144,11 @@ async function convertAll() {
           failed += 1;
           const why = report.stoppedBecause ? `Didn’t finish: ${report.stoppedBecause} ` : 'Didn’t finish. ';
           src.row.replaceChildren(why, ...(folder ? [folder] : []));
+        } else if (!open) {
+          // Finished, but with nothing to open: a workbook kept for moving by
+          // hand used to be counted as converted, with only a Folder link.
+          failed += 1;
+          src.row.replaceChildren((report.stoppedBecause || 'Not converted.') + ' ', ...(folder ? [folder] : []));
         } else {
           done += 1;
           src.row.replaceChildren(...[open, folder].filter(Boolean).flatMap((a, i) => i ? [' · ', a] : [a]));

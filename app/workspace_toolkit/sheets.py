@@ -1,7 +1,8 @@
 """Google Sheets native-import boundary.
 
 No formula or VBA translation occurs here. Drive performs the ordinary XLSX
-import. Structural read-back uses the Sheets API through the existing narrow
+import; the Sheet is then given the UK locale and the person's time zone.
+Structural read-back uses the Sheets API through the existing narrow
 ``drive.file`` grant and never places cell contents in logs or reports.
 """
 
@@ -19,6 +20,67 @@ from .xlsx import analysis_report, tier
 SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
 SHEETS = "https://sheets.googleapis.com/v4/spreadsheets/"
 ORIGINAL_POLICIES = {"archive", "delete_after_conversion"}
+
+# Every converted Sheet reads dates day first, as UK Excel does: a Sheet in a
+# US locale reads "31/07/2023" as no date at all, and every formula built on
+# it gives #VALUE! (a nursery calculator, live test 2026-10-01). The time
+# zone is the person's own, from their browser, so TODAY() follows their day.
+LOCALE = "en_GB"
+DEFAULT_TIME_ZONE = "Europe/London"
+
+# Why a workbook was not converted, in a teacher's words, by finding code.
+NOT_CONVERTED_BECAUSE = {
+    "google_cell_limit": "it has more cells than Google Sheets allows",
+    "google_column_limit": "it has more columns than Google Sheets allows",
+    "cell_text_limit": "some cells hold more text than Google Sheets allows",
+    "queries_need_manual_migration": "it fetches data with queries",
+    "connections_need_manual_migration": "it connects to outside data",
+    "forms_need_manual_migration": "it has form controls",
+    "activex_need_manual_migration": "it has ActiveX controls",
+    "embedded_objects_need_manual_migration": "it has embedded objects",
+    "vba_needs_manual_migration": "it has macros, which Google Sheets can't run",
+    "dialog_sheet_needs_manual_migration": "it has a dialog sheet",
+    "macro_sheet_needs_manual_migration": "it has an Excel 4 macro sheet",
+    "external_workbook_links": "it links to other workbooks",
+}
+
+
+def not_converted_because(manifest: dict) -> str:
+    reasons = [
+        NOT_CONVERTED_BECAUSE[w["code"]]
+        for w in manifest["warnings"]
+        if w["code"] in NOT_CONVERTED_BECAUSE
+    ]
+    if not reasons:
+        return "Not converted: it needs moving into Google Sheets by hand. The report in the folder says why."
+    listed = reasons[0] if len(reasons) == 1 else ", ".join(reasons[:-1]) + " and " + reasons[-1]
+    return f"Not converted: {listed}. The original is saved in the folder."
+
+
+async def uk_settings(google, spreadsheet_id: str, time_zone: str | None) -> dict | None:
+    """Sets the Sheet's locale to UK and its time zone to the person's own,
+    or London if Google refuses theirs. None if neither could be set: the
+    Sheet still converted, and the caller says so."""
+    for zone in dict.fromkeys([time_zone or DEFAULT_TIME_ZONE, DEFAULT_TIME_ZONE]):
+        try:
+            await google.request(
+                "POST",
+                SHEETS + spreadsheet_id + ":batchUpdate",
+                json={
+                    "requests": [
+                        {
+                            "updateSpreadsheetProperties": {
+                                "properties": {"locale": LOCALE, "timeZone": zone},
+                                "fields": "locale,timeZone",
+                            }
+                        }
+                    ]
+                },
+            )
+            return {"locale": LOCALE, "timeZone": zone}
+        except ToolkitError:
+            continue
+    return None
 
 
 def verify(manifest: dict, spreadsheet: dict) -> list[dict]:
@@ -87,6 +149,7 @@ async def convert(
     original_policy: str = "archive",
     dependencies_resolved: bool = False,
     original_name: str = "",
+    time_zone: str | None = None,
 ) -> dict:
     if original_policy not in ORIGINAL_POLICIES:
         raise ValueError("Unknown original workbook policy")
@@ -113,6 +176,7 @@ async def convert(
             report["status"] = migration_tier
             report["migrationTier"] = migration_tier
             report["verification"] = "not_converted"
+            report["stoppedBecause"] = not_converted_because(manifest)
         else:
             formats = await google.request(
                 "GET", DRIVE + "/about", params={"fields": "importFormats"}
@@ -134,6 +198,18 @@ async def convert(
             report["outputs"].append({"kind": "spreadsheet", "id": uploaded["id"]})
             report["spreadsheetId"] = uploaded["id"]
             report["url"] = "https://docs.google.com/spreadsheets/d/" + uploaded["id"] + "/edit"
+            settings = await uk_settings(google, uploaded["id"], time_zone)
+            if settings:
+                report["spreadsheetSettings"] = settings
+            else:
+                report["warnings"].append(
+                    warning(
+                        "locale_not_set",
+                        "The Sheet's region couldn't be set to the UK, so dates may be read "
+                        "month first. Set it under File → Settings → Locale.",
+                        classification=C.UNSUPPORTED,
+                    )
+                )
             spreadsheet = await google.request(
                 "GET",
                 SHEETS + uploaded["id"],
