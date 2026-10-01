@@ -152,6 +152,14 @@ async function convertAll() {
         } else {
           done += 1;
           src.row.replaceChildren(...[open, folder].filter(Boolean).flatMap((a, i) => i ? [' · ', a] : [a]));
+          // The one note shown on screen (DECISIONS.md, 2026-10-01): a
+          // workbook's macros, which someone may need to approve in Google.
+          if (report.notice) {
+            const notice = document.createElement('p');
+            notice.className = 'notice';
+            notice.textContent = report.notice;
+            src.row.parentElement.append(notice);
+          }
         }
       } catch (error) {
         failed += 1;

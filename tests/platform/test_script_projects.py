@@ -172,3 +172,48 @@ def test_attached_macros_are_google_sheets_macros_under_extensions(tmp_path):
     assert settings["sheets"]["macros"] == [{"menuName": "Repair", "functionName": "Repair"}]
     assert "createMenu" not in files["Macros"]["source"]
     assert "function Repair()" in files["Macros"]["source"]
+
+
+@pytest.mark.parametrize(
+    "allowed, answer, expected",
+    [
+        (True, google_says(), "find them under Extensions → Macros"),
+        (True, google_says(), "Google will ask you to approve it"),
+        (
+            True,
+            google_says(create=403, message="User has not enabled the Apps Script API. Enable it"),
+            "turn on the Apps Script API (https://script.google.com/home/usersettings)",
+        ),
+        (False, google_says(), "sign out, sign in again and allow Apps Script"),
+    ],
+)
+def test_the_page_is_told_what_happened_to_the_macros(tmp_path, allowed, answer, expected):
+    # The one note shown on screen: the person may need to approve them, or
+    # find them in the folder (owner, 2026-10-01).
+    report = converted(tmp_path, ScriptGoogle(answer), allowed=allowed)
+    assert report["notice"].startswith("This workbook uses macros.")
+    assert expected in report["notice"]
+
+
+def test_a_workbook_without_macros_gets_no_notice(tmp_path):
+    from workspace_toolkit.xlsx import analyse
+
+    from .test_xlsx import write_workbook
+
+    root = tmp_path / "job"
+    (root / "result").mkdir(parents=True)
+    manifest = analyse(write_workbook(root / "source.xlsx"), root / "result")
+    report = asyncio.run(convert(root, manifest, ScriptGoogle(google_says())))
+    assert "notice" not in report
+
+
+def test_macros_that_couldnt_be_read_are_still_mentioned(tmp_path):
+    from workspace_toolkit.xlsx import analyse
+
+    from .test_xlsx import write_workbook
+
+    root = tmp_path / "job"
+    (root / "result").mkdir(parents=True)
+    manifest = analyse(write_workbook(root / "source.xlsm"), root / "result")  # fake project
+    report = asyncio.run(convert(root, manifest, ScriptGoogle(google_says())))
+    assert "couldn't be converted automatically" in report["notice"]

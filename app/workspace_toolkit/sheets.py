@@ -85,6 +85,43 @@ async def save_macros(folder_path: Path, google, folder: str, report: dict) -> N
 PASTE_NOTES = {"macros_translated", "macros_partly_translated"}
 
 
+def macro_notice(report: dict) -> str | None:
+    """What the page tells the person, beside the link, about a workbook's
+    macros: the one note shown on screen (DECISIONS.md, 2026-10-01), because
+    someone has to approve them in Google, or find them in the folder."""
+    codes = {w["code"] for w in report.get("warnings", [])}
+    attached = report.get("appsScript", {})
+    if codes & {"macros_not_translated", "macros_unreadable"}:
+        return (
+            "This workbook uses macros that couldn't be converted automatically. "
+            "The original code is saved in the folder."
+        )
+    if not codes & (PASTE_NOTES | {"macros_attached", "macros_partly_attached"}):
+        return None
+    partly = bool(codes & {"macros_partly_translated", "macros_partly_attached"})
+    some = " A few steps couldn't be converted and are marked in the script." if partly else ""
+    start = "This workbook uses macros. We've converted them for Google Sheets"
+    if attached.get("attached"):
+        return (
+            f"{start}: find them under Extensions → Macros. The first time you run one, "
+            f"Google will ask you to approve it.{some}"
+        )
+    if attached.get("reason") == "setting_off":
+        return (
+            f"{start}. To have them added to the Sheet for you, turn on the Apps Script API "
+            f"({SETTINGS_URL}) and convert again. Until then they're saved in the folder.{some}"
+        )
+    if attached.get("reason") == "not_allowed":
+        return (
+            f"{start}. They're saved in the folder to add by hand. To have them added for "
+            f"you, sign out, sign in again and allow Apps Script.{some}"
+        )
+    return (
+        f"{start}. They couldn't be added to the Sheet for you, so they're saved in the "
+        f"folder to add by hand.{some}"
+    )
+
+
 async def add_macros(
     google, spreadsheet_id: str, title: str, script: Path, zone: str, allowed: bool, report: dict
 ) -> None:
@@ -335,6 +372,8 @@ async def convert(
             # this (docs/xlsx-migration.md), not for a workbook with no notes.
             report["status"] = "converted_with_review"
             report["migrationTier"] = report["status"]
+            if notice := macro_notice(report):
+                report["notice"] = notice
     except ToolkitError as exc:
         report["status"] = "failed_with_partial_outputs" if report.get("folderUrl") else "failed"
         report["warnings"].append(warning(exc.code, exc.message, classification=C.UNSUPPORTED))

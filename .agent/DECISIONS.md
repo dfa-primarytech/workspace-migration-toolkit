@@ -762,3 +762,16 @@ to ask of most teachers. This builds on the entry above.
 - **Without the permission, the Apps Script API is never called** (tested).
   The report stores only `appsScript.attached`, the script id or the reason,
   never code.
+
+## 2026-10-01: One note on screen: a workbook's macros
+
+The owner's decision. It is an exception to 2026-09-29, where the page shows
+no notes and everything goes in the report. When a converted workbook had
+macros, its row shows one short notice under the link (`report["notice"]`,
+written by `sheets.macro_notice`). The notice says that the workbook uses
+macros, that they were converted for Google Sheets, and where they are:
+Extensions → Macros, with Google asking for approval the first time one runs.
+If they weren't added to the Sheet, it says why and what to do (turn on the
+Apps Script API, or sign in again allowing Apps Script), or that the original
+code is in the folder. A person may have to act on this, which is why it can't
+wait in a report. Every other note stays in the report.

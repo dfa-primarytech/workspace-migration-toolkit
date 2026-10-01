@@ -12,13 +12,17 @@ function slice(from, to) {
 }
 
 class Row {
-  constructor() { this.parts = []; }
+  constructor() {
+    this.parts = [];
+    this.parentElement = { added: [], append(node) { this.added.push(node.textContent); } };
+  }
   replaceChildren(...parts) { this.parts = parts.map(p => (typeof p === 'string' ? p : `[${p.textContent}]`)); }
   get text() { return this.parts.join(''); }
 }
 const elements = {};
 const $ = id => (elements[id] ||= { textContent: '', hidden: false, disabled: false, checked: false });
 const busy = () => {};
+const document = { createElement: () => ({ textContent: '', className: '' }) };
 const refusal = () => '';
 const pipelineFor = () => ({ destination: 'Google Sheets' });
 const link = (url, label) => ({ textContent: label, href: url });
@@ -41,11 +45,15 @@ eval(slice('async function convertAll', "$('convert').addEventListener"));
         stoppedBecause: 'Not converted: it has macros, which Google Sheets can’t run.' },
       converted: { status: 'converted_with_review', folderUrl: 'https://drive.google.com/drive/folders/f',
         url: 'https://docs.google.com/spreadsheets/d/s/edit' },
+      macros: { status: 'converted_with_review', folderUrl: 'https://drive.google.com/drive/folders/f',
+        url: 'https://docs.google.com/spreadsheets/d/s/edit',
+        notice: 'This workbook uses macros. We’ve converted them for Google Sheets.' },
     };
     send = async () => reports[scenario];
     chosen = [{ name: 'book.xlsm', row: new Row() }];
     await convertAll();
     result.row = chosen[0].row.text;
+    result.notices = chosen[0].row.parentElement.added;
     result.status = $('status').textContent;
   }
   console.log(JSON.stringify(result));
