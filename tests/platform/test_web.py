@@ -676,3 +676,13 @@ def test_a_drive_files_time_allowed_covers_its_download(monkeypatch):
     )
     assert response.status_code == 200, response.text
     assert asked == ["drive123"]
+
+
+def test_the_privacy_policy_is_served_and_linked():
+    settings = configured()
+    client = TestClient(create_app(settings), base_url=settings.base_url)
+    page = client.get("/privacy")
+    assert page.status_code == 200
+    # Google's review looks for this statement (API Services User Data Policy).
+    assert "Limited Use requirements" in page.text
+    assert 'href="/privacy"' in client.get("/").text
