@@ -1050,14 +1050,9 @@ class PageBuilder:
                     f"{'them' if inline > 1 else 'it'} in Slides.",
                 )
             )
-        substituted = any(
-            self.fonts[f]["status"] != FontStatus.AVAILABLE
-            for f in _families(element.get("paragraphs", []))
-            if f in self.fonts
-        )
-        entry = self.line(element, C.SUBSTITUTED if substituted else C.NATIVE, *notes, *more)
-        if substituted:
-            entry.notes.append(note("font-substituted", "A font was replaced; see the fonts."))
+        changed = font_notes(_families(element.get("paragraphs", [])), self.fonts)
+        entry = self.line(element, C.SUBSTITUTED if changed else C.NATIVE, *notes, *more)
+        entry.notes.extend(changed)
         self.made(element, entry, object_id)
 
     def room_below(self, element: dict, frame: Frame) -> float:
@@ -1594,8 +1589,8 @@ class PageBuilder:
                 "effects (such as a reflection) can't be made in Slides.",
             ),
         )
-        if art.font and self.fonts.get(art.font, {}).get("status") != FontStatus.AVAILABLE:
-            entry.notes.append(note("font-substituted", "A font was replaced; see the fonts."))
+        if art.font:
+            entry.notes.extend(font_notes({art.font}, self.fonts))
         self.made(element, entry, object_id)
 
     def group_all(self, elements: list[dict]) -> None:
@@ -1675,6 +1670,40 @@ SETTLED = {
     "table-row-heights-unknown",
     "path-flattened",
 }
+
+
+# Fonts whose characters are pictures (ticks, arrows, bullets) mapped by code
+# point: drawn in Arial instead, they become ordinary letters.
+SYMBOL_FONTS = {"symbol", "wingdings", "wingdings 2", "wingdings 3", "webdings", "marlett"}
+
+
+def font_notes(families: set[str], fonts: dict[str, dict]) -> list[dict]:
+    """What happened to each font: replaced by another, or not in Slides at
+    all and so drawn in Arial (measured_as). They used to share one note,
+    "A font was replaced; see the fonts", which for a missing font pointed
+    at a replacement that doesn't exist (#178)."""
+    notes = []
+    known = [f for f in sorted(families) if f in fonts]
+    if any(fonts[f]["status"] == FontStatus.SUBSTITUTED for f in known):
+        notes.append(note("font-substituted", "A font was replaced; see the fonts."))
+    for family in (f for f in known if fonts[f]["status"] == FontStatus.UNKNOWN):
+        if family.casefold() in SYMBOL_FONTS:
+            notes.append(
+                note(
+                    "font-symbol-missing",
+                    f"Google Slides doesn't have {family}, so this text is shown in Arial: "
+                    "ticks, bullets or arrows in it may show as the wrong characters. Check them.",
+                )
+            )
+        else:
+            notes.append(
+                note(
+                    "font-missing",
+                    f"Google Slides doesn't have {family}, so this text is shown in Arial. "
+                    "Check it looks right.",
+                )
+            )
+    return notes
 
 
 def _families(paragraphs: list[dict]) -> set[str]:
