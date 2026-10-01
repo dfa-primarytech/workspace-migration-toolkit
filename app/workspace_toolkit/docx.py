@@ -442,9 +442,10 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
     return {
         "schemaVersion": "1.0",
         "source": {"type": "docx", "filename": filename, "sha256": source_sha},
-        # One entry in `pages` per section: the model has no page breaks, so
-        # the real page count is only the one Word saved (#179).
-        "document": {"sections": len(pages), "savedPageCount": saved_page_count(package)},
+        # pageCount is the model's: one entry in `pages` per section, as the
+        # model has no page breaks. The real page count is only the one Word
+        # saved, which is what the report shows (#179).
+        "document": {"pageCount": len(pages), "savedPageCount": saved_page_count(package)},
         "pages": pages,
         "headerFooterElements": header_footer_elements,
         "assets": {},
@@ -494,7 +495,7 @@ def empty_manifest(filename: str, source_sha: str) -> dict:
     return {
         "schemaVersion": "1.0",
         "source": {"type": "docx", "filename": filename, "sha256": source_sha},
-        "document": {"sections": 0, "savedPageCount": None},
+        "document": {"pageCount": 0, "savedPageCount": None},
         "pages": [],
         "headerFooterElements": [],
         "assets": {},
