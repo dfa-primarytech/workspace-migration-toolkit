@@ -824,3 +824,44 @@ def test_the_readers_notes_are_kept_and_marked_as_the_readers():
     notes = report(planned(document([box])))["el_1"]["notes"]
     kept = [n for n in notes if n["code"] == "implicit-text-frame"]
     assert kept == [{**reader, "source": "reader"}]
+
+
+def codes_of(result, eid) -> set[str]:
+    return {n["code"] for n in report(result)[eid]["notes"]}
+
+
+def test_a_font_slides_lacks_is_said_to_be_shown_in_arial_not_replaced():
+    # A booklet in Amasis MT Pro was told "A font was replaced; see the
+    # fonts", but the fonts list had no replacement: it is drawn in Arial (#178).
+    box = text_box("el_1", 0, (0, 0, 100, 50), paragraph(run("Title", font="Amasis MT Pro")))
+    result = planned(document([box]))
+    line = report(result)["el_1"]
+    assert line["status"] == "SUBSTITUTED"
+    assert codes_of(result, "el_1") == {"font-missing"}
+    [missing] = line["notes"]
+    assert "Amasis MT Pro" in missing["message"] and "Arial" in missing["message"]
+
+
+def test_symbol_text_drawn_in_arial_is_flagged_for_its_characters():
+    box = text_box("el_1", 0, (0, 0, 100, 50), paragraph(run("", font="Symbol")))
+    result = planned(document([box]))
+    assert codes_of(result, "el_1") == {"font-symbol-missing"}
+    [note] = report(result)["el_1"]["notes"]
+    assert "wrong characters" in note["message"]
+
+
+def test_a_box_mixing_a_replaced_and_a_missing_font_says_both():
+    box = text_box(
+        "el_1",
+        0,
+        (0, 0, 200, 50),
+        paragraph(run("Sounds", font="SassoonPrimaryInfant"), run(" more", font="Amasis MT Pro")),
+    )
+    assert codes_of(planned(document([box])), "el_1") == {"font-substituted", "font-missing"}
+
+
+def test_a_font_slides_has_gets_no_font_note():
+    box = text_box("el_1", 0, (0, 0, 100, 50), paragraph(run("Plain", font="Calibri")))
+    result = planned(document([box]))
+    assert report(result)["el_1"]["status"] == "NATIVE"
+    assert codes_of(result, "el_1") == set()
