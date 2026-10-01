@@ -369,6 +369,28 @@ def _element_pairs(
     return pairs
 
 
+EXTENDED_PROPERTIES = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"
+)
+EXTENDED_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+
+
+def saved_page_count(package: Package) -> int | None:
+    """The page count Word saved in docProps/app.xml, or None.
+
+    Word's own count from its last layout, so evidence for the read-back to
+    compare against (#53), not a rule: another program may not write it, and
+    may write it wrong.
+    """
+    for relationship in package.relationships(""):
+        if relationship["type"] != EXTENDED_PROPERTIES or not relationship["resolved"]:
+            continue
+        pages = package.xml(relationship["resolved"]).find("{" + EXTENDED_NS + "}Pages")
+        text = (pages.text or "").strip() if pages is not None else ""
+        return int(text) if text.isdigit() and int(text) > 0 else None
+    return None
+
+
 def parse(package: Package, filename: str, source_sha: str) -> dict:
     """Builds the intermediate model. Source-format knowledge stops here."""
     root = package.xml(DOCX.main_part)
@@ -420,7 +442,9 @@ def parse(package: Package, filename: str, source_sha: str) -> dict:
     return {
         "schemaVersion": "1.0",
         "source": {"type": "docx", "filename": filename, "sha256": source_sha},
-        "document": {"pageCount": len(pages)},
+        # One entry in `pages` per section: the model has no page breaks, so
+        # the real page count is only the one Word saved (#179).
+        "document": {"sections": len(pages), "savedPageCount": saved_page_count(package)},
         "pages": pages,
         "headerFooterElements": header_footer_elements,
         "assets": {},
@@ -470,7 +494,7 @@ def empty_manifest(filename: str, source_sha: str) -> dict:
     return {
         "schemaVersion": "1.0",
         "source": {"type": "docx", "filename": filename, "sha256": source_sha},
-        "document": {"pageCount": 0},
+        "document": {"sections": 0, "savedPageCount": None},
         "pages": [],
         "headerFooterElements": [],
         "assets": {},
@@ -1156,7 +1180,10 @@ def analysis_report(manifest: dict) -> dict:
         "schemaVersion": "1.0",
         "status": "analysed",
         "sourceSha256": manifest["source"]["sha256"],
-        "pages": len(manifest["pages"]),
+        # The page count Word saved, or None: not the model's count, which is
+        # one per section and read as pages (a 14-page worksheet said 1, #179).
+        "pages": manifest.get("document", {}).get("savedPageCount"),
+        "sections": len(manifest["pages"]),
         "dimensionsPt": {
             "width": manifest["pages"][0]["widthPt"] if manifest["pages"] else 0,
             "height": manifest["pages"][0]["heightPt"] if manifest["pages"] else 0,

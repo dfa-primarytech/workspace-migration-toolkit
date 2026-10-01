@@ -382,3 +382,18 @@ def test_a_pdf_export_larger_than_the_limit_is_not_held():
         assert exc.detail == "export_too_large"
     else:
         raise AssertionError("an export over the limit was accepted")
+
+
+def test_the_reports_page_count_is_words_own_not_the_models(tmp_path):
+    # A 14-page worksheet reported "pages": 1 beside readBack.pdf.pages 14:
+    # the top-level figure was the model's, one entry per section (#179).
+    google = ReadingGoogle(docs_document([paragraph(text("Hello\n"))]), build_pdf([TEXT] * 14))
+    report = job_with(tmp_path, para(), google, pages=14)
+    assert report["pages"] == 14 == report["readBack"]["source"]["pages"]
+    assert report["sections"] == 1
+
+
+def test_a_document_without_a_saved_page_count_says_none_rather_than_guessing(tmp_path):
+    google = ReadingGoogle(docs_document([paragraph(text("Hello\n"))]), build_pdf([TEXT]))
+    report = job_with(tmp_path, para(), google)
+    assert report["pages"] is None and report["sections"] == 1
