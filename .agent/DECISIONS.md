@@ -707,3 +707,35 @@ reads it as no date at all, and every formula built on those dates gave
   with a count and sheet indexes only. The UK locale lets formulas read them,
   but they don't sort or filter as dates, so the note asks for them to be
   retyped.
+
+## 2026-10-01: Macro workbooks convert; recorded macros become Apps Script
+
+The owner's decision ("find a way to convert macros to Google"). It supersedes
+the 2026-09-28 rule that actual VBA blocks native import, and the docs'
+"VBA is never translated or uploaded separately".
+
+- **Every workbook goes to Google as `.xlsx`.** Live, Drive listed no import
+  for `.xlsm` at all ("conversion_unavailable"), so the 2026-09-28 choice of
+  uploading `.xlsm` as `.xlsm` never worked. The worker writes a macro workbook
+  again without its macro project (`macros.macro_free`), with every edit
+  checked and the result reopened as `.xlsx`. If that can't be done safely, the
+  workbook needs moving by hand (`macros_not_removable`). The original is
+  still archived in the person's folder.
+- **The macros are kept, not lost.** `vba.py` reads the source ([MS-CFB],
+  [MS-OVBA]), with limits on sectors, streams and decompressed size because
+  the file is untrusted. The source is saved as text in the person's own
+  conversion folder.
+- **Recorded macros become Apps Script** (`apps_script.py`), saved beside the
+  source, with a Macros menu. This is a bounded, rule-based mapping of what
+  Excel's recorder writes, keeping track of the selection. It is not general
+  VBA translation, and no language model is used, in keeping with the
+  disclaimer. Any other line is a counted "Not translated" comment. Event
+  procedures and functions are kept for reference only.
+- **Nothing is run, and nothing is attached.** The person pastes the script in
+  under Extensions → Apps Script. Automatic attaching (Apps Script API,
+  `script.projects` permission, a per-person setting) is deferred until the
+  owner approves the new permission.
+- **Still moved by hand:** forms, ActiveX, connections, queries, embedded
+  objects, dialog sheets and Excel 4 macro sheets.
+- **Reports and logs** carry counts only (`macroCode`, `macros_*` findings),
+  never macro names or code.

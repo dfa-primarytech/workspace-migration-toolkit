@@ -1,6 +1,7 @@
 """Generated OOXML workbooks for issue #51; no source documents are checked in."""
 
 import asyncio
+import io
 import json
 import zipfile
 
@@ -129,9 +130,14 @@ def test_native_import_uses_the_actual_worker_package_and_mime(tmp_path, suffix,
     assert report["status"] == "converted_with_review"
     assert report["original"]["id"] == "upload-1"
     package = google.uploads[1]
-    assert package[0] == "converted" + suffix
-    assert package[2] == fmt.mime
-    assert package[3] == source.read_bytes()
+    # Always as .xlsx: Google converts no .xlsm (DECISIONS.md, 2026-10-01).
+    assert package[0] == "converted.xlsx"
+    assert package[2] == XLSX.mime
+    if fmt is XLSX:
+        assert package[3] == source.read_bytes()  # untouched
+    else:
+        with zipfile.ZipFile(io.BytesIO(package[3])) as sent:
+            assert b"macroEnabled" not in sent.read("[Content_Types].xml")
     assert package[4] == {"convert": True, "target": SHEETS_MIME}
 
 
@@ -184,16 +190,18 @@ def test_chart_sheet_is_inventoried_and_preserved_with_a_review_warning(tmp_path
 
 
 @pytest.mark.parametrize("available", [True, False])
-def test_xlsm_import_capability_is_checked_for_its_own_mime(tmp_path, available):
+def test_an_xlsm_is_checked_against_googles_xlsx_import(tmp_path, available):
+    # It is sent as .xlsx, so only that import matters: an account offering
+    # .xlsm import alone (which no live account has done) can't take it.
     source = generated_workbook(tmp_path / "source.xlsm")
     manifest = analyse(source, tmp_path / "result")
-    formats = {XLSM.mime: [SHEETS_MIME]} if available else {XLSX.mime: [SHEETS_MIME]}
+    formats = {XLSX.mime: [SHEETS_MIME]} if available else {XLSM.mime: [SHEETS_MIME]}
     google = RecordingGoogle(formats=formats)
     report = asyncio.run(convert(tmp_path, manifest, google))
 
     if available:
         assert report["status"] == "converted_with_review"
-        assert google.uploads[1][2] == XLSM.mime
+        assert google.uploads[1][2] == XLSX.mime
     else:
         assert report["status"] == "failed_with_partial_outputs"
         assert any(w["code"] == "conversion_unavailable" for w in report["warnings"])

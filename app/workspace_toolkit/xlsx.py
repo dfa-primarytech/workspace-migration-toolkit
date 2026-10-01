@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlsplit
 
 from .config import Settings
 from .errors import ToolkitError
+from .macros import macro_free, prepare
 from .model import Compatibility as C
 from .model import warning
 from .package import XLSM, XLSX, Format, Package, digest
@@ -441,12 +442,6 @@ def findings(inventory: dict, sheets: list[dict], external_count: int) -> list[d
             "Embedded objects cannot be migrated automatically.",
             C.UNSUPPORTED,
         ),
-        (
-            "vbaProjects",
-            "vba_needs_manual_migration",
-            "VBA was inventoried but is never executed or translated automatically.",
-            C.UNSUPPORTED,
-        ),
     ):
         if inventory[key]:
             result.append(
@@ -491,7 +486,7 @@ def tier(manifest: dict, dependencies_resolved: bool = False) -> str:
         "forms_need_manual_migration",
         "activex_need_manual_migration",
         "embedded_objects_need_manual_migration",
-        "vba_needs_manual_migration",
+        "macros_not_removable",
         "dialog_sheet_needs_manual_migration",
         "macro_sheet_needs_manual_migration",
     }
@@ -555,14 +550,28 @@ def analyse(path: Path, output: Path, settings: Settings | None = None) -> dict:
         output.mkdir(parents=True, exist_ok=True)
         manifest = parse(package, path.name, digest(path.read_bytes()))
         manifest["source"]["byteLength"] = path.stat().st_size
+        # The credential-free worker emits the exact package the native importer
+        # will receive, always as .xlsx: Google converts no .xlsm (DECISIONS.md,
+        # 2026-10-01). A macro workbook is written again without its macro
+        # project; its macros are saved as text and as Apps Script, never run.
+        converted = output / "converted.xlsx"
+        if fmt is XLSM:
+            try:
+                macro_free(package, converted, settings)
+            except ToolkitError as error:
+                converted.unlink(missing_ok=True)
+                manifest["warnings"].append(
+                    warning(error.code, error.message, classification=C.UNSUPPORTED)
+                )
+        else:
+            shutil.copyfile(path, converted)
+        if manifest["inventory"]["vbaProjects"]:
+            manifest["macroCode"], found = prepare(package, output)
+            manifest["warnings"].extend(found)
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         (output / "report.json").write_text(
             json.dumps(analysis_report(manifest), indent=2), encoding="utf-8"
         )
-        # The credential-free worker emits the exact package the native importer
-        # will receive. No macros are stripped or executed; macro workbooks are
-        # blocked by the conversion tier before upload as a Google Sheet.
-        shutil.copyfile(path, output / ("converted" + fmt.suffix))
         return manifest
     finally:
         package.close()
