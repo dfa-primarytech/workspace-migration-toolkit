@@ -1,5 +1,40 @@
 # Handoff
 
+- Agent: Claude Code (Claude 1, platform/Publisher)
+- Date: 2026-10-01
+- Branch: `docs/handoff-live-test`, based on main `85c51df`. All my PRs are merged: #175, #176, #177, #180, #181, #182 (#178), #183 (#179).
+- Objective: run the live test (#174) against real Google, fix what it found, and convert a real resource bank in bulk for the owner.
+- Files changed:
+  - #175: `static/app.js` (`openPicker`: My Drive tab at `root`, Shared drives tab, titled). New `tests/platform/picker_views_harness.js` and `test_picker_views.py`.
+  - #176: `pptx.py` (a theme's `<a:font script=…>` standby fonts are not deck fonts); `fonts.py` (DM Serif Display); `test_preflight.py`.
+  - #177: `google.py` (`Google.size`; `supportsAllDrives` on size and download); `web.py` (`allow_for`: the time allowed is set from Drive's size before the download); `test_web.py`, `test_google.py`.
+  - #180: `pictures.py` (`_group_scale`: grouped pictures measured through `ext/chExt` of every enclosing group); `test_pictures.py`.
+  - #181: `fonts.py` (NTR, Poppins; `_font_list` reads "Arial,Sans-Serif" as its first family, `SUBSTITUTED` at high confidence); `test_fonts.py`.
+  - #182: `publisher_slides.py` (`font_notes`: `font-substituted`, `font-missing`, `font-symbol-missing`); `test_publisher_slides.py`.
+  - #183: `docx.py` (report `pages` is Word's saved count, or null, plus `sections`; `saved_page_count` moved here from `docs.py`); `test_docx_readback.py`.
+- Completed:
+  - Live test, results on #174. Sections 0–6 passed on real Google. The PDF read-back works on Google's real PDFs, and its page count matched (14 = 14). Google refuses a 146 MB deck, and #170's message names the 100 MB limit. With "Make pictures smaller", the same deck goes as 1.1 MB and converts.
+  - Section 7 (blank-page repair) was not run: no Word file came out with blank pages. The repair stays off.
+  - Bulk conversion of a real resource bank: 627 Office files converted and 10,229 other files copied, into a mirrored tree in the owner's My Drive. 0 failed. It ran as a one-off script on the test host, not in the repo, under a temporary read-only Drive sign-in, now revoked and deleted. Bulk work is internal only (owner, 2026-10-01): staff convert their own Drive files.
+  - The local check over all 627 files (worker, no Google): no crashes, nothing refused.
+- Checks: 682 platform tests pass on main after #183. Ruff, format and the secret scan are clean. Every fix failed on main first, as each PR shows.
+- Known failures: none.
+- Unresolved:
+  - The picker's look: Google draws its own dialog, in the 2015 style, even with the plainest `DocsView`. The owner has seen the modern "Select files" picker; it isn't yet known whether that was this app in their Chrome or Google's own apps. If it was this app, test in Chrome which `DocsView` options keep the new look.
+  - No deck with an embedded video has been converted live (#174, section 2).
+  - "Make pictures smaller" still leaves CMYK JPEGs alone (`colour`). One 128 MB deck held three; it fitted only because a grouped RGB photo shrank.
+  - "System Font Regular" and `system-ui` stay `UNKNOWN`: they're system-font placeholders, not fonts.
+- Decisions: none new in DECISIONS.md. Bulk conversion is internal only, per the owner, and is noted here rather than as a product decision.
+- Next task: none claimed. The only open issues are #5 and #174 (checklist results posted, video item outstanding).
+- Warnings:
+  - The test host runs `wmt-test-live` from `wmt-test/app:main`. The owner has its address; it isn't recorded here, as the repository is public. Its picture token expires hourly; renew with `gcloud auth print-access-token --impersonate-service-account=wmt-pictures@…` piped into `live/app.env`, then run `live/start.sh`.
+  - `/root/wmt-test/bulk` keeps the bulk script, its log, listing and state: file and folder names only, no credentials.
+  - Drive for Desktop (`G:`) refuses bursts of reads of online-only files with `FileNotFoundError`. Copy the files out first, with retries.
+  - In Git Bash, a Python heredoc still loses backslashes (`'\n'` becomes `n`). Use the Edit tool.
+---
+
+## Previous handoff
+
 - Agent: Claude Code / QuietHeron (platform UI)
 - Date: 2026-09-29
 - Branch: `feat/one-step-convert`, based on main `2d80316` (#103 merged)
@@ -45,33 +80,3 @@
 - Decisions: DECISIONS 2026-09-30 for #53 (report only; own PDF reader; not verified live) and #54 (optional, off by default).
 - Next task: none claimed. The only open issue is #5 (a standing request for real files).
 - Warnings: the scratchpad venv's `.pth` points at `wmt-docx-fixes/app`, and the worker subprocess gets a fixed environment without `PYTHONPATH`, so tests run from another checkout convert with this checkout's code. Run `scripts/check_secrets.py` before pushing: `detect-secrets` flags a variable named `SECRET` even in a test.
----
-
-## Previous handoff
-
-- Agent: Claude Code (Publisher session, on Platform/PPTX files by the owner's request)
-- Date: 2026-09-30
-- Branch: `fix/pptx-package-edits`, stacked on `fix/publisher-mask-budget` (PR #140): merge #138, #139, #140, then this
-- Objective: #124, #136, #137: package parts edited by regex left packages that no longer held together.
-- Files changed:
-  - `package.py` (new: `tags`, `attribute`, `RELATIONSHIPS`, `OVERRIDES`, `without_relationships`, `without_overrides`, `with_default`, each confirmed by re-parsing);
-  - `pptx.py` (`EMPTIED` only takes an extension with a `uri`; `_strip_part` checks every `a:ext` survives; `strip_videos` uses the helpers and refuses a video whose rels or content types can't be confirmed);
-  - `pictures.py` (paired Relationship tags retargeted; overrides and the JPEG Default via the helpers; unconfirmed content types leave the file unchanged);
-  - `tests/platform/test_package_edits.py` (new, 8); `docs/platform.md`; this file.
-- Completed:
-  - #124: a shape size written `<a:ext ...></a:ext>` no longer goes when a video is removed.
-  - #136: paired `<Relationship>`/`<Override>` tags for a removed video are removed; a rels part still naming the video after editing refuses the removal.
-  - #137: a prefixed `[Content_Types].xml` gets its JPEG Default in its own prefix; the old PNG override goes, paired or not.
-  - The 4 end-to-end tests fail on main and pass here; the 4 helper tests can't load on main.
-- Checks: 540 platform tests passed, 14 skipped; Ruff clean; mypy only reports `hypercorn` missing locally.
-- Known failures: none.
-- Unresolved: parts are still edited as bytes (to keep the rest of each part exactly as written), but every edit is now re-parsed and checked. Not tried against a real deck from another tool.
-- Decisions: none new.
-- Also opened, each on `main` and independent (no `.agent/` changes, so recorded here):
-  - #151 (#132): a failed Picker load is forgotten and retried; `tests/platform/test_picker_load.py` runs `app.js`'s own `loadPicker` under Node.
-  - #152 (#131): `WMT_REQUIRE_READERS=1` in both validity workflows makes a missing LibreOffice fail its tests; the DOCX job also fails on any skip.
-  - #154 (#130): the worker leads its own process group and a stopped job kills the whole group, parser included. Linux-only tests; draft PR #155 runs them on main's code to show they fail there (close it after).
-  - Filed #150 (an expired sign-in fails every remaining Publisher page), from Claude 2's review of #139.
-  - #150, stacked on #145 (`fix/publisher-expired-sign-in`): Slides answering a page with 401 or 403 stops the conversion (`session_expired` / `google_forbidden`, detail `stopped_at_page_N`) instead of failing every later page; the partial report and links are kept.
-- Next task: none claimed. Claude 2 is taking the native parser issues (#126-#129) through Linux CI. `pptx.py`/`pictures.py`/`package.py` are Platform-owned: say so if the Platform stream is active.
-- Warnings: in this environment, a heredoc passed through Python can lose a backslash level: after writing a regex that way, search the file for control characters (bytes 1 to 8), or write the edit with the Edit tool instead.
