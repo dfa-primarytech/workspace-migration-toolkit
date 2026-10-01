@@ -198,3 +198,46 @@ def test_a_symbol_charset_latin_slot_is_left_alone(tmp_path):
         '<a:p><a:r><a:rPr><a:latin typeface="Aptos" charset="2"/></a:rPr><a:t>x</a:t></a:r></a:p>',
     )
     assert '<a:latin typeface="Aptos" charset="2"/>' in slide
+
+
+def test_ntr_and_poppins_are_google_fonts():
+    # Both are used across a real resource bank's decks, and both are in
+    # Google Fonts: they need no replacement and no warning.
+    for family in ("NTR", "Poppins"):
+        result = compatibility(family)
+        assert result["status"] == FontStatus.AVAILABLE, family
+        assert result["manualReview"] is False, family
+
+
+def test_a_css_font_list_becomes_its_first_family():
+    # Text pasted from the web can carry "Arial,Sans-Serif" as its typeface.
+    # No font has that name, so Google drew its default and the report said
+    # "unknown". The first family is the one meant.
+    for listed, meant in [
+        ("Arial,Sans-Serif", "Arial"),
+        ("Open Sans,Sans-Serif", "Open Sans"),
+        ("'Times New Roman', serif", "Times New Roman"),
+        ("arial, sans-serif", "Arial"),
+    ]:
+        result = compatibility(listed)
+        assert result["status"] == FontStatus.SUBSTITUTED, listed
+        assert result["replacement"] == meant, listed
+        assert result["manualReview"] is False and result["confidence"] == "high", listed
+        assert result["name"] == listed.strip("'\""), listed
+
+
+def test_a_font_list_whose_first_family_needs_replacing_is_replaced_as_that_family():
+    assert compatibility("Aptos, sans-serif")["replacement"] == "Carlito"
+    unknown = compatibility("Nobody Has This, serif")
+    assert unknown["status"] == FontStatus.UNKNOWN and unknown["replacement"] is None
+
+
+def test_a_slide_naming_a_font_list_is_given_its_first_family(tmp_path):
+    slide, report = render_slide(
+        tmp_path,
+        '<a:p><a:r><a:rPr><a:latin typeface="Arial,Sans-Serif"/></a:rPr><a:t>Hi</a:t></a:r></a:p>',
+    )
+    assert 'typeface="Arial"' in slide and "Sans-Serif" not in slide
+    assert {"original": "Arial,Sans-Serif", "replacement": "Arial"}.items() <= next(
+        s for s in report["fontSubstitutions"] if s["original"] == "Arial,Sans-Serif"
+    ).items()
