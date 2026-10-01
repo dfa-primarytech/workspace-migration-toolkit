@@ -148,6 +148,13 @@ class Translation:
     # Code outside any Sub, or Subs taking arguments, events, functions: kept
     # as comments, never run.
     other_lines: int = 0
+    # The same, for adding to the Sheet as Google Sheets macros: no menu of
+    # its own, as the manifest lists them (script_projects.manifest).
+    bound_script: str = ""
+
+    def sheets_macros(self) -> list[dict]:
+        """The manifest's sheets.macros: each macro under Extensions > Macros."""
+        return [{"menuName": m.name, "functionName": m.function} for m in self.macros]
 
     def summary(self) -> dict:
         """Counts only, for the report: no names, no source."""
@@ -372,7 +379,9 @@ def translate(modules: list[Module]) -> Translation:
             current.lines = body.out
             current.untranslated += 1
             macros.append(current)
-    return Translation(macros, _script(macros, other), len(other))
+    return Translation(
+        macros, _script(macros, other), len(other), _script(macros, other, menu=False)
+    )
 
 
 HEADER = """\
@@ -389,10 +398,22 @@ HEADER = """\
  */
 """
 
+# For a script the app adds to the Sheet itself: its manifest declares each
+# macro, so they are Google Sheets macros, under Extensions > Macros.
+BOUND_HEADER = """\
+/**
+ * Macros from the original Excel workbook, written as Google Apps Script by
+ * the Workspace Migration Toolkit. Run them from Extensions > Macros. The
+ * first time a macro runs, Google asks you to allow it.
+ *
+ * Lines marked "Not translated" did nothing in Google and need doing by hand.
+ */
+"""
 
-def _script(macros: list[Macro], other: list[str]) -> str:
-    parts = [HEADER]
-    if macros:
+
+def _script(macros: list[Macro], other: list[str], menu: bool = True) -> str:
+    parts = [HEADER if menu else BOUND_HEADER]
+    if macros and menu:
         menu = "\n".join(f"    .addItem({_js(m.name)}, {_js(m.function)})" for m in macros)
         parts.append(
             "function onOpen() {\n"

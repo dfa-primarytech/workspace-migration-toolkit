@@ -36,13 +36,16 @@ class Attached:
     reason: str | None = None
 
 
-def manifest(time_zone: str) -> str:
+def manifest(time_zone: str, macros: list[dict]) -> str:
+    """The project's settings. `sheets.macros` makes each function a Google
+    Sheets macro, listed under Extensions > Macros."""
     return json.dumps(
         {
             "timeZone": time_zone,
             "runtimeVersion": "V8",
             "exceptionLogging": "STACKDRIVER",
             "oauthScopes": SCRIPT_SCOPES,
+            "sheets": {"macros": macros},
         },
         indent=2,
     )
@@ -64,6 +67,7 @@ async def attach(
     title: str,
     script: str,
     time_zone: str,
+    macros: list[dict] | None = None,
 ) -> Attached:
     """Creates the bound project and fills it. A project made but left
     empty is reported as failed: an empty project does no harm, and making
@@ -82,7 +86,11 @@ async def attach(
             headers=headers,
             json={
                 "files": [
-                    {"name": "appsscript", "type": "JSON", "source": manifest(time_zone)},
+                    {
+                        "name": "appsscript",
+                        "type": "JSON",
+                        "source": manifest(time_zone, macros or []),
+                    },
                     {"name": "Macros", "type": "SERVER_JS", "source": script},
                 ]
             },

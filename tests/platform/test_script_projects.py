@@ -91,7 +91,7 @@ def test_allowed_the_macros_are_put_in_the_sheet(tmp_path):
     codes = {w["code"] for w in report["warnings"]}
     assert "macros_attached" in codes and "macros_translated" not in codes
     [note] = [w for w in report["warnings"] if w["code"] == "macros_attached"]
-    assert "Macros menu" in note["message"] and "paste" not in note["message"]
+    assert "Extensions → Macros" in note["message"] and "paste" not in note["message"]
     # The paste-in copy stays in the folder all the same.
     assert "Macros for Google Sheets (Apps Script).txt" in {
         o["name"] for o in report["assetOutputs"]
@@ -160,3 +160,15 @@ def test_attach_reports_a_project_left_empty_as_failed():
 
     result = asyncio.run(run())
     assert result.script_id is None and result.reason == "failed"
+
+
+def test_attached_macros_are_google_sheets_macros_under_extensions(tmp_path):
+    # Declared in the manifest, each one is listed under Extensions > Macros,
+    # where Google Sheets keeps its own macros, with no extra menu.
+    google = ScriptGoogle(google_says())
+    converted(tmp_path, google, allowed=True)
+    files = {f["name"]: f for f in json.loads(google.calls[1][2])["files"]}
+    settings = json.loads(files["appsscript"]["source"])
+    assert settings["sheets"]["macros"] == [{"menuName": "Repair", "functionName": "Repair"}]
+    assert "createMenu" not in files["Macros"]["source"]
+    assert "function Repair()" in files["Macros"]["source"]

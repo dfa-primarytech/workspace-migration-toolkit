@@ -8,11 +8,12 @@ Structural read-back uses the Sheets API through the existing narrow
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .errors import ToolkitError
 from .google import DRIVE, SEPARATOR, clean_name
-from .macros import SCRIPT_NAME, UPLOADED
+from .macros import BOUND_NAME, MACRO_LIST, SCRIPT_NAME, UPLOADED
 from .model import Compatibility as C
 from .model import warning
 from .package import XLSM, XLSX
@@ -102,13 +103,17 @@ async def add_macros(
             )
         )
         return
+    # The bound version: declared in the manifest as Google Sheets macros, so
+    # they appear under Extensions > Macros, with no menu of their own.
+    bound, listed = script.with_name(BOUND_NAME), script.with_name(MACRO_LIST)
     result = await attach(
         google.client,
         google.headers,
         spreadsheet_id,
         f"{title} – macros",
-        script.read_text(encoding="utf-8"),
+        (bound if bound.exists() else script).read_text(encoding="utf-8"),
         zone,
+        json.loads(listed.read_text(encoding="utf-8")) if listed.exists() else [],
     )
     if result.script_id:
         report["appsScript"] = {"attached": True, "scriptId": result.script_id}
@@ -139,7 +144,7 @@ def attached_note(note: dict) -> dict:
     total = note.get("macroCount", 1)
     them = "macros are" if total > 1 else "macro is"
     message = (
-        f"The workbook's {them} in the Google Sheet: open it and use the Macros menu. "
+        f"The workbook's {them} in the Google Sheet: open it and choose Extensions → Macros. "
         "The first time a macro runs, Google asks you to allow it."
     )
     lines = note.get("untranslatedLines")
