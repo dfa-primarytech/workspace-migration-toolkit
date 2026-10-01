@@ -182,7 +182,7 @@ def test_a_crop_keeps_enough_pixels_for_what_is_shown(tmp_path):
             + '<p:sp><p:spPr><a:blipFill><a:blip r:embed="rId1"/></a:blipFill></p:spPr></p:sp>',
         ),
         (
-            "inside a group",
+            "inside a group that doesn't say how it scales",
             {"a.jpg": encode(photo(), "JPEG", quality=95)},
             "<p:grpSp><p:nvGrpSpPr/><p:grpSpPr/>" + pic("rId1", 2, 2) + "</p:grpSp>",
         ),
@@ -314,3 +314,43 @@ def test_checking_a_file_never_compresses_it(monkeypatch, tmp_path):
     response, _, _ = _post(monkeypatch, tmp_path, "analyse", "1")
     assert response.status_code == 200
     assert "pictures" not in response.json()
+
+
+def group(inches: float, child_inches: float, body: str) -> str:
+    """A group drawn `inches` wide and high, whose children's space is `child_inches`."""
+    size, child = int(inches * EMU), int(child_inches * EMU)
+    return (
+        '<p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm><a:off x="0" y="0"/>'
+        f'<a:ext cx="{size}" cy="{size}"/><a:chOff x="0" y="0"/>'
+        f'<a:chExt cx="{child}" cy="{child}"/></a:xfrm></p:grpSpPr>{body}</p:grpSp>'
+    )
+
+
+@pytest.mark.parametrize(
+    "why, body, expected",
+    [
+        # 2 inches at 220 ppi is 440 px; the 3:2 photo keeps its shape, so its
+        # height sets the scale and its width follows.
+        ("grouped, not scaled", group(2, 2, pic("rId1", 2, 2)), (660, 440)),
+        ("grouped at half size", group(1, 2, pic("rId1", 2, 2)), (330, 220)),
+        ("two groups, each at half", group(1, 2, group(1, 2, pic("rId1", 2, 2))), (165, 110)),
+        # Drawn three times larger than its own frame: 6 inches, so 1320 px high.
+        ("grouped at three times", group(6, 2, pic("rId1", 2, 2)), (1980, 1320)),
+    ],
+)
+def test_a_grouped_picture_is_measured_through_its_groups(tmp_path, why, body, expected):
+    # Every grouped picture used to be skipped. In the live test a 63 MB photo
+    # grouped with its caption kept a 128 MB deck over Google's 100 MB limit.
+    path = deck(tmp_path, {"a.jpg": encode(photo(), "JPEG", quality=95)}, body)
+    report, out = squeeze(path)
+    assert [d["part"] for d in report["picturesCompressed"]] == ["ppt/media/a.jpg"], why
+    assert size_of(out.read("ppt/media/a.jpg")) == expected, why
+
+
+def test_one_group_without_a_scale_leaves_its_pictures_alone_however_deep(tmp_path):
+    inner = "<p:grpSp><p:nvGrpSpPr/><p:grpSpPr/>" + pic("rId1", 2, 2) + "</p:grpSp>"
+    original = encode(photo(), "JPEG", quality=95)
+    path = deck(tmp_path, {"a.jpg": original}, group(1, 2, inner))
+    report, out = squeeze(path)
+    assert report["picturesCompressed"] == []
+    assert out.read("ppt/media/a.jpg") == original
