@@ -792,3 +792,15 @@ Sheet opens (`buttons.py`, `apps_script._linker`):
   choice stays. Linking can never stop the Sheet opening.
 - The report holds counts only, never labels. The page adds "Its button works
   too." to the macro notice.
+
+## 2026-10-01: The hosted app is for one trust's staff
+
+The owner's decision, on hosting: the app is for staff of a group of schools
+in one Google Workspace, each school on its own domain, with separate
+`student.` domains. The sign-in is External, as those domains aren't the
+project's own. Google can't limit an External app by domain (its test-user
+list takes single addresses), so the app does: `ALLOWED_DOMAINS` lists the
+staff domains, and only a verified Workspace account on one of them gets in
+(`auth.check_account`). Pupils, personal Google accounts and everyone else are
+refused. The list lives in the deployment's settings, not the public repo.
+Unset, as on the test host, sign-in is unchanged.

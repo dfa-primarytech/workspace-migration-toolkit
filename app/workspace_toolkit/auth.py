@@ -21,6 +21,9 @@ SCOPE = "https://www.googleapis.com/auth/drive.file"
 # (DECISIONS.md, 2026-10-01). Someone who unticks it still converts; the
 # macros are then left in the folder to paste in.
 SCRIPT_SCOPE = "https://www.googleapis.com/auth/script.projects"
+# Asked for only when sign-in is limited to some domains: who is signing in.
+IDENTITY_SCOPE = "openid email"
+ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
 SESSION = "wmt_session"
 STATE = "wmt_oauth"
 
@@ -76,7 +79,8 @@ class Auth:
                 "client_id": self.settings.client_id,
                 "redirect_uri": self.settings.redirect_uri,
                 "response_type": "code",
-                "scope": f"{SCOPE} {SCRIPT_SCOPE}",
+                "scope": f"{SCOPE} {SCRIPT_SCOPE}"
+                + (f" {IDENTITY_SCOPE}" if self.settings.allowed_domains else ""),
                 "state": state,
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
@@ -113,6 +117,8 @@ class Auth:
             granted = token.get("scope", "").split()
             if SCOPE not in granted or token.get("token_type", "").lower() != "bearer":
                 raise ValueError("Required permission missing")
+            if self.settings.allowed_domains:
+                self.check_account(token.get("id_token"))
             expires = min(int(token["expires_in"]), 3600)
             access_token = token.get("access_token")
             if expires <= 0 or not isinstance(access_token, str) or not access_token:
@@ -123,10 +129,45 @@ class Auth:
                 "csrf": secrets.token_urlsafe(32),
                 "scripts": SCRIPT_SCOPE in granted,
             }
-        except (httpx.HTTPError, KeyError, ValueError) as exc:
+        except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
             raise ToolkitError(
                 "oauth_failed", "Google sign-in failed. Please try again.", 502
             ) from exc
+
+    def check_account(self, id_token: object) -> None:
+        """Refuses anyone but a Workspace account on an allowed domain.
+
+        The ID token came straight from Google's token endpoint over TLS,
+        in exchange for this app's own code and secret, so its claims are
+        read without checking its signature (OpenID Connect Core 3.1.3.7).
+        A damaged one is a failed sign-in (ValueError); a well-formed one
+        for someone else is a refusal. Nothing about the person is kept.
+        """
+        if not isinstance(id_token, str) or id_token.count(".") != 2:
+            raise ValueError("No ID token")
+        body = id_token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        if (
+            not isinstance(claims, dict)
+            or claims.get("iss") not in ISSUERS
+            or claims.get("aud") != self.settings.client_id
+            or float(claims.get("exp", 0)) <= time.time()
+        ):
+            raise ValueError("ID token not for this app")
+        email = claims.get("email")
+        domain = email.rsplit("@", 1)[-1].lower() if isinstance(email, str) else ""
+        # hd is set only for a Google Workspace account: a personal Google
+        # account made with a school address has none.
+        if (
+            claims.get("email_verified") is not True
+            or not claims.get("hd")
+            or domain not in self.settings.allowed_domains
+        ):
+            raise ToolkitError(
+                "account_not_allowed",
+                "This converter is for staff. Sign in with your school staff account.",
+                403,
+            )
 
     def session(self, request: Request, *, csrf: bool = False) -> dict:
         data = self.open(request.cookies.get(SESSION), 3600)

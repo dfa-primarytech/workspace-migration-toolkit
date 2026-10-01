@@ -182,4 +182,6 @@ request('/api/session').then(s => {
   $('signin').hidden = s.signedIn; $('logout').hidden = !s.signedIn; $('workspace').hidden = !s.signedIn; $('pick-drive').hidden = !s.pickerEnabled;
   $('limit').textContent = s.maxUploadBytes ? `Up to ${Math.round(s.maxUploadBytes / 1024 / 1024)} MB each.` : '';
   if (!s.signedIn && !s.configured) $('status').textContent = 'Google sign-in needs to be configured by the application owner.';
+  // Sign-in is limited to staff domains on the hosted app (auth.check_account).
+  if (!s.signedIn && new URLSearchParams(location.search).get('signin') === 'not_allowed') $('status').textContent = 'This converter is for staff. Sign in with your school staff account.';
 }).catch(e => { $('status').textContent = e.message; });

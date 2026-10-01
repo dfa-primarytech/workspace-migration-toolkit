@@ -244,12 +244,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.delete_cookie(STATE)
             return response
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-            data = await auth.exchange(
-                request.query_params.get("code", ""),
-                request.query_params.get("state", ""),
-                request.cookies.get(STATE),
-                client,
-            )
+            try:
+                data = await auth.exchange(
+                    request.query_params.get("code", ""),
+                    request.query_params.get("state", ""),
+                    request.cookies.get(STATE),
+                    client,
+                )
+            except ToolkitError as error:
+                if error.code != "account_not_allowed":
+                    raise
+                # Back to the page, which says why, not a bare JSON error.
+                response = RedirectResponse("/?signin=not_allowed", status_code=302)
+                response.delete_cookie(STATE)
+                return response
         response = RedirectResponse("/", status_code=302)
         auth.cookie(response, SESSION, data, int(data["expires"] - time.time()))
         response.delete_cookie(STATE)
