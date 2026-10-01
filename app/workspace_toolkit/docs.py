@@ -56,6 +56,7 @@ from .docx import (
     page_geometry,
     parents,
     q,
+    saved_page_count,
     section_of,
     to_dxa,
     twips,
@@ -2140,28 +2141,6 @@ def apply_theme_substitutions(root: Element, mapping: dict[str, str]) -> Counter
             element.set("typeface", mapping[typeface])
             applied[(typeface, mapping[typeface])] += 1
     return applied
-
-
-EXTENDED_PROPERTIES = (
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"
-)
-EXTENDED_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
-
-
-def saved_page_count(package: Package) -> int | None:
-    """The page count Word saved in docProps/app.xml, or None.
-
-    Word's own count from its last layout, so evidence for the read-back to
-    compare against (#53), not a rule: another program may not write it, and
-    may write it wrong.
-    """
-    for relationship in package.relationships(""):
-        if relationship["type"] != EXTENDED_PROPERTIES or not relationship["resolved"]:
-            continue
-        pages = package.xml(relationship["resolved"]).find("{" + EXTENDED_NS + "}Pages")
-        text = (pages.text or "").strip() if pages is not None else ""
-        return int(text) if text.isdigit() and int(text) > 0 else None
-    return None
 
 
 def render(package: Package, destination: Path) -> dict:
