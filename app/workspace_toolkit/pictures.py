@@ -69,14 +69,35 @@ class Plan:
     references: list[tuple[str, str]] = field(default_factory=list)  # (rels part, rid)
 
 
-def _needed(pic: Element) -> tuple[int, int] | None:
-    """Pixels a picture frame needs at PPI, allowing for its crop."""
+def _group_scale(group: Element) -> tuple[float, float] | None:
+    """How much a group scales what it holds: its size over its children's
+    space (ext over chExt). None when it doesn't say."""
+    props = next((e for e in group if local(e.tag) == "grpSpPr"), None)
+    xfrm = next((e for e in props if local(e.tag) == "xfrm"), None) if props is not None else None
+    if xfrm is None:
+        return None
+    sizes = {local(e.tag): e for e in xfrm if local(e.tag) in {"ext", "chExt"}}
+    if set(sizes) != {"ext", "chExt"}:
+        return None
+    try:
+        cx, cy = int(sizes["ext"].get("cx", "0")), int(sizes["ext"].get("cy", "0"))
+        chx, chy = int(sizes["chExt"].get("cx", "0")), int(sizes["chExt"].get("cy", "0"))
+    except ValueError:
+        return None
+    if min(cx, cy, chx, chy) <= 0:
+        return None
+    return cx / chx, cy / chy
+
+
+def _needed(pic: Element, scale: tuple[float, float] = (1.0, 1.0)) -> tuple[int, int] | None:
+    """Pixels a picture frame needs at PPI, allowing for its crop and for any
+    groups it sits in (`scale`)."""
     xfrm = next((e for e in pic.iter() if local(e.tag) == "xfrm"), None)
     ext = next((e for e in xfrm if local(e.tag) == "ext"), None) if xfrm is not None else None
     if ext is None:
         return None
     try:
-        cx, cy = int(ext.get("cx", "0")), int(ext.get("cy", "0"))
+        cx, cy = int(ext.get("cx", "0")) * scale[0], int(ext.get("cy", "0")) * scale[1]
     except ValueError:
         return None
     if cx <= 0 or cy <= 0:
@@ -117,18 +138,22 @@ def plan(package: Package) -> dict[str, Plan]:
                 plans[target].unknown = True
             continue
         root = package.xml(part)
-        # A group can scale what it holds, so a grouped picture's own size is
-        # not what is drawn: treat it as unmeasured.
-        grouped = {
-            id(e)
-            for group in root.iter()
-            if local(group.tag) in {"grpSp", "wgp"}
-            for e in group.iter()
-            if local(e.tag) == "pic"
-        }
+        # A group can scale what it holds, so a grouped picture is drawn at its
+        # own size times every enclosing group's scale. A group that doesn't
+        # give its scale leaves its pictures unmeasured. Before, every grouped
+        # picture was: a 63 MB photo grouped with its caption kept a 128 MB
+        # deck over Google's limit (live test, 2026-10-01).
+        parents = {id(child): node for node in root.iter() for child in node}
         measured: set[int] = set()
-        for pic in (e for e in root.iter() if local(e.tag) == "pic" and id(e) not in grouped):
-            size = _needed(pic)
+        for pic in (e for e in root.iter() if local(e.tag) == "pic"):
+            scale: tuple[float, float] | None = (1.0, 1.0)
+            node = parents.get(id(pic))
+            while node is not None and scale is not None:
+                if local(node.tag) in {"grpSp", "wgp"}:
+                    step = _group_scale(node)
+                    scale = None if step is None else (scale[0] * step[0], scale[1] * step[1])
+                node = parents.get(id(node))
+            size = _needed(pic, scale) if scale is not None else None
             for blip in (e for e in pic.iter() if local(e.tag) == "blip"):
                 rid = blip.get(f"{{{R}}}embed")
                 if rid in images and size is not None:
