@@ -197,6 +197,8 @@ def test_the_recorded_repair_macro_is_translated_in_full():
         "fullyTranslated": 1,
         "partlyTranslated": 0,
         "untranslatedLines": 0,
+        "linkedButtons": 0,
+        "unlinkedButtons": 0,
     }
     assert 'selection = sheet.getRange("C12:D12");' in t.script
     assert (
@@ -269,6 +271,8 @@ End Function
         "fullyTranslated": 0,
         "partlyTranslated": 1,
         "untranslatedLines": 7,
+        "linkedButtons": 0,
+        "unlinkedButtons": 0,
     }
     assert "// Not translated: For i = 1 To 10" in t.script
     assert "// Module1: Function Twice(x)" in t.script  # outside any Sub: for reference
