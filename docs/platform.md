@@ -89,6 +89,14 @@ Register the exact redirect URI `PUBLIC_BASE_URL/auth/callback`. Configure:
   one update guarded by the document's revision, so a document someone has
   changed is left alone; what it did, and the page counts before and after, go
   into the saved report under `readBack.repair`, never on screen.
+- Optional `ALLOWED_DOMAINS`: who may sign in, as Google Workspace domains
+  separated by commas or spaces (for example a trust's staff domains, leaving
+  out its `student.` ones). When set, sign-in also asks for the person's email
+  address (`openid email`, non-sensitive), and `auth.check_account` admits only
+  a verified Workspace account (`hd` set) whose address is on an allowed domain;
+  anyone else is sent back to the page with a plain message. Nothing about the
+  person is stored. Unset, anyone Google lets sign in may. Keep the list in the
+  deployment's settings, not in this public repository.
 - Optional `GOOGLE_PICKER_API_KEY`: a Cloud Console API key, restricted to the
   Google Picker API, with the Picker API enabled. Adds an "Add from Drive"
   option beside the local file chooser. Unlike the OAuth client secret, this

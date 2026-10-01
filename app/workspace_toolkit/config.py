@@ -53,6 +53,9 @@ class Settings:
     # to stay off the client -- unlike client_secret, which never leaves
     # this process. "Add from Drive" is hidden in the UI while this is unset.
     picker_api_key: str = ""
+    # Who may sign in, by the domain of their Google Workspace address
+    # (DECISIONS.md, 2026-10-01). Empty: anyone Google lets sign in.
+    allowed_domains: frozenset[str] = frozenset()
     # The native Publisher reader (native/pub-parser). The app image builds it
     # in; elsewhere, point PUBLISHER_PARSER_BIN at a local build.
     publisher_parser: str = "/usr/local/bin/publisher-parser"
@@ -146,6 +149,11 @@ class Settings:
             client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
             session_key=os.getenv("SESSION_ENCRYPTION_KEY", ""),
             picker_api_key=os.getenv("GOOGLE_PICKER_API_KEY", ""),
+            allowed_domains=frozenset(
+                d.strip().lower().lstrip("@")
+                for d in os.getenv("ALLOWED_DOMAINS", "").replace(",", " ").split()
+                if d.strip()
+            ),
             publisher_parser=os.getenv("PUBLISHER_PARSER_BIN", "/usr/local/bin/publisher-parser"),
             publisher_bucket=os.getenv("PUBLISHER_BUCKET", "").strip(),
             publisher_signer=os.getenv("PUBLISHER_SIGNER", "").strip(),
