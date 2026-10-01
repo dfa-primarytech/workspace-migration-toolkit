@@ -414,11 +414,11 @@ BOUND_HEADER = """\
 def _script(macros: list[Macro], other: list[str], menu: bool = True) -> str:
     parts = [HEADER if menu else BOUND_HEADER]
     if macros and menu:
-        menu = "\n".join(f"    .addItem({_js(m.name)}, {_js(m.function)})" for m in macros)
+        items = "\n".join(f"    .addItem({_js(m.name)}, {_js(m.function)})" for m in macros)
         parts.append(
             "function onOpen() {\n"
             '  SpreadsheetApp.getUi().createMenu("Macros")\n'
-            f"{menu}\n"
+            f"{items}\n"
             "    .addToUi();\n"
             "}\n"
         )
