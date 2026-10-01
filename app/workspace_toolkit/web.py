@@ -193,6 +193,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def index():
         return FileResponse(STATIC / "index.html")
 
+    # Linked from Google's sign-in screen (Google Auth Platform → Branding).
+    @app.get("/privacy")
+    async def privacy():
+        return FileResponse(STATIC / "privacy.html")
+
     @app.get("/api/session")
     async def session(request: Request):
         try:

@@ -31,3 +31,6 @@ details p{font-size:var(--fs-14);margin:8px 0}
 #status{font-weight:var(--weight-semibold)}
 li{margin-bottom:8px}
 [hidden]{display:none!important}
+.footer { margin-top: 2rem; font-size: .875rem; }
+.policy h2 { margin-top: 1.75rem; font-size: 1.15rem; }
+.policy li { margin: .4rem 0; }
