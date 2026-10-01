@@ -102,9 +102,18 @@ def macro_notice(report: dict) -> str | None:
     some = " A few steps couldn't be converted and are marked in the script." if partly else ""
     start = "This workbook uses macros. We've converted them for Google Sheets"
     if attached.get("attached"):
+        # Linked as the Sheet opens (apps_script._linker), so the first open
+        # already has them working.
+        linked = next(
+            (w["buttonCount"] for w in report["warnings"] if w["code"] == "macro_buttons_linked"),
+            0,
+        )
+        buttons = (
+            " Its buttons work too." if linked > 1 else " Its button works too." if linked else ""
+        )
         return (
-            f"{start}: find them under Extensions → Macros. The first time you run one, "
-            f"Google will ask you to approve it.{some}"
+            f"{start}: find them under Extensions → Macros.{buttons} The first time you run "
+            f"one, Google will ask you to approve it.{some}"
         )
     if attached.get("reason") == "setting_off":
         return (

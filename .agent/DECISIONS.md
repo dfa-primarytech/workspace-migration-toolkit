@@ -775,3 +775,20 @@ If they weren't added to the Sheet, it says why and what to do (turn on the
 Apps Script API, or sign in again allowing Apps Script), or that the original
 code is in the folder. A person may have to act on this, which is why it can't
 wait in a report. Every other note stays in the report.
+
+## 2026-10-01: A workbook's buttons run their macros in Google
+
+The owner's decision, from the live test: a workbook's "Repair Columns" button
+came across as a drawing that did nothing. Google keeps the shape but not the
+macro it ran, and this workbook had already lost that assignment on an earlier
+trip through Google. The script added to the Sheet links each button when the
+Sheet opens (`buttons.py`, `apps_script._linker`):
+- **Assigned by Excel:** the button runs that macro, if it was translated.
+- **Not assigned:** the button is linked only when the workbook has exactly one
+  macro and the label begins with that macro's name in whole words. Anything
+  else is never guessed at; a shape with only a label may just be a text box,
+  so it isn't reported either.
+- A drawing that already runs a script is left alone, so a person's own
+  choice stays. Linking can never stop the Sheet opening.
+- The report holds counts only, never labels. The page adds "Its button works
+  too." to the macro notice.

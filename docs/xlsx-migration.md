@@ -106,14 +106,29 @@ Window-only steps such as scrolling are dropped. Any other line is kept as a
 "Not translated" comment and counted, never guessed at. The script adds a
 Macros menu.
 
-The app does **not** attach the script to the Sheet: the person pastes it in
-under Extensions → Apps Script, as the report explains. Attaching it
-automatically would need the Apps Script API, a new sign-in permission
-(`script.projects`) and a per-person Apps Script setting. That is deferred, and
-if it is built, it must still require explicit authorisation, keep the source
-out of reports, and have tests proving that no project is created without
-authorisation. General VBA translation (variables, loops, conditions, events)
-remains out of scope.
+When the person allowed Apps Script at sign-in, the app adds the script to the
+Sheet itself (`script_projects.attach`), with the macros declared as Google
+Sheets macros under Extensions → Macros (DECISIONS.md, 2026-10-01). Otherwise,
+or if Google refuses (most often the per-person Apps Script API setting), the
+person pastes it in under Extensions → Apps Script, as the report explains.
+No project is created without that permission, and the source never goes in a
+report. General VBA translation (variables, loops, conditions, events) remains
+out of scope.
+
+Macro buttons (`buttons.py`): Google brings an Excel shape across as a drawing
+but drops the macro it ran, and only Apps Script can set one
+(`Drawing.setOnAction`). Each shape on a worksheet is read with its sheet,
+anchor cell, label and assigned macro. A shape is linked to the macro Excel
+assigned it. With none, which is how a workbook that has been through Google
+before comes back, it is linked only when the workbook has exactly one macro
+and the label begins with that macro's name in whole words ("Repair Columns"
+runs `Repair`). The script's `onOpen` links them when the Sheet opens, leaving
+any drawing that already has a script alone. A sheet with one drawing and one
+button is matched without its anchor; otherwise the anchor cell must agree.
+The report counts linked buttons (`macro_buttons_linked`) and buttons left to
+redo (`macro_buttons_not_linked`): those assigned a macro that isn't there,
+and Excel form-control buttons, which Google drops on import. It never gives
+their labels.
 
 ## Locale, time zone and text dates
 

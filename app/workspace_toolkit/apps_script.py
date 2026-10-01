@@ -19,6 +19,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
+from .buttons import Button, Link, link
 from .vba import Module
 
 # Window-only steps the recorder writes: nothing in the workbook changes.
@@ -117,6 +118,8 @@ RESERVED = {
     "doget",
     "dopost",
     "spreadsheetapp",
+    "linkbuttons_",
+    "buttons_",
 }
 
 
@@ -151,6 +154,11 @@ class Translation:
     # The same, for adding to the Sheet as Google Sheets macros: no menu of
     # its own, as the manifest lists them (script_projects.manifest).
     bound_script: str = ""
+    # The workbook's buttons, each linked to the macro it runs (buttons.py).
+    links: list[Link] = field(default_factory=list)
+    # Buttons Excel assigned a macro that isn't here, and form-control
+    # buttons, which Google drops: both left for the person to redo.
+    unlinked_buttons: int = 0
 
     def sheets_macros(self) -> list[dict]:
         """The manifest's sheets.macros: each macro under Extensions > Macros."""
@@ -163,10 +171,12 @@ class Translation:
             "fullyTranslated": sum(m.complete for m in self.macros),
             "partlyTranslated": sum(not m.complete for m in self.macros),
             "untranslatedLines": sum(m.untranslated for m in self.macros) + self.other_lines,
+            "linkedButtons": len(self.links),
+            "unlinkedButtons": self.unlinked_buttons,
         }
 
 
-def _js(text: str) -> str:
+def _js(text: object) -> str:
     return json.dumps(text, ensure_ascii=False)
 
 
@@ -342,7 +352,9 @@ def _comment(line: str) -> str:
     return "  // Not translated: " + line.strip().replace("*/", "* /")
 
 
-def translate(modules: list[Module]) -> Translation:
+def translate(
+    modules: list[Module], buttons: list[Button] | None = None, form_buttons: int = 0
+) -> Translation:
     macros: list[Macro] = []
     other: list[str] = []
     taken: set[str] = set()
@@ -379,8 +391,14 @@ def translate(modules: list[Module]) -> Translation:
             current.lines = body.out
             current.untranslated += 1
             macros.append(current)
+    links, missed = link(buttons or [], [(m.name, m.function) for m in macros])
     return Translation(
-        macros, _script(macros, other), len(other), _script(macros, other, menu=False)
+        macros,
+        _script(macros, other, links=links),
+        len(other),
+        _script(macros, other, menu=False, links=links),
+        links,
+        missed + form_buttons,
     )
 
 
@@ -411,17 +429,56 @@ BOUND_HEADER = """\
 """
 
 
-def _script(macros: list[Macro], other: list[str], menu: bool = True) -> str:
+def _linker(links: list[Link]) -> str:
+    """Links each button to its macro when the Sheet opens. Google keeps the
+    drawing but not what it ran, and only Apps Script can set that. A button
+    already linked is left alone, so one the person re-links stays theirs.
+    A sheet with one drawing and one button is matched without its anchor,
+    in case Google moved it a cell; otherwise the anchor cell must agree."""
+    table = _js(
+        [{"sheet": k.sheet, "row": k.row, "column": k.column, "macro": k.function} for k in links]
+    )
+    return (
+        "// The workbook's buttons, and the macro each one runs.\n"
+        f"const buttons_ = {table};\n"
+        "\n"
+        "function linkButtons_() {\n"
+        "  try {\n"
+        "    const book = SpreadsheetApp.getActiveSpreadsheet();\n"
+        "    for (const sheet of book.getSheets()) {\n"
+        "      const wanted = buttons_.filter(b => b.sheet === sheet.getName());\n"
+        "      if (!wanted.length) continue;\n"
+        "      const drawings = sheet.getDrawings();\n"
+        "      for (const b of wanted) {\n"
+        "        const drawing = drawings.length === 1 && wanted.length === 1\n"
+        "          ? drawings[0]\n"
+        "          : drawings.find(d => {\n"
+        "              const at = d.getContainerInfo();\n"
+        "              return at.getAnchorRow() === b.row && at.getAnchorColumn() === b.column;\n"
+        "            });\n"
+        "        if (drawing && !drawing.getOnAction()) drawing.setOnAction(b.macro);\n"
+        "      }\n"
+        "    }\n"
+        "  } catch (error) {\n"
+        "    // Never stop the Sheet opening: the macros still run from the menu.\n"
+        "    console.warn('Buttons not linked: ' + error);\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+def _script(
+    macros: list[Macro], other: list[str], menu: bool = True, links: list[Link] | None = None
+) -> str:
     parts = [HEADER if menu else BOUND_HEADER]
+    opening = ["  linkButtons_();"] if links else []
     if macros and menu:
         items = "\n".join(f"    .addItem({_js(m.name)}, {_js(m.function)})" for m in macros)
-        parts.append(
-            "function onOpen() {\n"
-            '  SpreadsheetApp.getUi().createMenu("Macros")\n'
-            f"{items}\n"
-            "    .addToUi();\n"
-            "}\n"
-        )
+        opening.append(f'  SpreadsheetApp.getUi().createMenu("Macros")\n{items}\n    .addToUi();')
+    if opening:
+        parts.append("function onOpen() {\n" + "\n".join(opening) + "\n}\n")
+    if links:
+        parts.append(_linker(links))
     for macro in macros:
         state = (
             "translated in full"

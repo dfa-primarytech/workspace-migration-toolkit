@@ -19,6 +19,7 @@ import zipfile
 from pathlib import Path
 
 from .apps_script import translate
+from .buttons import read_buttons
 from .config import Settings
 from .errors import ToolkitError
 from .model import Compatibility as C
@@ -149,7 +150,8 @@ def prepare(package: Package, output: Path) -> tuple[dict, list[dict]]:
     if original:
         (folder / ORIGINAL_NAME).write_text(original, encoding="utf-8")
         files.append(ORIGINAL_NAME)
-    translation = translate(modules)
+    found = read_buttons(package)
+    translation = translate(modules, found.buttons, found.form_buttons)
     counts = translation.summary()
     if translation.macros:
         (folder / SCRIPT_NAME).write_text(translation.script, encoding="utf-8")
@@ -157,7 +159,7 @@ def prepare(package: Package, output: Path) -> tuple[dict, list[dict]]:
         (folder / BOUND_NAME).write_text(translation.bound_script, encoding="utf-8")
         (folder / MACRO_LIST).write_text(json.dumps(translation.sheets_macros()), encoding="utf-8")
     summary = {"read": True, "modules": len(modules), **counts, "files": files}
-    return summary, notes(counts, bool(original))
+    return summary, notes(counts, bool(original)) + button_notes(counts)
 
 
 def notes(counts: dict, has_code: bool) -> list[dict]:
@@ -208,6 +210,33 @@ def notes(counts: dict, has_code: bool) -> list[dict]:
             )
         ]
     return []
+
+
+def button_notes(counts: dict) -> list[dict]:
+    """The workbook's buttons: linked to their macros, or left to redo."""
+    found = []
+    if linked := counts.get("linkedButtons", 0):
+        found.append(
+            warning(
+                "macro_buttons_linked",
+                f"The workbook's {'buttons run their macros' if linked > 1 else 'button runs its macro'} "
+                "in Google too, once the macros are in the Sheet.",
+                buttonCount=linked,
+                classification=C.SUBSTITUTED,
+            )
+        )
+    if unlinked := counts.get("unlinkedButtons", 0):
+        found.append(
+            warning(
+                "macro_buttons_not_linked",
+                f"{unlinked} button{'s' if unlinked != 1 else ''} in the workbook couldn't be "
+                "linked to a macro in Google. To make one, insert a drawing (Insert → Drawing), "
+                "then click it, choose ⋮ → Assign script, and type the macro's name.",
+                buttonCount=unlinked,
+                classification=C.UNSUPPORTED,
+            )
+        )
+    return found
 
 
 def _count(n: int) -> str:
