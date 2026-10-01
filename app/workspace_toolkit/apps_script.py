@@ -380,9 +380,10 @@ HEADER = """\
  * Macros from the original Excel workbook, written as Google Apps Script by
  * the Workspace Migration Toolkit.
  *
- * To use them: in the Google Sheet, choose Extensions > Apps Script, replace
- * what is there with this file, and save. Reload the Sheet: a "Macros" menu
- * appears. The first time a macro runs, Google asks you to allow it.
+ * Run them from the "Macros" menu in the Google Sheet. If there is no such
+ * menu, add this file yourself: in the Sheet, choose Extensions > Apps Script,
+ * replace what is there with this file, save, and reload the Sheet. The first
+ * time a macro runs, Google asks you to allow it.
  *
  * Lines marked "Not translated" did nothing in Google and need doing by hand.
  */

@@ -17,6 +17,10 @@ from .config import Settings
 from .errors import ToolkitError
 
 SCOPE = "https://www.googleapis.com/auth/drive.file"
+# Optional: lets the app add a converted workbook's macros to its new Sheet
+# (DECISIONS.md, 2026-10-01). Someone who unticks it still converts; the
+# macros are then left in the folder to paste in.
+SCRIPT_SCOPE = "https://www.googleapis.com/auth/script.projects"
 SESSION = "wmt_session"
 STATE = "wmt_oauth"
 
@@ -72,7 +76,7 @@ class Auth:
                 "client_id": self.settings.client_id,
                 "redirect_uri": self.settings.redirect_uri,
                 "response_type": "code",
-                "scope": SCOPE,
+                "scope": f"{SCOPE} {SCRIPT_SCOPE}",
                 "state": state,
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
@@ -106,10 +110,8 @@ class Auth:
             )
             response.raise_for_status()
             token = response.json()
-            if (
-                SCOPE not in token.get("scope", "").split()
-                or token.get("token_type", "").lower() != "bearer"
-            ):
+            granted = token.get("scope", "").split()
+            if SCOPE not in granted or token.get("token_type", "").lower() != "bearer":
                 raise ValueError("Required permission missing")
             expires = min(int(token["expires_in"]), 3600)
             access_token = token.get("access_token")
@@ -119,6 +121,7 @@ class Auth:
                 "access_token": access_token,
                 "expires": int(time.time()) + expires,
                 "csrf": secrets.token_urlsafe(32),
+                "scripts": SCRIPT_SCOPE in granted,
             }
         except (httpx.HTTPError, KeyError, ValueError) as exc:
             raise ToolkitError(

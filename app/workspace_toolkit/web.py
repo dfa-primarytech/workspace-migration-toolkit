@@ -407,7 +407,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 progress,
                                 original_name=Path(filename).stem,
                                 **({"settings": settings} if pipeline.needs_settings else {}),
-                                **({"time_zone": zone} if pipeline.needs_time_zone else {}),
+                                **(
+                                    {
+                                        "time_zone": zone,
+                                        "attach_macros": bool(session.get("scripts")),
+                                    }
+                                    if pipeline.needs_time_zone
+                                    else {}
+                                ),
                             )
                             # Added here rather than in each pipeline, so every
                             # format reports what happened in Drive the same way.

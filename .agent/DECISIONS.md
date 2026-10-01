@@ -739,3 +739,26 @@ the 2026-09-28 rule that actual VBA blocks native import, and the docs'
   objects, dialog sheets and Excel 4 macro sheets.
 - **Reports and logs** carry counts only (`macroCode`, `macros_*` findings),
   never macro names or code.
+
+## 2026-10-01: Macros are added to the converted Sheet, when the person allows it
+
+The owner's decision: pasting a script into the Apps Script editor is too much
+to ask of most teachers. This builds on the entry above.
+
+- **Apps Script API** is enabled in the project, and the sign-in requests
+  `script.projects` as well as `drive.file`. It's optional: someone who unticks
+  it signs in and converts as before (`session["scripts"]` is false).
+- **When it's allowed** (`script_projects.attach`), the app creates a script
+  project bound to the Sheet it has just made (`projects.create` with the
+  Sheet as `parentId`) and puts in the translated macros plus a manifest. The
+  manifest limits the script to `spreadsheets.currentonly` and
+  `script.container.ui`: that one spreadsheet and its menus, not the person's
+  Drive. Nothing is run. The person allows the script when they first use it,
+  as Google requires.
+- **Google can still refuse**, most often because the person hasn't turned on
+  "Google Apps Script API" at script.google.com/home/usersettings. This is a
+  per-person setting. The report then says where to turn it on, and the
+  paste-in copy stays in the folder in every case.
+- **Without the permission, the Apps Script API is never called** (tested).
+  The report stores only `appsScript.attached`, the script id or the reason,
+  never code.

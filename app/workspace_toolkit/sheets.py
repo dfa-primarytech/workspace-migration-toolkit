@@ -12,10 +12,11 @@ from pathlib import Path
 
 from .errors import ToolkitError
 from .google import DRIVE, SEPARATOR, clean_name
-from .macros import UPLOADED
+from .macros import SCRIPT_NAME, UPLOADED
 from .model import Compatibility as C
 from .model import warning
 from .package import XLSM, XLSX
+from .script_projects import SETTINGS_URL, attach
 from .xlsx import analysis_report, tier
 
 SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
@@ -78,6 +79,78 @@ async def save_macros(folder_path: Path, google, folder: str, report: dict) -> N
             )
             continue
         report["assetOutputs"].append({"kind": "macros", "name": shown, "id": saved["id"]})
+
+
+PASTE_NOTES = {"macros_translated", "macros_partly_translated"}
+
+
+async def add_macros(
+    google, spreadsheet_id: str, title: str, script: Path, zone: str, allowed: bool, report: dict
+) -> None:
+    """Puts the translated macros in the Sheet itself, when the person allowed
+    it at sign-in; otherwise, or if Google refuses, says how to add them.
+    Without the permission, the Apps Script API is never called."""
+    if not allowed:
+        report["appsScript"] = {"attached": False, "reason": "not_allowed"}
+        report["warnings"].append(
+            warning(
+                "macros_not_attached",
+                "To have macros added to the Sheet for you next time, sign out and sign in "
+                "again, allowing the app to manage Apps Script. For now, add them as described "
+                "in the other note.",
+                classification=C.IGNORED,
+            )
+        )
+        return
+    result = await attach(
+        google.client,
+        google.headers,
+        spreadsheet_id,
+        f"{title} – macros",
+        script.read_text(encoding="utf-8"),
+        zone,
+    )
+    if result.script_id:
+        report["appsScript"] = {"attached": True, "scriptId": result.script_id}
+        for note in report["warnings"]:
+            if note["code"] in PASTE_NOTES:
+                note.update(attached_note(note))
+        return
+    report["appsScript"] = {"attached": False, "reason": result.reason}
+    why = (
+        "the Apps Script API is turned off in your Google settings. Turn it on at "
+        f"{SETTINGS_URL} and convert again,"
+        if result.reason == "setting_off"
+        else "Google refused it. You can"
+    )
+    report["warnings"].append(
+        warning(
+            "macros_not_attached",
+            f"The macros couldn't be added to the Sheet for you, because {why} "
+            "or add them by hand as described in the other note.",
+            reason=result.reason,
+            classification=C.UNSUPPORTED,
+        )
+    )
+
+
+def attached_note(note: dict) -> dict:
+    """The paste-in note, rewritten for macros already in the Sheet."""
+    total = note.get("macroCount", 1)
+    them = "macros are" if total > 1 else "macro is"
+    message = (
+        f"The workbook's {them} in the Google Sheet: open it and use the Macros menu. "
+        "The first time a macro runs, Google asks you to allow it."
+    )
+    lines = note.get("untranslatedLines")
+    if lines:
+        message += (
+            f" {lines} line{'s' if lines != 1 else ''} couldn't be translated: "
+            f'{"they are" if lines != 1 else "it is"} marked "Not translated" in the '
+            "script, under Extensions → Apps Script."
+        )
+    code = "macros_attached" if not lines else "macros_partly_attached"
+    return {"code": code, "message": message}
 
 
 async def uk_settings(google, spreadsheet_id: str, time_zone: str | None) -> dict | None:
@@ -173,6 +246,7 @@ async def convert(
     dependencies_resolved: bool = False,
     original_name: str = "",
     time_zone: str | None = None,
+    attach_macros: bool = False,
 ) -> dict:
     if original_policy not in ORIGINAL_POLICIES:
         raise ValueError("Unknown original workbook policy")
@@ -235,6 +309,12 @@ async def convert(
                         "month first. Set it under File → Settings → Locale.",
                         classification=C.UNSUPPORTED,
                     )
+                )
+            script = root / "result" / "macros" / SCRIPT_NAME
+            if script.exists():
+                zone = (settings or {}).get("timeZone", DEFAULT_TIME_ZONE)
+                await add_macros(
+                    google, uploaded["id"], output_name, script, zone, attach_macros, report
                 )
             spreadsheet = await google.request(
                 "GET",

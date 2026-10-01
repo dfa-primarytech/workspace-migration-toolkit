@@ -30,7 +30,8 @@ class Pipeline:
     # Whether this deployment can convert it, not only check it.
     ready: Callable[[Settings], bool] = lambda settings: True
     needs_settings: bool = False  # its convert() takes settings=
-    needs_time_zone: bool = False  # its convert() takes time_zone=
+    # its convert() takes time_zone= and attach_macros= (spreadsheets)
+    needs_time_zone: bool = False
 
     def convertible(self, settings: Settings) -> bool:
         return self.ready(settings)

@@ -34,7 +34,8 @@ def test_oauth_state_and_pkce():
     auth = Auth(configured())
     url, state = auth.start()
     query = parse_qs(urlsplit(url).query)
-    assert query["scope"] == [SCOPE]
+    # drive.file, and optionally Apps Script, to add macros to a converted Sheet.
+    assert query["scope"] == [SCOPE + " https://www.googleapis.com/auth/script.projects"]
     assert query["code_challenge_method"] == ["S256"]
     assert state["verifier"] not in url
     assert "test-secret" not in url
