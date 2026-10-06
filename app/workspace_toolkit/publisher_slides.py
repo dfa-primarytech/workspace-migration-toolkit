@@ -679,6 +679,20 @@ def _scaled(style: dict, scale: float) -> dict:
     return {**style, "fontSize": {"magnitude": round(size * scale * 2) / 2, "unit": "PT"}}
 
 
+def _blank_cell(object_id: str, cell: dict, blank: tuple[dict, list[str]]) -> dict:
+    """Styles an empty cell's line break, which is all an empty cell has."""
+    style, fields = blank
+    return {
+        "updateTextStyle": {
+            "objectId": object_id,
+            "cellLocation": cell,
+            "textRange": {"type": "ALL"},
+            "style": style,
+            "fields": ",".join(fields),
+        }
+    }
+
+
 def _styled(where: dict[str, object], start: int, end: int, style: dict, fields: list[str]) -> dict:
     return {
         "updateTextStyle": {
@@ -1349,6 +1363,7 @@ class PageBuilder:
                     }
                 )
         layout = self._table_layout(element, frame, rows, columns, minimums)
+        blank = self._blank_cell_style(layout)
         for row in rows:
             for cell in row.get("cells", []):
                 if cell.get("covered"):
@@ -1390,6 +1405,8 @@ class PageBuilder:
                 )
                 self.requests += text
                 notes += more
+                if not text and blank:
+                    self.requests.append(_blank_cell(object_id, location, blank))
         if layout.fitted:
             notes += layout.fitted.notes
         # Over the table, so after it: Slides can't hold a picture in a cell.
@@ -1411,6 +1428,34 @@ class PageBuilder:
         )
         entry = self.line(element, C.SUBSTITUTED, *_unique(notes))
         self.made(element, entry, object_id)
+
+    def _blank_cell_style(self, layout: TableLayout) -> tuple[dict, list[str]] | None:
+        """The font an empty cell is set in: the one most of the table's text uses.
+
+        Publisher stores no font for an empty cell, and Slides sets an unstyled
+        one in 18 pt text, which makes its row at least about 30 pt tall.
+        """
+        counted: Counter = Counter()
+        for paragraphs in layout.texts.values():
+            for paragraph in paragraphs:
+                for run in paragraph.get("runs", []):
+                    style, _ = run_style(
+                        run["style"], run.get("sourceProperties") or {}, self.fonts
+                    )
+                    if "fontSize" in style:
+                        scale = layout.fitted.scale if layout.fitted else 1.0
+                        sized = _scaled(style, scale)
+                        key = (sized.get("fontFamily"), sized["fontSize"]["magnitude"])
+                        counted[key] += 1
+        if not counted:
+            return None
+        (family, size), _ = counted.most_common(1)[0]
+        blank: dict = {"fontSize": {"magnitude": size, "unit": "PT"}}
+        fields = ["fontSize"]
+        if family:
+            blank["fontFamily"] = family
+            fields.insert(0, "fontFamily")
+        return blank, fields
 
     def _table_layout(
         self, element: dict, frame: Frame, rows: list, columns: list, minimums: list[float]
@@ -1953,9 +1998,11 @@ def check(plan_: Plan, *, existing: Iterable[str] = (), bound: bool = False) -> 
             lengths[key] = lengths.get(key, 0) + utf16(body["text"])
         elif kind in {"updateTextStyle", "updateParagraphStyle", "createParagraphBullets"}:
             text_range = body["textRange"]
-            start, end = text_range["startIndex"], text_range["endIndex"]
-            if not 0 <= start < end <= lengths.get(key, 0):
-                problems.append(f"#{number}: range {start}-{end} outside {lengths.get(key, 0)}")
+            # ALL is every character there is, an empty cell's line break too.
+            if text_range.get("type") != "ALL":
+                start, end = text_range["startIndex"], text_range["endIndex"]
+                if not 0 <= start < end <= lengths.get(key, 0):
+                    problems.append(f"#{number}: range {start}-{end} outside {lengths.get(key, 0)}")
             if kind != "createParagraphBullets" and not body.get("fields"):
                 problems.append(f"#{number}: no fields")
     return problems
