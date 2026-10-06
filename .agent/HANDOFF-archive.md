@@ -925,3 +925,29 @@ archive rather than growing this one further.
   - `/root/wmt-test/bulk` keeps the bulk script, its log, listing and state: file and folder names only, no credentials.
   - Drive for Desktop (`G:`) refuses bursts of reads of online-only files with `FileNotFoundError`. Copy the files out first, with retries.
   - In Git Bash, a Python heredoc still loses backslashes (`'\n'` becomes `n`). Use the Edit tool.
+
+---
+
+- Agent: Claude Code (Claude 1, platform/Publisher)
+- Date: 2026-10-01
+- Branch: `docs/handoff-macros`, based on main `29907e9`. All my PRs are merged: #185, #186, #187, #189.
+- Objective: a real nursery workbook whose formulas broke in Google, and its macros. The owner asked for macro workbooks to convert, with the macros working in Google.
+- Files changed:
+  - #185: `sheets.py` (after import, `batchUpdate` sets locale `en_GB` and the person's time zone from `X-Time-Zone`, else Europe/London); `xlsx.py` (text-date note); `static/app.js` ("Not converted" row for a report with nothing to open; plain words for "Failed to fetch"); `web.py`, `pipelines.py` (`needs_time_zone`). Tests `test_sheets_locale.py`, `test_page_results.py`, `results_harness.js`.
+  - #186: new `vba.py` (bounded MS-CFB reader, MS-OVBA decompression, module sources); new `apps_script.py` (rule-based translator for recorded macros: select, autofill, values, formulas, copy/paste, insert/delete rows/columns/cells, font, fill, MsgBox; anything else is copied as a comment and counted); new `macros.py` (`macro_free` rewrites `.xlsm` as `.xlsx`, as Drive imports no `.xlsm`; `prepare` writes `result/macros/`); `xlsx.py`, `sheets.py` (uploads `converted.xlsx`; saves "Macros – original Excel VBA.txt" and "Macros for Google Sheets (Apps Script).txt" in the folder). Test `test_vba_macros.py`.
+  - #187: `auth.py` (optional `script.projects` scope; session `scripts`); new `script_projects.py` (`attach`: a bound project on the Sheet, manifest with `spreadsheets.currentonly`, `script.container.ui` and `sheets.macros`, so the macros show under Extensions → Macros); `sheets.py` (`add_macros`, `macro_notice`: `report["notice"]`, the one note shown on screen); `static/app.js`, `style.css` (the notice under the row). Test `test_script_projects.py`.
+  - #189: new `buttons.py` (each worksheet shape's sheet, anchor, label and assigned macro; `link`: the assigned macro, or the only macro when the label begins with its name in whole words); `apps_script.py` (`_linker`: `onOpen` sets `Drawing.setOnAction`, leaving linked drawings alone); `macros.py` (`button_notes`: `macro_buttons_linked`, `macro_buttons_not_linked`); `sheets.py` (notice adds "Its button works too."). Test `test_macro_buttons.py`.
+- Completed:
+  - Live, on the owner's real workbook (#189 too: its button runs its macro): it converts in one step, no `#VALUE!` left (dates typed as text now read as UK dates), the macro attached and runs from Extensions → Macros, the notice shows. The owner confirmed ("works like a charm").
+  - Apps Script API enabled on the Google Cloud project. Each person must also turn it on at script.google.com/home/usersettings; without it the report says `macros_not_attached` (`setting_off`) and the script stays as a text file in the folder.
+- Checks: 772 platform tests pass on main after #189; Ruff, mypy and the secret scan clean. Test container runs the #189 code (same as main `29907e9`).
+- Known failures: none.
+- Unresolved:
+  - Macro buttons (#189) work live: the owner's "Repair Columns" button runs `Repair`. But not on the very first open of the new Sheet; it did after the owner opened it again. Likely the Sheet opened before the script was attached. If it recurs, the notice should say to reload once, or a one-off "Turn on buttons" macro could link them with full authorisation.
+  - Only recorded-style macros translate. Hand-written VBA (loops, variables, UserForms, events) is kept as comments and reported as `macros_partly_translated` / `macros_not_translated`.
+  - The new scope means everyone already signed in sees a consent screen again on next sign-in.
+- Decisions: DECISIONS 2026-10-01: macro workbooks convert (supersedes 2026-09-28); macros attached when allowed; one note on screen for macros; buttons run their macros.
+- Next task: none claimed.
+- Warnings:
+  - Copies of the owner's nursery workbook (children's details) are in their Drive from the live test. Never put its contents, names or dates in issues, PRs or tests; the tests use synthetic workbooks.
+  - The test host's gcloud needs `gcloud auth login` now and then (organisation reauthentication policy) before the picture token can be renewed.

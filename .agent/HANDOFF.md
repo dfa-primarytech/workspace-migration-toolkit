@@ -2,6 +2,29 @@
 
 - Agent: Claude Code (Claude Sonnet 5.5, platform/Publisher)
 - Date: 2026-10-06
+- Branch: `fix/publisher-empty-table-cells`, based on main `c6689e2` (#193, deployed). Not merged.
+- Objective: the school's 28-page Publisher booklet came out of Slides with tables running over each other and off the page.
+- Files changed: `publisher_slides.py` (`_blank_cell_style`, `_blank_cell`; `deleteText` added to `KNOWN` and to `check`), new `tests/platform/test_publisher_table_cells.py`.
+- Completed:
+  - Cause: 30 of 45 cells in one table were empty tick boxes. Publisher stores no font for an empty cell; Slides sets an unstyled one in 18 pt, so every row was about 31 pt tall, not the planned 20.5 pt, and a table planned at 307 pt came out near 450 pt.
+  - Fix: an empty cell is given the font and size most of its table's text uses (scaled as the text is), by putting a space in, styling it and deleting it.
+  - Tested against the real Slides API: styling an empty cell directly is refused ("The object has no text"), so that route was dropped before shipping. With the space in and out, rows render about 23 pt. Page 19 of the booklet was replayed, old plan against new, onto scratch decks (290 requests accepted): the table's rows are visibly shorter. The scratch decks and the temporary sign-in are gone.
+- Checks: 817 platform tests pass; Ruff, format, mypy and the secret scan clean.
+- Known failures: none.
+- Unresolved:
+  - Only page 19 was replayed. Pages 20, 21 and 5 (overlapping tables, a table running off the page) should improve for the same reason; they need a real conversion to confirm.
+  - Text still made 75% smaller on 11 tables (pages 5, 9, 19, 20, 21, 24, 27) and may overflow; not touched.
+  - Tables' borders are Publisher's default grid (the file stores none).
+- Decisions: none new.
+- Next task: none claimed.
+- Warnings: the booklet is the owner's file; it lived on the test host only while testing and was removed. A request Google refuses fails a whole page, so any new request kind is tried against the live API first.
+
+---
+
+## Previous handoff
+
+- Agent: Claude Code (Claude Sonnet 5.5, platform/Publisher)
+- Date: 2026-10-06
 - Branch: `feat/publisher-wmf-pictures`, based on main `77c46c3` (#192, deployed to Cloud Run that day). Not merged.
 - Objective: a school's 28-page Publisher booklet converted to Slides badly. Its clipart was missing.
 - Files changed: new `app/workspace_toolkit/metafile.py` (a bounded WMF renderer: filled polygons, polypolygons with holes, rectangles, ellipses, solid brushes, plain pens; refuses a metafile needing text, a bitmap or an arc); `publisher_art.py` (`_open` draws a WMF); new `tests/platform/test_metafile.py` (metafiles built in code).
@@ -45,31 +68,3 @@
   - The 27 forms and their converted PDFs hold children's names, dates of birth and assessment data. They are in the owner's Downloads folder, not here. Never put their contents in issues, PRs or tests.
   - Tests that print a rewritten file's text must not run on those files.
   - The host test image `wmt-test/app:main` was rebuilt from main `8f45ba5` on 2026-10-02. It does not hold this branch.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code (Claude 1, platform/Publisher)
-- Date: 2026-10-01
-- Branch: `docs/handoff-macros`, based on main `29907e9`. All my PRs are merged: #185, #186, #187, #189.
-- Objective: a real nursery workbook whose formulas broke in Google, and its macros. The owner asked for macro workbooks to convert, with the macros working in Google.
-- Files changed:
-  - #185: `sheets.py` (after import, `batchUpdate` sets locale `en_GB` and the person's time zone from `X-Time-Zone`, else Europe/London); `xlsx.py` (text-date note); `static/app.js` ("Not converted" row for a report with nothing to open; plain words for "Failed to fetch"); `web.py`, `pipelines.py` (`needs_time_zone`). Tests `test_sheets_locale.py`, `test_page_results.py`, `results_harness.js`.
-  - #186: new `vba.py` (bounded MS-CFB reader, MS-OVBA decompression, module sources); new `apps_script.py` (rule-based translator for recorded macros: select, autofill, values, formulas, copy/paste, insert/delete rows/columns/cells, font, fill, MsgBox; anything else is copied as a comment and counted); new `macros.py` (`macro_free` rewrites `.xlsm` as `.xlsx`, as Drive imports no `.xlsm`; `prepare` writes `result/macros/`); `xlsx.py`, `sheets.py` (uploads `converted.xlsx`; saves "Macros – original Excel VBA.txt" and "Macros for Google Sheets (Apps Script).txt" in the folder). Test `test_vba_macros.py`.
-  - #187: `auth.py` (optional `script.projects` scope; session `scripts`); new `script_projects.py` (`attach`: a bound project on the Sheet, manifest with `spreadsheets.currentonly`, `script.container.ui` and `sheets.macros`, so the macros show under Extensions → Macros); `sheets.py` (`add_macros`, `macro_notice`: `report["notice"]`, the one note shown on screen); `static/app.js`, `style.css` (the notice under the row). Test `test_script_projects.py`.
-  - #189: new `buttons.py` (each worksheet shape's sheet, anchor, label and assigned macro; `link`: the assigned macro, or the only macro when the label begins with its name in whole words); `apps_script.py` (`_linker`: `onOpen` sets `Drawing.setOnAction`, leaving linked drawings alone); `macros.py` (`button_notes`: `macro_buttons_linked`, `macro_buttons_not_linked`); `sheets.py` (notice adds "Its button works too."). Test `test_macro_buttons.py`.
-- Completed:
-  - Live, on the owner's real workbook (#189 too: its button runs its macro): it converts in one step, no `#VALUE!` left (dates typed as text now read as UK dates), the macro attached and runs from Extensions → Macros, the notice shows. The owner confirmed ("works like a charm").
-  - Apps Script API enabled on the Google Cloud project. Each person must also turn it on at script.google.com/home/usersettings; without it the report says `macros_not_attached` (`setting_off`) and the script stays as a text file in the folder.
-- Checks: 772 platform tests pass on main after #189; Ruff, mypy and the secret scan clean. Test container runs the #189 code (same as main `29907e9`).
-- Known failures: none.
-- Unresolved:
-  - Macro buttons (#189) work live: the owner's "Repair Columns" button runs `Repair`. But not on the very first open of the new Sheet; it did after the owner opened it again. Likely the Sheet opened before the script was attached. If it recurs, the notice should say to reload once, or a one-off "Turn on buttons" macro could link them with full authorisation.
-  - Only recorded-style macros translate. Hand-written VBA (loops, variables, UserForms, events) is kept as comments and reported as `macros_partly_translated` / `macros_not_translated`.
-  - The new scope means everyone already signed in sees a consent screen again on next sign-in.
-- Decisions: DECISIONS 2026-10-01: macro workbooks convert (supersedes 2026-09-28); macros attached when allowed; one note on screen for macros; buttons run their macros.
-- Next task: none claimed.
-- Warnings:
-  - Copies of the owner's nursery workbook (children's details) are in their Drive from the live test. Never put its contents, names or dates in issues, PRs or tests; the tests use synthetic workbooks.
-  - The test host's gcloud needs `gcloud auth login` now and then (organisation reauthentication policy) before the picture token can be renewed.
