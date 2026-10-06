@@ -191,7 +191,12 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
     # The last table made for each paragraph, so a second box anchored in the
     # same paragraph goes after the first rather than in front of it.
     placed: dict[Element, Element] = {}
+    body = root.find(q("w", "body"))
+    first_paragraph = body.find(q("w", "p")) if body is not None else None
+    panels, absorbed = _panels_in_page_boxes(items, sections, first_paragraph)
     for item in items:
+        if id(item) in absorbed:
+            continue  # carried into the page-sized box it sits in
         if item.kind == "unsupported":
             # Never delete what we cannot convert -- leave it for the importer.
             unsupported[item.label] = unsupported.get(item.label, 0) + 1
@@ -202,8 +207,15 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
             # Counted only when a table was actually produced. A report saying
             # four text boxes were converted, when four empty boxes were
             # skipped, describes work that did not happen.
-            if _replace_textbox(parent_of, item, ids, placed):
-                report["textboxes"] += 1
+            inside = panels.get(id(item), [])
+            if _replace_textbox(parent_of, item, ids, placed, inside, sections, first_paragraph):
+                report["textboxes"] += 1 + len(inside)
+            else:
+                # The page-sized box held nothing, so its panels are boxes in
+                # their own right after all.
+                for panel in inside:
+                    if _replace_textbox(parent_of, panel, ids, placed):
+                        report["textboxes"] += 1
     # Pictures last, against the tree as the text boxes left it: a picture
     # floating inside a box has just moved into the cell the box became, and
     # the map taken before would still place it in the box, not the cell (#146).
@@ -278,8 +290,196 @@ def _anchor_to_inline(anchor: Element, drawing: Element, ids: Ids) -> bool:
     return True
 
 
+PAGE_BOX_SHARE = 0.85
+# Two points: a panel drawn flush with its box's edge is still inside it.
+EDGE_TOLERANCE_EMU = 25400
+PANEL_CELL_MARGIN_DXA = 120
+# A cell must end in a paragraph. The one after a panel is made a point tall
+# so it adds nothing to the row; this much more is kept free below the panel
+# so that a line height Google rounds up cannot tip the row onto a new page.
+PANEL_TAIL_DXA = 80
+
+
+def _covers_page(item: Anchored, geometry: dict) -> bool:
+    """Whether a box is about as big as the page: a form drawn as one box."""
+    width, height, extent = geometry.get("width"), geometry.get("height"), item.extent
+    if not (width and height and extent):
+        return False
+    return extent["cx"] >= PAGE_BOX_SHARE * width and extent["cy"] >= PAGE_BOX_SHARE * height
+
+
+def _paper_offset(position: dict | None, margin: int | None, text: int | None) -> int | None:
+    """Where a measured position lies on the paper, in EMU, or None if unknown."""
+    if not position or position["mode"] != "offset":
+        return None
+    origin = {"page": 0, "margin": margin, "text": text}.get(position["frame"])
+    return None if origin is None else origin + position["emu"]
+
+
+def _page_rect(item: Anchored, geometry: dict, first_paragraph: Element | None):
+    """(x, y, width, height) on the paper in EMU, when it can be known.
+
+    A position against a paragraph is only known when that is the document's
+    first paragraph, which starts at the top margin; elsewhere it depends on
+    the layout, and the box is not placed.
+    """
+    if item.extent is None:
+        return None
+    left, top = geometry.get("left"), geometry.get("top")
+    x = _paper_offset(item.h, left, left)
+    y = _paper_offset(item.v, top, top if item.paragraph is first_paragraph else None)
+    if x is None or y is None:
+        return None
+    return x, y, item.extent["cx"], item.extent["cy"]
+
+
+def _within(inner: tuple, outer: tuple) -> bool:
+    ix, iy, iw, ih = inner
+    ox, oy, ow, oh = outer
+    slack = EDGE_TOLERANCE_EMU
+    return (
+        ix >= ox - slack
+        and iy >= oy - slack
+        and ix + iw <= ox + ow + slack
+        and iy + ih <= oy + oh + slack
+    )
+
+
+def _panels_in_page_boxes(
+    items: list[Anchored], sections: Sections, first_paragraph: Element | None
+) -> tuple[dict[int, list[Anchored]], set[int]]:
+    """Finds small boxes that lie inside a page-sized box in the same paragraph.
+
+    Google lays floating tables out one after another rather than over one
+    another, so a "reviewed" panel drawn inside a form's frame lands pages
+    below it. A panel that is provably inside the frame goes into the frame's
+    own table instead.
+    """
+    boxes = [i for i in items if i.kind == "textbox" and i.paragraph is not None]
+    panels: dict[int, list[Anchored]] = {}
+    absorbed: set[int] = set()
+    for host in boxes:
+        geometry = page_geometry(sections.of(host.anchor))
+        if id(host) in absorbed or not _covers_page(host, geometry):
+            continue
+        frame = _page_rect(host, geometry, first_paragraph)
+        if frame is None:
+            continue
+        found = []
+        for other in boxes:
+            if other is host or id(other) in absorbed or other.paragraph is not host.paragraph:
+                continue
+            rect = _page_rect(other, geometry, first_paragraph)
+            if rect is not None and not _covers_page(other, geometry) and _within(rect, frame):
+                found.append((rect[1], other))
+        if found:
+            found.sort(key=lambda pair: pair[0])
+            panels[id(host)] = [other for _, other in found]
+            absorbed.update(id(other) for _, other in found)
+    return panels, absorbed
+
+
+def _carry_panels(
+    table: Element,
+    host: Anchored,
+    panels: list[Anchored],
+    sections: Sections,
+    first_paragraph: Element | None,
+    ids: Ids,
+) -> None:
+    """Adds each panel to its page-sized box's table, down the page where it was.
+
+    Each panel gets a row of its own. The row above it is given a minimum
+    height so the panel starts where it was drawn, lifted when it would
+    otherwise end below the bottom margin: a row that does not fit the page
+    is pushed whole onto the next one.
+    """
+    geometry = page_geometry(sections.of(host.anchor))
+    frame = _page_rect(host, geometry, first_paragraph)
+    if frame is None or host.extent is None:
+        return
+    width = to_dxa(host.extent["cx"])
+    page, bottom = geometry.get("height"), geometry.get("bottom")
+    usable_bottom = page - bottom if page is not None and bottom is not None else None
+    above = table.find(q("w", "tr"))
+    previous_top = frame[1]
+    for panel in panels:
+        rect = _page_rect(panel, geometry, first_paragraph)
+        _detach(panel.drawing, panel.anchor)
+        if rect is None:
+            continue
+        indent = max(0, to_dxa(rect[0] - frame[0]) - 2 * PANEL_CELL_MARGIN_DXA)
+        room = width - 2 * PANEL_CELL_MARGIN_DXA - indent
+        nested = build_table(panel, ids, fit=room, indent=indent)
+        if nested is None:
+            continue
+        top = rect[1]
+        if usable_bottom is not None:
+            # A floating table also keeps the box's own distance from the text
+            # below it, and one that does not fit the page whole is not put on
+            # it at all.
+            tail = PANEL_TAIL_DXA + wrap_gap(host.anchor, "distB")
+            top = min(top, usable_bottom - rect[3] - tail * EMU_PER_DXA)
+        top = max(top, previous_top)
+        _row_height(above, to_dxa(top - previous_top))
+        row = SubElement(table, q("w", "tr"))
+        cell = SubElement(row, q("w", "tc"))
+        properties = SubElement(cell, q("w", "tcPr"))
+        SubElement(properties, q("w", "tcW")).attrib.update(
+            {q("w", "w"): str(width), q("w", "type"): "dxa"}
+        )
+        # Sides only: this row holds the panel and nothing else, so padding
+        # above and below it would be height the page does not have.
+        margins = SubElement(properties, q("w", "tcMar"))
+        for side in ("top", "left", "bottom", "right"):
+            gap = PANEL_CELL_MARGIN_DXA if side in ("left", "right") else 0
+            SubElement(margins, q("w", side)).attrib.update(
+                {q("w", "w"): str(gap), q("w", "type"): "dxa"}
+            )
+        SubElement(properties, q("w", "vAlign")).set(q("w", "val"), "top")
+        cell.append(nested)
+        cell.append(_hairline_paragraph())
+        _row_height(row, to_dxa(rect[3]))
+        above, previous_top = row, top
+
+
+def _hairline_paragraph() -> Element:
+    """The paragraph a cell must end with, as short as one can be made."""
+    paragraph = Element(q("w", "p"))
+    properties = SubElement(paragraph, q("w", "pPr"))
+    SubElement(properties, q("w", "spacing")).attrib.update(
+        {
+            q("w", "before"): "0",
+            q("w", "after"): "0",
+            q("w", "line"): "20",
+            q("w", "lineRule"): "exact",
+        }
+    )
+    SubElement(SubElement(properties, q("w", "rPr")), q("w", "sz")).set(q("w", "val"), "2")
+    return paragraph
+
+
+def _row_height(row: Element | None, height: int) -> None:
+    """Gives a row a minimum height (never a fixed one: text must not be cut)."""
+    if row is None or height <= 0:
+        return
+    properties = row.find(q("w", "trPr"))
+    if properties is None:
+        properties = Element(q("w", "trPr"))
+        row.insert(0, properties)
+    sized = SubElement(properties, q("w", "trHeight"))
+    sized.set(q("w", "val"), str(height))
+    sized.set(q("w", "hRule"), "atLeast")
+
+
 def _replace_textbox(
-    parent_of: dict, item: Anchored, ids: Ids, placed: dict[Element, Element] | None = None
+    parent_of: dict,
+    item: Anchored,
+    ids: Ids,
+    placed: dict[Element, Element] | None = None,
+    inside: list[Anchored] | None = None,
+    sections: Sections | None = None,
+    first_paragraph: Element | None = None,
 ) -> bool:
     paragraph = item.paragraph
     _detach(item.drawing, item.anchor)
@@ -293,6 +493,8 @@ def _replace_textbox(
         # An empty box, or one with no content to move. Nothing was converted,
         # and the report must not claim otherwise.
         return False
+    if inside and sections is not None:
+        _carry_panels(table, item, inside, sections, first_paragraph, ids)
     # Inserted straight after the paragraph, every box in it would land in
     # front of the one before and the page would read backwards. Boxes from
     # one paragraph keep the order they were written in.
@@ -764,11 +966,20 @@ def is_empty_box(content: Element) -> bool:
     return all(_hollow(child) for paragraph in paragraphs for child in paragraph)
 
 
-def build_table(item: Anchored, ids: Ids) -> Element | None:
+def build_table(
+    item: Anchored, ids: Ids, *, fit: int | None = None, indent: int = 0
+) -> Element | None:
+    """The table a text box becomes.
+
+    With `fit`, the table does not float: it sits inline in a cell that leaves
+    `fit` twips, indented `indent` from that cell's edge.
+    """
     content = item.anchor.find(".//" + q("w", "txbxContent"))
     if content is None or is_empty_box(content):
         return None
     width = to_dxa(item.extent["cx"]) if item.extent else 9000
+    if fit is not None:
+        width = max(1, min(width, fit))
     rtl = box_direction(content, item.paragraph)
 
     table = Element(q("w", "tbl"))
@@ -777,7 +988,7 @@ def build_table(item: Anchored, ids: Ids) -> Element | None:
     # Schema order: CT_TblPrBase runs tblpPr, tblOverlap, bidiVisual, then
     # tblW. Emitting bidiVisual after tblW would be rejected by a validating
     # reader even though every element is individually correct.
-    position = floating_properties(item)
+    position = floating_properties(item) if fit is None else None
     if position is not None:
         properties.append(position)
         SubElement(properties, q("w", "tblOverlap")).set(q("w", "val"), "never")
@@ -792,14 +1003,20 @@ def build_table(item: Anchored, ids: Ids) -> Element | None:
     SubElement(properties, q("w", "tblW")).attrib.update(
         {q("w", "w"): str(width), q("w", "type"): "dxa"}
     )
+    if fit is not None and indent:
+        SubElement(properties, q("w", "tblInd")).attrib.update(
+            {q("w", "w"): str(indent), q("w", "type"): "dxa"}
+        )
+    outline = box_outline(item.anchor)
     borders = SubElement(properties, q("w", "tblBorders"))
     for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        framed = outline if side in ("top", "left", "bottom", "right") else None
         SubElement(borders, q("w", side)).attrib.update(
             {
-                q("w", "val"): "none",
-                q("w", "sz"): "0",
+                q("w", "val"): "single" if framed else "none",
+                q("w", "sz"): str(framed[0]) if framed else "0",
                 q("w", "space"): "0",
-                q("w", "color"): "auto",
+                q("w", "color"): framed[1] if framed else "auto",
             }
         )
     SubElement(properties, q("w", "tblLook")).set(q("w", "val"), "0000")
@@ -827,7 +1044,7 @@ def build_cell(item: Anchored, content: Element, width: int, rtl: bool = False) 
     margins = SubElement(properties, q("w", "tcMar"))
     for side in ("top", "left", "bottom", "right"):
         SubElement(margins, q("w", side)).attrib.update({q("w", "w"): "120", q("w", "type"): "dxa"})
-    SubElement(properties, q("w", "vAlign")).set(q("w", "val"), "center")
+    SubElement(properties, q("w", "vAlign")).set(q("w", "val"), box_vertical_align(item.anchor))
 
     # Move the original paragraphs verbatim rather than rebuilding them: all
     # their formatting, runs and inline images come along untouched.
@@ -841,6 +1058,51 @@ def build_cell(item: Anchored, content: Element, width: int, rtl: bool = False) 
         # inherit.
         cell.append(new_paragraph(rtl))
     return cell
+
+
+BOX_ALIGN = {"t": "top", "ctr": "center", "b": "bottom"}
+OUTLINE_COLOURS = {
+    "black": "000000",
+    "white": "FFFFFF",
+    "tx1": "000000",
+    "dk1": "000000",
+    "bg1": "FFFFFF",
+    "lt1": "FFFFFF",
+}
+
+
+def box_vertical_align(anchor: Element) -> str:
+    """Where a box says its text sits; a box that says nothing stays centred."""
+    body = anchor.find(".//" + q("wps", "bodyPr"))
+    stated = body.get("anchor") if body is not None else None
+    return BOX_ALIGN.get(stated or "", "center")
+
+
+def box_outline(anchor: Element) -> tuple[int, str] | None:
+    """A text box's visible outline as (eighths of a point, colour), or None.
+
+    A white outline counts as none: it is invisible on a white page, and a
+    coloured border would show where the author drew nothing.
+    """
+    line = anchor.find(".//" + q("wps", "spPr") + "/" + q("a", "ln"))
+    if line is None or line.find(q("a", "noFill")) is not None:
+        return None
+    solid = line.find(q("a", "solidFill"))
+    if solid is None:
+        return None
+    colour = "auto"
+    for child in solid:
+        if local(child.tag) == "srgbClr" and child.get("val"):
+            colour = child.get("val", "auto").upper()
+        elif local(child.tag) in ("prstClr", "schemeClr", "sysClr"):
+            colour = OUTLINE_COLOURS.get(child.get("val", ""), "auto")
+    if colour == "FFFFFF":
+        return None
+    try:
+        points = int(line.get("w", "")) / 12700
+    except ValueError:
+        points = 0.75
+    return max(2, min(96, round(points * 8))), colour
 
 
 def shape_fill(anchor: Element) -> str | None:

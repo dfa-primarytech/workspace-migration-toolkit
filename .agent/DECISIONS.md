@@ -804,3 +804,31 @@ staff domains, and only a verified Workspace account on one of them gets in
 (`auth.check_account`). Pupils, personal Google accounts and everyone else are
 refused. The list lives in the deployment's settings, not the public repo.
 Unset, as on the test host, sign-in is unchanged.
+
+## 2026-10-06: A box inside a page-sized box goes into its table
+
+From a real set of forms: each was one text box the size of the page, holding
+a header and bordered tables, with a small "reviewed" panel drawn inside it
+near the foot. The converter made every box a floating table, and Google lays
+floating tables out one after another rather than over one another. So the
+panel landed pages below the form, the boxes came out in the wrong order (each
+was inserted in front of the one before), and the form's right-hand side was
+cut off: the table was narrowed to the page margins though the frame hangs
+34 pt into the margin on purpose and fits the paper, while the table inside it
+kept its old width.
+- A floating table is bounded by the room to the paper's edge, not the
+  margins. Tables nested in a floating table that is narrowed are brought down
+  to their cell. Nested grids in ordinary tables are still left as stated.
+- Boxes from one paragraph keep the order they were written in.
+- A box that provably lies inside a page-sized one (same paragraph, positions
+  known) becomes a row of that box's table, with the row above it given a
+  minimum height so it starts where it was drawn. A position against a
+  paragraph is only known for the document's first paragraph. The panel is
+  lifted to end above the bottom margin, because a floating table that does not
+  fit its page is not put on it.
+- A box's visible outline becomes the table's border, and its stated vertical
+  anchor sets the cell's alignment. A box that states neither stays as before.
+- Not solved: a form's content is taller as table rows than it was as a text
+  box, so the form can run past one page. Shrinking it would change the
+  author's formatting, so it is left for the owner to see in Google first.
+  Only checked in Word, never in Google.

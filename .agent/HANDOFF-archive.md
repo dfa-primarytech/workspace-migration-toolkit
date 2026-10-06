@@ -867,3 +867,27 @@ archive rather than growing this one further.
 - Decisions: DECISIONS.md, 2026-09-29 (XLSX extent/index/cleanup and live native import).
 - Next task: visually compare the generated workbook against its Expected results sheet, then add targeted regression work only for observed fidelity losses.
 - Warnings: the downloaded conversion report contains private Drive file and folder IDs and must not be committed. No school document or OAuth token is in this branch.
+
+---
+
+- Agent: Claude Code (Claude 2, DOCX/platform/parser)
+- Date: 2026-09-30
+- Branch: `docs/handoff-readback`, based on main `82213d0`. All my PRs are merged: #167 (#55), #169 (#168), #171 (#53), #172 (#54).
+- Objective: the last audit and backlog issues in my split with Claude 1: #55, #168, #53, #54.
+- Files changed (across those PRs): `docs.py` (`_place_above` containment and `_table_start`; `saved_page_count`, `topLevelTables`/`sourcePages` in `render`; `convert` calls the read-back and, when the setting is on, the repair); `readback.py` (new: `document_facts`, `findings`, `read_back`, `separators`, `repair_requests`, `repair_blank_pages`); `pdf_pages.py` (new: a bounded page-count and blank-page reader); `google.py` (new methods only: `document`, `export_pdf`, `batch_update`, and `PDF_EXPORT_LIMIT`); `config.py` (`docx_repair_blank_pages`, env `WMT_DOCX_REPAIR_BLANK_PAGES`); `pipelines.py` (Word `needs_settings`); `docs/platform.md`; DECISIONS (#53, #54); tests `test_docx_straddling.py`, `test_docx_table_position.py`, `test_docx_readback.py`, `test_docx_blank_page_repair.py`.
+- Completed:
+  - #55: a picture above a table moves only if it fits wholly in one column; straddlers leave their stack and are counted as uncertain once across both passes.
+  - #168: those columns are placed where the table says (`tblInd`, `jc`, `tblpPr`); an inexact position leaves and reports the pictures.
+  - #53: after a Word import, `documents.get` and a PDF export give `readBack` in the saved report only: floating pictures, lost tables, page-break-only paragraphs, a changed page count, probably-blank pages. Counts and page numbers, never text; a failed read is recorded, never a failed conversion.
+  - #54: optional repair, off by default. When on and blank pages were found, one `batchUpdate` guarded by `requiredRevisionId` sets empty separator paragraphs to 1 pt with no keep-together or spacing, then recounts pages. Reported under `readBack.repair`.
+  - Every new test failed on the code below it in CI first; each PR names its red run.
+- Checks: 658 platform tests pass on main (Claude 1's count after #172); Ruff, mypy and the secret scan clean.
+- Known failures: none.
+- Unresolved, all for the live test on the test host:
+  - #53 has only met a fake Google. Check that a real conversion's `readBack.checked` includes `pdf` with a page count. If it says `"unavailable": {"pdf": "unreadable"}`, the small reader can't open Google's PDFs; `pypdf` is the fallback.
+  - Whether "probably blank" is useful or noisy on real worksheets.
+  - #54 stays off until `documents.batchUpdate` under `drive.file` is shown to work; then try it on a worksheet with blank pages and compare `pagesBefore`/`pagesAfter`.
+  - `tblInd` is read to the table's leading edge (ECMA-376); Word's pre-2013 layouts differ by a cell margin, not modelled.
+- Decisions: DECISIONS 2026-09-30 for #53 (report only; own PDF reader; not verified live) and #54 (optional, off by default).
+- Next task: none claimed. The only open issue is #5 (a standing request for real files).
+- Warnings: the scratchpad venv's `.pth` points at `wmt-docx-fixes/app`, and the worker subprocess gets a fixed environment without `PYTHONPATH`, so tests run from another checkout convert with this checkout's code. Run `scripts/check_secrets.py` before pushing: `detect-secrets` flags a variable named `SECRET` even in a test.
