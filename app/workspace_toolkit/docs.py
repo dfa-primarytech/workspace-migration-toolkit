@@ -188,6 +188,9 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
             and any(axis and axis.get("uncertain") for axis in (item.h, item.v))
         ),
     }
+    # The last table made for each paragraph, so a second box anchored in the
+    # same paragraph goes after the first rather than in front of it.
+    placed: dict[Element, Element] = {}
     for item in items:
         if item.kind == "unsupported":
             # Never delete what we cannot convert -- leave it for the importer.
@@ -199,7 +202,7 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
             # Counted only when a table was actually produced. A report saying
             # four text boxes were converted, when four empty boxes were
             # skipped, describes work that did not happen.
-            if _replace_textbox(parent_of, item, ids):
+            if _replace_textbox(parent_of, item, ids, placed):
                 report["textboxes"] += 1
     # Pictures last, against the tree as the text boxes left it: a picture
     # floating inside a box has just moved into the cell the box became, and
@@ -275,7 +278,9 @@ def _anchor_to_inline(anchor: Element, drawing: Element, ids: Ids) -> bool:
     return True
 
 
-def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> bool:
+def _replace_textbox(
+    parent_of: dict, item: Anchored, ids: Ids, placed: dict[Element, Element] | None = None
+) -> bool:
     paragraph = item.paragraph
     _detach(item.drawing, item.anchor)
     if paragraph is None:
@@ -288,13 +293,19 @@ def _replace_textbox(parent_of: dict, item: Anchored, ids: Ids) -> bool:
         # An empty box, or one with no content to move. Nothing was converted,
         # and the report must not claim otherwise.
         return False
-    index = list(container).index(paragraph)
+    # Inserted straight after the paragraph, every box in it would land in
+    # front of the one before and the page would read backwards. Boxes from
+    # one paragraph keep the order they were written in.
+    after = (placed or {}).get(paragraph, paragraph)
+    index = list(container).index(after)
     # A paragraph carrying <w:sectPr> *ends* its section. Inserting after it
     # would push the table into the next section, where a different page size,
     # orientation and set of margins apply -- so portrait content can end up
     # laid out landscape. Content belonging to this section must precede it.
-    at = index if _ends_section(paragraph) else index + 1
+    at = index if after is paragraph and _ends_section(paragraph) else index + 1
     container.insert(at, table)
+    if placed is not None:
+        placed[paragraph] = table
     # Kept in step with what just moved: the box's paragraphs are now in the
     # table's cell. A box nested in this one is anchored in one of them, and
     # the map taken before would send it to the box it has left (#119).
@@ -1008,9 +1019,16 @@ def fit_tables_to_page(root: Element, fallback: Element | None = None) -> dict:
     for table in root.iter(q("w", "tbl")):
         if _enclosing(parent_of, parent_of.get(table), "tbl") is not None:
             continue
-        usable = printable_width(sections.of(table))
+        section = sections.of(table)
+        usable = printable_width(section)
         if usable is None:
             continue
+        # A floating table is placed by the page, not by the margins, so what
+        # bounds it is the room from where it starts to the paper's edge. A
+        # form's frame hangs a little into the margin on purpose.
+        room = _room_to_page_edge(table, section)
+        if room is not None:
+            usable = room
         grid = table.find(q("w", "tblGrid"))
         columns = grid.findall(q("w", "gridCol")) if grid is not None else []
         measured = [_measure(column, "w") for column in columns]
@@ -1033,7 +1051,73 @@ def fit_tables_to_page(root: Element, fallback: Element | None = None) -> dict:
                 _scale_dxa(cell.find(q("w", "tcPr") + "/" + q("w", "tcW")), factor)
         report["tablesNarrowed"] += 1
         report["picturesShrunk"] += _shrink_pictures(table, parent_of, factor)
+        # Only a floating table, which is what a text box becomes. An ordinary
+        # table's nested grids are left as they were stated.
+        if table.find(q("w", "tblPr") + "/" + q("w", "tblpPr")) is not None:
+            report["picturesShrunk"] += _fit_nested_tables(table, parent_of)
     return report
+
+
+def _room_to_page_edge(table: Element, section: Element | None) -> int | None:
+    """Twips from a floating table's left edge to the page's right edge.
+
+    None for a table that is not floating, or whose horizontal place is named
+    ("centre") rather than measured, which the margins already bound.
+    """
+    position = table.find(q("w", "tblPr") + "/" + q("w", "tblpPr"))
+    if position is None or section is None:
+        return None
+    start = _measure(position, "tblpX")
+    if start is None:
+        return None
+    page = _measure(section.find(q("w", "pgSz")), "w")
+    margins = section.find(q("w", "pgMar"))
+    left = _measure(margins, "left") or 0
+    origin = 0 if position.get(q("w", "horzAnchor")) == "page" else left
+    if page is None or page <= 0:
+        return None
+    room = page - (origin + start)
+    return room if room > 0 else None
+
+
+def _fit_nested_tables(table: Element, parent_of: dict) -> int:
+    """Brings tables inside this one's cells down to the cells that hold them.
+
+    Narrowing the outer table leaves a table nested in it at its old grid, so
+    the inner table runs past the outer one's edge. This is how a form's right
+    hand side was cut off. A nested table is still bounded by its cell, not
+    the page, so each is measured against the cell it is in. Only floating
+    tables are given this: nested grids elsewhere are left as stated.
+    """
+    shrunk = 0
+    padding = _cell_padding(table)
+    for cell in table.iter(q("w", "tc")):
+        if _enclosing(parent_of, parent_of.get(cell), "tbl") is not table:
+            continue
+        available = _cell_width(cell, parent_of) - padding
+        if available <= 0:
+            continue
+        for nested in cell.findall(q("w", "tbl")):
+            grid = nested.find(q("w", "tblGrid"))
+            columns = grid.findall(q("w", "gridCol")) if grid is not None else []
+            measured = [_measure(column, "w") for column in columns]
+            widths = [width for width in measured if width is not None]
+            if not widths or len(widths) != len(measured):
+                continue
+            indent = _measure(nested.find(q("w", "tblPr") + "/" + q("w", "tblInd")), "w") or 0
+            need = sum(widths) + indent
+            if need > available:
+                factor = available / need
+                for column, width in zip(columns, widths, strict=True):
+                    column.set(q("w", "w"), str(max(1, round(width * factor))))
+                _scale_dxa(nested.find(q("w", "tblPr") + "/" + q("w", "tblW")), factor)
+                _scale_dxa(nested.find(q("w", "tblPr") + "/" + q("w", "tblInd")), factor)
+                for inner in nested.iter(q("w", "tc")):
+                    if _enclosing(parent_of, parent_of.get(inner), "tbl") is nested:
+                        _scale_dxa(inner.find(q("w", "tcPr") + "/" + q("w", "tcW")), factor)
+                shrunk += _shrink_pictures(nested, parent_of, factor)
+            shrunk += _fit_nested_tables(nested, parent_of)
+    return shrunk
 
 
 def _scale_dxa(width: Element | None, factor: float) -> None:
