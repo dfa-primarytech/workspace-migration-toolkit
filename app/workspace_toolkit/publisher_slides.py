@@ -679,18 +679,29 @@ def _scaled(style: dict, scale: float) -> dict:
     return {**style, "fontSize": {"magnitude": round(size * scale * 2) / 2, "unit": "PT"}}
 
 
-def _blank_cell(object_id: str, cell: dict, blank: tuple[dict, list[str]]) -> dict:
-    """Styles an empty cell's line break, which is all an empty cell has."""
+def _blank_cell(object_id: str, cell: dict, blank: tuple[dict, list[str]]) -> list[dict]:
+    """Sets an empty cell's text size, which Google refuses to do directly.
+
+    Slides will not style a cell with no text ("The object has no text"), and
+    it sets one in 18 pt, which makes its row about 30 pt tall. So a space is
+    put in, styled, and taken out again: the cell is empty at the end, and its
+    line break keeps the size (checked against the live API).
+    """
     style, fields = blank
-    return {
-        "updateTextStyle": {
-            "objectId": object_id,
-            "cellLocation": cell,
-            "textRange": {"type": "ALL"},
-            "style": style,
-            "fields": ",".join(fields),
-        }
-    }
+    where = {"objectId": object_id, "cellLocation": cell}
+    one = {"type": "FIXED_RANGE", "startIndex": 0, "endIndex": 1}
+    return [
+        {"insertText": {**where, "insertionIndex": 0, "text": " "}},
+        {
+            "updateTextStyle": {
+                **where,
+                "textRange": one,
+                "style": style,
+                "fields": ",".join(fields),
+            }
+        },
+        {"deleteText": {**where, "textRange": one}},
+    ]
 
 
 def _styled(where: dict[str, object], start: int, end: int, style: dict, fields: list[str]) -> dict:
@@ -1406,7 +1417,7 @@ class PageBuilder:
                 self.requests += text
                 notes += more
                 if not text and blank:
-                    self.requests.append(_blank_cell(object_id, location, blank))
+                    self.requests += _blank_cell(object_id, location, blank)
         if layout.fitted:
             notes += layout.fitted.notes
         # Over the table, so after it: Slides can't hold a picture in a cell.
@@ -1915,6 +1926,7 @@ KNOWN = {
     "createShape",
     "updateShapeProperties",
     "insertText",
+    "deleteText",
     "updateTextStyle",
     "updateParagraphStyle",
     "createImage",
@@ -1996,13 +2008,16 @@ def check(plan_: Plan, *, existing: Iterable[str] = (), bound: bool = False) -> 
             if body["insertionIndex"] > lengths.get(key, 0):
                 problems.append(f"#{number}: text inserted past the end")
             lengths[key] = lengths.get(key, 0) + utf16(body["text"])
+        elif kind == "deleteText":
+            start, end = body["textRange"]["startIndex"], body["textRange"]["endIndex"]
+            if not 0 <= start < end <= lengths.get(key, 0):
+                problems.append(f"#{number}: delete {start}-{end} outside {lengths.get(key, 0)}")
+            lengths[key] = lengths.get(key, 0) - (end - start)
         elif kind in {"updateTextStyle", "updateParagraphStyle", "createParagraphBullets"}:
             text_range = body["textRange"]
-            # ALL is every character there is, an empty cell's line break too.
-            if text_range.get("type") != "ALL":
-                start, end = text_range["startIndex"], text_range["endIndex"]
-                if not 0 <= start < end <= lengths.get(key, 0):
-                    problems.append(f"#{number}: range {start}-{end} outside {lengths.get(key, 0)}")
+            start, end = text_range["startIndex"], text_range["endIndex"]
+            if not 0 <= start < end <= lengths.get(key, 0):
+                problems.append(f"#{number}: range {start}-{end} outside {lengths.get(key, 0)}")
             if kind != "createParagraphBullets" and not body.get("fields"):
                 problems.append(f"#{number}: no fields")
     return problems

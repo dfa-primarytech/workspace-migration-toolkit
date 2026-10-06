@@ -9,7 +9,7 @@ table's own text uses.
 
 from __future__ import annotations
 
-from .test_publisher_slides import element, paragraph, planned, requests, run
+from .test_publisher_slides import element, paragraph, planned, run
 
 
 def cell(row: int, column: int, *runs: dict) -> dict:
@@ -38,13 +38,23 @@ def table_of(rows: list[list[dict]], frame=(10, 10, 300, 200)) -> dict:
     return element("el_1", "table", 0, frame, table={"columns": columns, "rows": body})
 
 
-def cell_styles(result) -> dict[tuple[int, int], dict]:
-    found = {}
-    for style in requests(result, "updateTextStyle"):
-        place = style.get("cellLocation")
-        if place and style["textRange"]["type"] == "ALL":
-            found[(place["rowIndex"], place["columnIndex"])] = style
-    return found
+def blank_cells(result) -> dict[tuple[int, int], list[tuple[str, dict]]]:
+    """The requests that touch each cell whose text is only a space put in and out."""
+    seen: dict[tuple[int, int], list[tuple[str, dict]]] = {}
+    for page in result.pages:
+        for request in page:
+            kind = next(iter(request))
+            place = request[kind].get("cellLocation")
+            if place:
+                seen.setdefault((place["rowIndex"], place["columnIndex"]), []).append(
+                    (kind, request[kind])
+                )
+    return {
+        cell: steps
+        for cell, steps in seen.items()
+        if [k for k, _ in steps] == ["insertText", "updateTextStyle", "deleteText"]
+        and steps[0][1]["text"] == " "
+    }
 
 
 def test_an_empty_cell_is_set_in_the_size_and_font_of_its_tables_text():
@@ -54,12 +64,15 @@ def test_an_empty_cell_is_set_in_the_size_and_font_of_its_tables_text():
     ]
     result = planned(_one_page(table_of(rows)))
 
-    styled = cell_styles(result)
-    assert set(styled) == {(0, 1), (1, 0)}, "only the empty cells"
-    for style in styled.values():
+    blank = blank_cells(result)
+    assert set(blank) == {(0, 1), (1, 0)}, "only the empty cells"
+    for (_, put), (_, style), (_, taken) in blank.values():
+        assert put["insertionIndex"] == 0
+        assert style["textRange"] == {"type": "FIXED_RANGE", "startIndex": 0, "endIndex": 1}
         assert style["style"]["fontSize"] == {"magnitude": 8.0, "unit": "PT"}
         assert style["style"]["fontFamily"] == "Arial"
         assert style["fields"] == "fontFamily,fontSize"
+        assert taken["textRange"] == {"type": "FIXED_RANGE", "startIndex": 0, "endIndex": 1}
 
 
 def test_the_commonest_size_wins_when_a_table_mixes_sizes():
@@ -69,13 +82,13 @@ def test_the_commonest_size_wins_when_a_table_mixes_sizes():
     ]
     result = planned(_one_page(table_of(rows)))
 
-    assert cell_styles(result)[(1, 1)]["style"]["fontSize"]["magnitude"] == 8.0
+    assert blank_cells(result)[(1, 1)][1][1]["style"]["fontSize"]["magnitude"] == 8.0
 
 
 def test_a_table_with_no_text_at_all_is_left_as_it_was():
     result = planned(_one_page(table_of([[cell(0, 0), cell(0, 1)], [cell(1, 0), cell(1, 1)]])))
 
-    assert cell_styles(result) == {}
+    assert blank_cells(result) == {}
 
 
 def _one_page(table: dict) -> dict:
