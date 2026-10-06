@@ -1,5 +1,27 @@
 # Handoff
 
+- Agent: Claude Code (Claude Sonnet 5.5, platform/Publisher)
+- Date: 2026-10-06
+- Branch: `feat/publisher-wmf-pictures`, based on main `77c46c3` (#192, deployed to Cloud Run that day). Not merged.
+- Objective: a school's 28-page Publisher booklet converted to Slides badly. Its clipart was missing.
+- Files changed: new `app/workspace_toolkit/metafile.py` (a bounded WMF renderer: filled polygons, polypolygons with holes, rectangles, ellipses, solid brushes, plain pens; refuses a metafile needing text, a bitmap or an arc); `publisher_art.py` (`_open` draws a WMF); new `tests/platform/test_metafile.py` (metafiles built in code).
+- Completed:
+  - The booklet's six WMF pictures (pages 16 and 17) were `UNSUPPORTED: picture-missing`; they now convert (0 unsupported). Drawn and looked at: clipart illustrations, correct way up. A negative window extent (Publisher's own) was the bug the first run found; there is a test for it.
+  - Run through the container with this branch: 28 pages, status counts NATIVE 130, SUBSTITUTED 155, IGNORED 96, FLATTENED 2.
+- Checks: 814 platform tests pass; Ruff, format, mypy and the secret scan clean.
+- Known failures: none in the code. Not checked in Google.
+- Unresolved, all on the same booklet and all unseen in Slides:
+  - 29 tables over 12 pages. 11 had their text made 75% smaller and may still overflow (pages 5, 9, 19, 20, 21, 24, 27); 21 narrow columns were widened (pages 10, 12, 16, 17, 19 to 21, 24). Borders are Publisher's default grid, as the file stores none.
+  - 74 shapes are drawn as separate lines.
+  - What the teacher meant by "a lot of pages to redo" needs the converted deck or screenshots next to the original.
+- Decisions: none new.
+- Next task: none claimed.
+- Warnings: the booklet is the owner's file, kept on the test host only and removed afterwards; never put its contents in issues, PRs or tests. The test image `wmt-test/app:wmf` on the test host is from this branch; `wmt-test/app:main` is main `77c46c3`.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
 - Date: 2026-10-06
 - Branch: `fix/docx-page-sized-textbox-order-width`, based on main `8f45ba5`. Not yet a PR.
@@ -51,39 +73,3 @@
 - Warnings:
   - Copies of the owner's nursery workbook (children's details) are in their Drive from the live test. Never put its contents, names or dates in issues, PRs or tests; the tests use synthetic workbooks.
   - The test host's gcloud needs `gcloud auth login` now and then (organisation reauthentication policy) before the picture token can be renewed.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code (Claude 1, platform/Publisher)
-- Date: 2026-10-01
-- Branch: `docs/handoff-live-test`, based on main `85c51df`. All my PRs are merged: #175, #176, #177, #180, #181, #182 (#178), #183 (#179).
-- Objective: run the live test (#174) against real Google, fix what it found, and convert a real resource bank in bulk for the owner.
-- Files changed:
-  - #175: `static/app.js` (`openPicker`: My Drive tab at `root`, Shared drives tab, titled). New `tests/platform/picker_views_harness.js` and `test_picker_views.py`.
-  - #176: `pptx.py` (a theme's `<a:font script=…>` standby fonts are not deck fonts); `fonts.py` (DM Serif Display); `test_preflight.py`.
-  - #177: `google.py` (`Google.size`; `supportsAllDrives` on size and download); `web.py` (`allow_for`: the time allowed is set from Drive's size before the download); `test_web.py`, `test_google.py`.
-  - #180: `pictures.py` (`_group_scale`: grouped pictures measured through `ext/chExt` of every enclosing group); `test_pictures.py`.
-  - #181: `fonts.py` (NTR, Poppins; `_font_list` reads "Arial,Sans-Serif" as its first family, `SUBSTITUTED` at high confidence); `test_fonts.py`.
-  - #182: `publisher_slides.py` (`font_notes`: `font-substituted`, `font-missing`, `font-symbol-missing`); `test_publisher_slides.py`.
-  - #183: `docx.py` (report `pages` is Word's saved count, or null, plus `sections`; `saved_page_count` moved here from `docs.py`); `test_docx_readback.py`.
-- Completed:
-  - Live test, results on #174. Sections 0–6 passed on real Google. The PDF read-back works on Google's real PDFs, and its page count matched (14 = 14). Google refuses a 146 MB deck, and #170's message names the 100 MB limit. With "Make pictures smaller", the same deck goes as 1.1 MB and converts.
-  - Section 7 (blank-page repair) was not run: no Word file came out with blank pages. The repair stays off.
-  - Bulk conversion of a real resource bank: 627 Office files converted and 10,229 other files copied, into a mirrored tree in the owner's My Drive. 0 failed. It ran as a one-off script on the test host, not in the repo, under a temporary read-only Drive sign-in, now revoked and deleted. Bulk work is internal only (owner, 2026-10-01): staff convert their own Drive files.
-  - The local check over all 627 files (worker, no Google): no crashes, nothing refused.
-- Checks: 682 platform tests pass on main after #183. Ruff, format and the secret scan are clean. Every fix failed on main first, as each PR shows.
-- Known failures: none.
-- Unresolved:
-  - The picker's look: Google draws its own dialog, in the 2015 style, even with the plainest `DocsView`. The owner has seen the modern "Select files" picker; it isn't yet known whether that was this app in their Chrome or Google's own apps. If it was this app, test in Chrome which `DocsView` options keep the new look.
-  - No deck with an embedded video has been converted live (#174, section 2).
-  - "Make pictures smaller" still leaves CMYK JPEGs alone (`colour`). One 128 MB deck held three; it fitted only because a grouped RGB photo shrank.
-  - "System Font Regular" and `system-ui` stay `UNKNOWN`: they're system-font placeholders, not fonts.
-- Decisions: none new in DECISIONS.md. Bulk conversion is internal only, per the owner, and is noted here rather than as a product decision.
-- Next task: none claimed. The only open issues are #5 and #174 (checklist results posted, video item outstanding).
-- Warnings:
-  - The test host runs `wmt-test-live` from `wmt-test/app:main`. The owner has its address; it isn't recorded here, as the repository is public. Its picture token expires hourly; renew with `gcloud auth print-access-token --impersonate-service-account=wmt-pictures@…` piped into `live/app.env`, then run `live/start.sh`.
-  - `/root/wmt-test/bulk` keeps the bulk script, its log, listing and state: file and folder names only, no credentials.
-  - Drive for Desktop (`G:`) refuses bursts of reads of online-only files with `FileNotFoundError`. Copy the files out first, with retries.
-  - In Git Bash, a Python heredoc still loses backslashes (`'\n'` becomes `n`). Use the Edit tool.
