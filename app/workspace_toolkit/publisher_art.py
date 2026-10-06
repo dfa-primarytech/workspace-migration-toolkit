@@ -20,6 +20,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from .metafile import is_wmf, render_wmf
 from .units import length_points
 
 # Google's documented createImage limits.
@@ -339,8 +340,22 @@ def draw_path(key: str, pieces: list[Subpath], style: dict, out: Path) -> Drawn 
     return Drawn(picture, box)
 
 
+METAFILE_MAX_BYTES = 20 * 1024 * 1024
+
+
 def _open(path: Path) -> Image.Image | None:
     Image.MAX_IMAGE_PIXELS = DECODE_LIMIT
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(32)
+            # Pillow opens a metafile only on Windows; clipart is drawn here.
+            if is_wmf(head):
+                if path.stat().st_size > METAFILE_MAX_BYTES:
+                    return None
+                handle.seek(0)
+                return render_wmf(handle.read())
+    except OSError:
+        return None
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
