@@ -9,6 +9,7 @@ The manifest privacy boundary is now documented accurately. Follow-ups still
 include dimension-based limit overestimation, index consistency and the unused
 workspace sweeper. Live Sheets import remains unverified.
 
+0a. Check a page-sized-text-box form in Google (branch `fix/docx-page-sized-textbox-order-width`): right side, order, frame, foot panel, page count. A form's content is taller as table rows than as a text box, so it can run past one page; decide whether to tighten it.
 0. Audit issues still open after the Publisher and DOCX fixes: platform (#120, #121, #130-#133) and PPTX package editing (#124, #136, #137, one PR with an XML parser). Claim by issue comment.
 1. Verify the shared font catalogue against a live Google Workspace test tenant,
    compare representative before/after layouts, and add school-configurable aliases.
