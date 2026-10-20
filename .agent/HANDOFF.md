@@ -1,8 +1,32 @@
 # Handoff
 
+- Agent: Claude Code (Claude Sonnet 5.5, platform/PPTX)
+- Date: 2026-10-20
+- Branch: `feat/pptx-youtube-videos`, based on main `49ddb92`. Not merged, not deployed.
+- Objective: an online video in a PowerPoint deck (the owner's "Insert Online Video" case) was lost in the conversion with no word. Map YouTube natively.
+- Files changed: new `app/workspace_toolkit/online_video.py` (`classify` reads a video address: provider, YouTube id, start time; `apply` puts videos back after the import); `pptx.py` (`_online_video`: a `p:pic` whose `a:videoFile` link is an external video relationship gets `onlineVideo` and an `online_video` warning); `google.py` (`slides_batch`; `convert` calls `online_video.apply` after the checks and records `onlineVideos` in the report); new `tests/platform/test_online_video.py` (34 tests).
+- Completed:
+  - Before: only embedded video files were handled; an online video's link was skipped, and Google's import kept the still picture and dropped the link, with nothing reported.
+  - Now: a YouTube video is added with the Slides `createVideo` request (source YOUTUBE) at the still picture's place and size, the picture removed, and a start time set from `start=` or `t=`. Other providers (Vimeo, SharePoint, OneDrive, SlideShare) cannot play in Slides, so the still picture gets the link (`updateImageProperties`). Each video is its own batch, so a refused one costs only that video, and a failure is reported, never raised.
+  - Tested against the real Slides API on a synthetic deck (one YouTube, one Vimeo, one logo): `createVideo` accepted, the right picture replaced, the logo kept, the Vimeo picture linked. Then on the owner's own PowerPoint file: found, replaced, and Google drew the video's thumbnail in place. The test decks, folder and sign-in were deleted and revoked.
+- Checks: 851 platform tests pass; Ruff, format, mypy and the secret scan clean.
+- Known failures: none.
+- Unresolved:
+  - Only a YouTube address is mapped. A video embedded in the deck as a file is still saved to Drive with its still picture left. The same `createVideo` (source DRIVE) could embed that Drive copy; not tried (viewers would need access).
+  - Animations are not touched: detected and reported as ignored. Ideas costed in the conversation: build-up slides for click-to-reveal effects; an internal PowerPoint-to-MP4 job.
+- Decisions: DECISIONS 2026-10-20.
+- Next task: none claimed.
+- Warnings:
+  - This Windows PC blocks newly created virtual-environment `python.exe` files. Tests were run on the base Python 3.14 with a temporary `.pth` in its site-packages (the worker subprocess needs it); remove `wmt-dev-temp.pth` there.
+  - A request Google refuses fails a whole batch, so a new request kind is tried against the live API first: this one was.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code (Claude Sonnet 5.5, platform/Publisher)
 - Date: 2026-10-06
-- Branch: `fix/publisher-empty-table-cells`, based on main `c6689e2` (#193, deployed). Not merged.
+- Branch: `fix/publisher-empty-table-cells`, based on main `c6689e2`. Merged as #194 (`49ddb92`) and deployed to Cloud Run (revision 00007).
 - Objective: the school's 28-page Publisher booklet came out of Slides with tables running over each other and off the page.
 - Files changed: `publisher_slides.py` (`_blank_cell_style`, `_blank_cell`; `deleteText` added to `KNOWN` and to `check`), new `tests/platform/test_publisher_table_cells.py`.
 - Completed:
@@ -40,31 +64,3 @@
 - Decisions: none new.
 - Next task: none claimed.
 - Warnings: the booklet is the owner's file, kept on the test host only and removed afterwards; never put its contents in issues, PRs or tests. The test image `wmt-test/app:wmf` on the test host is from this branch; `wmt-test/app:main` is main `77c46c3`.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
-- Date: 2026-10-06
-- Branch: `fix/docx-page-sized-textbox-order-width`, based on main `8f45ba5`. Not yet a PR.
-- Objective: school forms drawn as one page-sized text box, converted in the app, lost their right-hand side, came out in the wrong order, and lost their frame. The owner supplied 27 such Word files and 9 converted PDFs. Nothing from them is in the repo.
-- Files changed:
-  - `app/workspace_toolkit/docs.py`: `fit_tables_to_page` measures a floating table against the room from its left edge to the paper's edge (`_room_to_page_edge`), not the margins, and brings tables nested in a narrowed floating table down to their cell (`_fit_nested_tables`). `_replace_textbox` keeps boxes from one paragraph in the order written (`placed`). A small box inside a page-sized box in the same paragraph goes into that box's table as its own row, down the page where it was, lifted to end above the bottom margin (`_panels_in_page_boxes`, `_carry_panels`). A box's outline becomes the table's border (`box_outline`; white counts as none) and its stated text anchor sets the cell alignment (`box_vertical_align`).
-  - `tests/platform/test_docx_page_textbox.py` (new, synthetic content only).
-- Completed:
-  - Each fix failed first, with the real symptom: a 9026-twip wrapper over a 10093-twip table; boxes in reverse order; the panel as a second table.
-  - Run over all 27 forms: every one is a single table, and Word counts the same words as in the original.
-- Checks: 802 platform tests pass; Ruff, format, mypy and the secret scan clean.
-- Known failures:
-  - Not verified in Google. Word was the stand-in, and it lays each form over 2 to 5 pages where the original is one. A form's content is taller as table rows than as a text box, so the foot panel falls onto a second page. Tried and ruled out: row heights, bottom-margin room, a blank first paragraph, matching page margins to the frame (best case 2 pages).
-  - The converter leaves empty `<w:drawing />` runs where boxes were (#20). Word refuses to open the rewritten file for them; Google accepts it. Only the Google import has been shown to work.
-- Unresolved:
-  - Convert one form through the app and check the Google Doc: right side, order, frame, the foot panel, page count.
-  - Whether to shrink the content to make a one-page form (not done: it changes the author's formatting).
-- Decisions: DECISIONS 2026-10-06.
-- Next task: none claimed.
-- Warnings:
-  - The 27 forms and their converted PDFs hold children's names, dates of birth and assessment data. They are in the owner's Downloads folder, not here. Never put their contents in issues, PRs or tests.
-  - Tests that print a rewritten file's text must not run on those files.
-  - The host test image `wmt-test/app:main` was rebuilt from main `8f45ba5` on 2026-10-02. It does not hold this branch.

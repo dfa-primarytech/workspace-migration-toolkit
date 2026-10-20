@@ -832,3 +832,24 @@ kept its old width.
   box, so the form can run past one page. Shrinking it would change the
   author's formatting, so it is left for the owner to see in Google first.
   Only checked in Word, never in Google.
+
+## 2026-10-20: YouTube videos are put back; other online videos link
+
+An online video in a PowerPoint deck is a picture whose video link is an
+external address. Google's import kept the picture and dropped the link, and
+nothing was reported. After the import, a YouTube video is now added with the
+Slides API's own video element, in the still picture's place and size, and the
+picture removed. Vimeo, SharePoint, OneDrive and SlideShare cannot play inside
+Slides, so their picture is given the link: a click in present mode opens it.
+- The address is read, never fetched. Only http and https are used, only a
+  true YouTube host is accepted (a lookalike host or an address with YouTube in
+  its path is not one), and an id is exactly eleven letters, digits, `-` and `_`.
+- The report names the provider and counts, never the address.
+- One batch per video, so one refused request costs one video. A failure
+  leaves the still picture and is reported (`online_video_not_added`); it never
+  stops a conversion.
+- Verified against the real Slides API, on a synthetic deck and on the owner's
+  own file, before this was written down.
+- Not done: embedding a video that is a file inside the deck from its Drive copy,
+  and animations. Animations stay detected and ignored. Recording them as video
+  needs PowerPoint itself, which is not available on the hosted service.
