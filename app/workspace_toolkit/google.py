@@ -12,6 +12,7 @@ from weakref import WeakKeyDictionary
 
 import httpx
 
+from . import online_video
 from .errors import ToolkitError
 from .model import Compatibility as C
 from .model import text_tokens, warning
@@ -439,6 +440,18 @@ class Google:
     async def inspect(self, presentation_id: str) -> dict:
         return await self.request(
             "GET", f"https://slides.googleapis.com/v1/presentations/{presentation_id}"
+        )
+
+    async def slides_batch(self, presentation_id: str, requests: list[dict]) -> dict:
+        """One atomic batchUpdate on a presentation this app made.
+
+        A write, so it is sent once and never repeated (see request). Google
+        refuses the whole batch if any one request in it is refused.
+        """
+        return await self.request(
+            "POST",
+            f"https://slides.googleapis.com/v1/presentations/{presentation_id}:batchUpdate",
+            json={"requests": requests},
         )
 
 
@@ -896,6 +909,12 @@ async def convert(
         await save_assets(root / "result", manifest, google, folder, report, original_name)
         presentation = await google.inspect(result["id"])
         report["warnings"].extend(verify(manifest, presentation))
+        # After the checks, which count what the import made: online videos are
+        # put back afterwards, and can never stop the conversion.
+        videos, video_notes = await online_video.apply(google, result["id"], presentation, manifest)
+        if any(videos.values()):
+            report["onlineVideos"] = videos
+        report["warnings"].extend(video_notes)
         render_report = root / "result" / "render.json"
         if render_report.exists():
             rendered_details = json.loads(render_report.read_text(encoding="utf-8"))
