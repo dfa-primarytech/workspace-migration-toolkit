@@ -17,6 +17,7 @@ from .errors import ToolkitError
 from .fonts import FontStatus, catalogue, compatibility
 from .model import Compatibility as C
 from .model import emu_to_points, warning
+from .online_video import PROVIDER_NAMES, classify
 from .package import PPTX, Package, digest, without_overrides, without_relationships
 
 NS = {
@@ -165,6 +166,21 @@ def analyse(path: Path, output: Path, settings: Settings | None = None) -> dict:
         return _analyse(package, path, output)
     finally:
         package.close()
+
+
+def _online_video(picture: Element, rels: dict[str, dict]) -> dict | None:
+    """The online video a picture plays, if its video link is an external address.
+
+    PowerPoint writes an online video as a picture whose `a:videoFile` (and its
+    `p14:media` twin) link to the video's address, outside the package.
+    """
+    link = f"{{{NS['r']}}}link"
+    for node in picture.iter():
+        if local(node.tag) in {"videoFile", "media"}:
+            rel = rels.get(node.get(link, ""))
+            if rel and rel["external"] and rel["type"].endswith(VIDEO_RELATIONSHIPS):
+                return {"url": rel["target"], **classify(rel["target"])}
+    return None
 
 
 def _analyse(package: Package, path: Path, output: Path) -> dict:
@@ -367,6 +383,23 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                             if target in part_assets:
                                 obj["assetIds"].append(part_assets[target])
                 obj["assetIds"] = sorted(set(obj["assetIds"]))
+                online = _online_video(node, slide_rels) if tag == "pic" else None
+                if online:
+                    obj["onlineVideo"] = online
+                    name = PROVIDER_NAMES.get(online["provider"], "online")
+                    obj["warnings"].append(
+                        warning(
+                            "online_video",
+                            (
+                                "This is a YouTube video. Google's import keeps only its still "
+                                "picture; the video is added back in its place."
+                                if online["videoId"]
+                                else f"This is a {name} video. It cannot play inside Google "
+                                "Slides; its still picture will link to it."
+                            ),
+                            classification=C.SUBSTITUTED,
+                        )
+                    )
                 if tables:
                     obj["tables"] = [
                         {
