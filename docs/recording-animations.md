@@ -1,5 +1,9 @@
 # Recording an animated slide as a video, before a migration
 
+> **Staff do nothing here.** Staff do not have PowerPoint, and the converter does not need
+> them to: it plays each heavy animated slide to a video itself. This guide is only for
+> whoever runs a migration and has PowerPoint, when an exact recording is wanted instead.
+
 Google Slides cannot play PowerPoint animations. A slide that is really a
 timed scene (pictures arriving, leaving and moving across the slide, with
 sound) loses all of that when it is converted, and its pictures end up piled

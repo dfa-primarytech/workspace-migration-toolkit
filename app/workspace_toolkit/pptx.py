@@ -444,9 +444,8 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                 warning(
                     "heavy_animation",
                     f"This slide is a timed scene: {len(scene.effects)} animation effects{sounds}. "
-                    "Google Slides cannot play it, and its pictures will be piled together. "
-                    "Record it as a video in PowerPoint (File > Export > Create a Video) before "
-                    "the migration, and keep the recording beside the deck.",
+                    "Google Slides cannot play it, so the converter plays the slide to a video "
+                    "and puts that on the slide, saved beside the converted deck.",
                     slideIndex=order,
                     effects=len(scene.effects),
                     soundCues=len(scene.cues),
