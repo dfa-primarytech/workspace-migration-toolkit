@@ -285,6 +285,7 @@ class Timeline:
     entrance: set[str]  # shapes that start hidden
     end_ms: float
     notes: list[str]
+    volumes: dict[str, float] = field(default_factory=dict)  # sound picture -> 0..1
 
 
 def _delay(ctn: Element) -> float:
@@ -306,6 +307,11 @@ def parse_timeline(root: Element) -> Timeline:
     main = next((c for c in timing.iter(P + "cTn") if c.get("nodeType") == "mainSeq"), None)
     if main is None:
         return timeline
+    for audio in timing.iter(P + "audio"):
+        media = audio.find("p:cMediaNode", NS)
+        spot = media.find(".//p:spTgt", NS) if media is not None else None
+        if media is not None and spot is not None and media.get("vol"):
+            timeline.volumes[spot.get("spid", "")] = _num(media.get("vol"), 100000) / 100000
     running = 0.0
     for group in main.findall("p:childTnLst/p:par/p:cTn", NS):
         # A click starts the next group when the last has played out.
@@ -338,6 +344,8 @@ def _effect(ctn: Element, start: float, timeline: Timeline) -> None:
     children = ctn.find("p:childTnLst", NS)
     for behaviour in children if children is not None else []:
         tag = behaviour.tag.split("}")[1]
+        if tag == "audio":
+            continue  # its volume is read for the whole slide, above
         inner = behaviour.find("p:cBhvr/p:cTn", NS)
         began = start + _delay(inner) if inner is not None else start
         dur = _dur(inner)
@@ -971,16 +979,17 @@ def render_video(
             "-i",
             "-",
         ]
-        for path, _, _ in audio:
+        for path, _, _, _ in audio:
             command += ["-i", str(path)]
         if audio:
             parts = []
-            for i, (_, delay, (start, length)) in enumerate(audio, start=1):
+            for i, (_, delay, (start, length), volume) in enumerate(audio, start=1):
                 trim = f"atrim=start={start / 1000:.3f}" + (
                     f":duration={length / 1000:.3f}" if length else ""
                 )
                 parts.append(
-                    f"[{i}:a]{trim},asetpts=PTS-STARTPTS,adelay={int(delay)}|{int(delay)}[a{i}]"
+                    f"[{i}:a]{trim},asetpts=PTS-STARTPTS,volume={volume:.3f},"
+                    f"adelay={int(delay)}|{int(delay)}[a{i}]"
                 )
             mix = "".join(f"[a{i}]" for i in range(1, len(audio) + 1))
             parts.append(
@@ -1054,7 +1063,7 @@ def render_video(
 
 def _audio_inputs(
     scene: Scene, timeline: Timeline, work: Path, seconds: float
-) -> list[tuple[Path, float, tuple[float, float]]]:
+) -> list[tuple[Path, float, tuple[float, float], float]]:
     found = []
     for i, cue in enumerate(timeline.cues):
         node = scene.by_id.get(cue.shape)
@@ -1067,7 +1076,7 @@ def _audio_inputs(
         path.write_bytes(data)
         start = (node.trim[0] if node.trim else 0.0) + cue.offset * 1000
         length = cue.dur if cue.dur else ((node.trim[1] - node.trim[0]) if node.trim else 0.0)
-        found.append((path, cue.start, (start, length)))
+        found.append((path, cue.start, (start, length), timeline.volumes.get(cue.shape, 1.0)))
     return found
 
 

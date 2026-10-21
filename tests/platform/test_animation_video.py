@@ -162,6 +162,16 @@ def test_a_sound_cue_is_found_with_its_start_and_length():
     assert timeline.end_ms == 6500 + 14460
 
 
+def test_a_clip_s_volume_is_read_and_defaults_to_full():
+    audio = (
+        '<p:audio><p:cMediaNode vol="80000"><p:cTn id="7" display="0"/><p:tgtEl><p:spTgt spid="11"/>'
+        "</p:tgtEl></p:cMediaNode></p:audio>"
+    )
+    timeline = timeline_of(click_group(effect("mediacall", 0, audio)))
+
+    assert timeline.volumes == {"11": 0.8}
+
+
 def test_a_slide_with_no_timing_has_nothing_to_play():
     timeline = av.parse_timeline(
         ET.fromstring(f"<p:sld {PNS}><p:cSld><p:spTree/></p:cSld></p:sld>")
@@ -359,6 +369,8 @@ def test_a_cue_plays_its_picture_s_sound_from_its_trim_at_its_time(tmp_path):
     cue = (
         '<p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="6" dur="3000" fill="hold"/>'
         '<p:tgtEl><p:spTgt spid="11"/></p:tgtEl></p:cBhvr></p:cmd>'
+        '<p:audio><p:cMediaNode vol="56000"><p:cTn id="7" display="0"/><p:tgtEl><p:spTgt spid="11"/>'
+        "</p:tgtEl></p:cMediaNode></p:audio>"
     )
     path = deck(
         tmp_path,
@@ -374,7 +386,9 @@ def test_a_cue_plays_its_picture_s_sound_from_its_trim_at_its_time(tmp_path):
 
     found = av._audio_inputs(scene, timeline, tmp_path, 60)
 
-    assert [(delay, trim) for _, delay, trim in found] == [(2500, (4000, 3000))]
+    assert [(delay, trim, volume) for _, delay, trim, volume in found] == [
+        (2500, (4000, 3000), 0.56)
+    ]
 
 
 def have_ffmpeg() -> bool:
