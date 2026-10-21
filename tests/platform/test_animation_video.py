@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import io
 import shutil
+import subprocess
 import zipfile
 
 import pytest
@@ -417,6 +418,13 @@ def test_a_slide_plays_to_an_mp4_the_length_of_its_animation(tmp_path):
         "a still moment is drawn once, not every frame"
     )
     assert out.read_bytes()[4:8] == b"ftyp"
+    # Only picture (and sound): an extra empty text track kept Drive from
+    # processing a video, so it never played.
+    listing = subprocess.run(  # noqa: S603
+        [av._ffmpeg(), "-hide_banner", "-i", str(out)], capture_output=True, text=True
+    ).stderr
+    streams = [line for line in listing.splitlines() if line.strip().startswith("Stream #")]
+    assert len(streams) == 1 and "Video: h264" in streams[0], streams
 
 
 def test_a_slide_with_no_animation_is_refused(tmp_path):
@@ -704,3 +712,53 @@ def test_a_failed_upload_says_why_in_the_log(caplog):
 
     assert "animation_video_failed" in caplog.text
     assert "upload_uncertain" in caplog.text
+
+
+def silent_wav(seconds=1, rate=8000) -> bytes:
+    import wave
+
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(bytes(2) * rate * seconds)
+    return out.getvalue()
+
+
+@pytest.mark.skipif(not have_ffmpeg(), reason="ffmpeg is not installed")
+def test_a_video_with_sound_holds_only_picture_and_sound(tmp_path):
+    sound = (
+        '<p:pic><p:nvPicPr><p:cNvPr id="11" name="clip"/><p:cNvPicPr/><p:nvPr><p:extLst><p:ext uri="x">'
+        '<p14:media xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" r:embed="rId3"/>'
+        '</p:ext></p:extLst></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/></p:blipFill><p:spPr>'
+        '<a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm></p:spPr></p:pic>'
+    )
+    cue = (
+        '<p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="6" dur="1000" fill="hold"/>'
+        '<p:tgtEl><p:spTgt spid="11"/></p:tgtEl></p:cBhvr></p:cmd>'
+    )
+    groups = click_group(
+        effect("entr", 0, set_visible("5", 0) + fade("5", dur=500)), effect("mediacall", 0, cue)
+    )
+    path = deck(
+        tmp_path,
+        pic("5", *BOX) + sound,
+        groups,
+        media={"ppt/media/media1.wav": silent_wav()},
+        rels='<Relationship Id="rId3" Type="x/media" Target="../media/media1.wav"/>',
+    )
+    out = tmp_path / "out.mp4"
+
+    summary = av.render_video(path, 1, out, fps=10, width=320)
+
+    listing = subprocess.run(  # noqa: S603
+        [av._ffmpeg(), "-hide_banner", "-i", str(out)], capture_output=True, text=True
+    ).stderr
+    streams = [
+        line.split(":", 2)[2].strip()[:12]
+        for line in listing.splitlines()
+        if line.strip().startswith("Stream #")
+    ]
+    assert summary["soundCues"] == 1
+    assert [x[:11] for x in streams] == ["Video: h264", "Audio: aac "], streams
