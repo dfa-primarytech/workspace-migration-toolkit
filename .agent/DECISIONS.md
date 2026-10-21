@@ -873,3 +873,21 @@ and LibreOffice cannot play animations to video.
 - Not decided: whether it joins the conversion, runs only on the test host for
   migrations we run ourselves, or both. PowerPoint on the owner's PC stays the
   exact fallback for a slide the player cannot play.
+
+### 2026-10-21 (later): the video goes on the slide, from a recording or the player
+
+- A Drive video is put on the converted slide with `createVideo` (source DRIVE),
+  full slide, and the slide's pictures are removed: they were the scene's parts,
+  with nothing left to play them. Checked against the real Slides API.
+- A recording staff made in PowerPoint is exact, so it is used as it is when
+  one is found beside the deck, named `DECK - slide N.mp4` (deck name matched
+  exactly). Otherwise the tool plays the slide itself, when asked.
+- The check names a slide with 20 or more effects as a timed scene and says to
+  record it beforehand, so the work can be done before the migration.
+- A slide is never allowed to stop the rest, and a failure's reason goes to the
+  log, never the report.
+- Drive processes a new video for a few minutes; the slide shows a placeholder
+  until then. Anyone who plays the deck needs access to the video file.
+- Still open: playback seen in the Slides editor, sharing the video, and whether
+  any of this runs in the hosted app.
+

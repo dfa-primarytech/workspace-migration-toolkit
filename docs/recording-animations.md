@@ -89,6 +89,10 @@ migration has run.
 People who play the converted deck need access to the video file in the
 conversion folder. Share the folder with the same people as the deck.
 
+Drive needs a few minutes to process a new video before it will play. Until it
+has, the slide shows a grey placeholder with a cross. Give it five to ten
+minutes after the migration, then open the slide and press play.
+
 If there is no recording for an animated slide, it converts as before, with its
 pictures piled together, and the report says so. A recording is always better
 than the converter's own attempt.

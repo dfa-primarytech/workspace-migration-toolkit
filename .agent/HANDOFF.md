@@ -2,24 +2,31 @@
 
 - Agent: Claude Code (Claude Sonnet 5.5, platform/PPTX)
 - Date: 2026-10-21
-- Branch: `feat/animation-video-prototype`, based on main `924cf4e`. A prototype: a draft PR, not for merging as is, not deployed, not wired into the conversion.
-- Objective: a deck's slide 6 is a 77-second narrated scene (96 effects over 55 pictures and groups, 8 motion paths, 12 sound cues). Slides cannot take animation and the API cannot create it. Can the tool record it as a video to sit beside the converted file?
-- Files changed: new `app/workspace_toolkit/animation_video.py` (reads one slide: shapes, groups with their own coordinate spaces, cropped/turned/flipped/outlined pictures, text boxes in a stand-in font; reads the timing tree into absolute-time effects and sound cues; plays it with Pillow and encodes with ffmpeg; `python -m workspace_toolkit.animation_video DECK SLIDE OUT.mp4 [--png-at 5,20]`); new `tests/platform/test_animation_video.py` (33 tests, synthetic slides only).
+- Branch: `feat/animation-video-prototype`, based on main `924cf4e`. Draft PR #196, not merged, not deployed, not wired into the hosted conversion.
+- Objective: a deck's slide 6 is a 77-second narrated scene (96 effects over 55 pictures and groups, 8 motion paths, 12 sound cues). Slides cannot take animation and the API cannot create it. Keep it as a video beside the converted file, and put it on the slide.
+- Files changed:
+  - New `app/workspace_toolkit/animation_video.py`: reads one slide (shapes, groups with their own coordinate spaces, cropped/turned/flipped/outlined pictures, text boxes in a stand-in font) and its timing tree (absolute-time effects and sound cues, clip volume and trim); plays it with Pillow and encodes with ffmpeg. `select_slides`, `match_recordings`, and `attach` (saves the MP4 in the conversion folder, then puts a Drive video on the converted slide in place of its pictures). Commands: `python -m workspace_toolkit.animation_video render|select|attach`.
+  - `pptx.py`: the check calls out a slide with 20 or more effects (`heavy_animation`) and says to record it as a video in PowerPoint beforehand.
+  - New `docs/recording-animations.md`: the staff guide (which slides, how to record in PowerPoint, how to name the file `DECK - slide N.mp4`, where to put it, what the migration does, fixes).
+  - New `tests/platform/test_animation_video.py` (55 tests, synthetic slides only).
 - Completed:
-  - Plays appear/disappear, fade, wipe, wheel, fly in (the `ppt_x` expressions, read by a small parser that never uses `eval`), motion paths (by length, with PowerPoint's speed-up/slow-down), grow/shrink, spin, transparency, clip volume and trim. Any other effect is counted in `notes`.
-  - Compared with PowerPoint's own MP4 of the same slide (made through PowerPoint's COM `CreateVideo` on the owner's PC): the same length (76.75 s against 77.17 s with a half-second tail), the same scene, positions and timing at 14 moments (mean pixel difference 2 to 10 out of 255, mostly compression and a stand-in font), and sound level within about 0.1 dB in most 10-second windows.
-  - Homelab, in a container limited to 2 CPUs and 2 GB, as Cloud Run is: 45 s to make the 77 s video, 63 CPU-seconds (python 40, ffmpeg 22), 210 MB and 254 MB peak, a 5.4 MB MP4. A still moment is drawn once (1,087 of 1,852 frames).
-  - Found by comparison and fixed: picture outlines (two red boxes), and clip volume.
-- Checks: 33 new tests pass with warnings as errors; Ruff, format, mypy and the secret scan clean. Each logic test was checked to fail when its behaviour is broken.
-- Known failures: none. Not drawn or played: layout and master shapes, shape fills and lines (only text and pictures), the exact font of text (Dreaming Outloud Pro is a cloud font), theme colours for outlines, filters other than fade, wipe and wheel (played as a fade), animations of a shape inside a group, interactive triggers and repeat counts.
+  - Against PowerPoint's own MP4 of the same slide (made through PowerPoint's COM `CreateVideo` on the owner's PC): the same length, scene, positions and timing at 14 moments (mean pixel difference 2 to 10 out of 255) and sound level within about 0.1 dB.
+  - Homelab, in a container limited to 2 CPUs and 2 GB as Cloud Run is: 45 s to make the 77 s video, 62 CPU-seconds, about 210 and 255 MB peak, a 5.4 MB MP4. Recording three times and uploading three times all worked.
+  - Live, against real Google, on the owner's deck: `createVideo` with a Drive source is accepted, the slide's pictures are removed, and a video element (source DRIVE) is left. Done twice: with the player's video, and with PowerPoint's own recording named by the guide's rule.
+  - A recording staff made is used as it is (named `DECK - slide N.mp4`, found by deck name exactly); a slide without one is played by the tool. A slide that cannot be recorded or placed costs only itself; a saved video that cannot be placed stays in the folder with the slide as it was. Failures name their reason in the log, not in the report.
+- Checks: 906 platform tests pass (55 of them the animation tests, run with warnings as errors); Ruff, format, mypy and the secret scan clean.
+- Known failures: one live player run did not save a video and its cause was not seen (the next run, and three more recordings and uploads, were fine). Failures are logged with their reason now.
 - Unresolved:
-  - Nothing yet saves the MP4 to the conversion folder or puts it in the converted slide. Placing it would use the Slides `createVideo` request with a Drive source (not yet tried against the live API; the YouTube source was).
-  - The hosted image has no ffmpeg. The prototype image added `imageio-ffmpeg` (about 60 MB). Whether to add it to the real image is a decision.
-  - Cost on Cloud Run, by list price and the measured run: about 45 s of one 2 CPU, 2 GB instance, a fraction of a penny per animated slide.
-- Decisions: none yet (DECISIONS 2026-10-21 records the prototype and what it did and did not prove).
+  - Playback in the Slides editor was not seen, only that Google accepted the request and the file is processed. The thumbnail API draws a grey placeholder for any private Drive video, PowerPoint's included, so it proves nothing. The owner is to open the two test decks and press play.
+  - Drive takes a few minutes to process a new video (about 2.5 minutes in one measurement, longer for another); until then the slide shows a placeholder. The guide says so.
+  - The video is private to its owner: whoever plays the deck needs access to it. The migration would need to share it (not done).
+  - Not wired into the hosted conversion, and the hosted image has no ffmpeg (the test image added `imageio-ffmpeg`, about 60 MB). Whether it joins the hosted app or stays a tool for migrations we run is a decision; the staff-recording path needs no ffmpeg.
+  - Not drawn or played: layout and master shapes, shape fills and lines, the exact font of text, theme colours for outlines, filters other than fade, wipe and wheel (played as a fade), animations of a shape inside a group.
+- Decisions: DECISIONS 2026-10-21.
 - Next task: none claimed.
 - Warnings:
-  - The deck used to test is the owner's and shows people. It was on the test host and in the scratch folder only, and is deleted afterwards.
+  - The test deck is the owner's and shows people. It was only on the test host and in the scratch folder, and is deleted. Two converted test decks ("WMT animation test ... (delete me)") are left in the owner's Drive on purpose, for the owner to check playback, then delete.
+  - A request Google refuses fails a whole batch, so a new request kind is tried against the live API first: this one was.
   - Windows on this PC blocks newly created virtual-environment python executables; tests were run on the base Python 3.14 with the packages on its path.
 
 ---
