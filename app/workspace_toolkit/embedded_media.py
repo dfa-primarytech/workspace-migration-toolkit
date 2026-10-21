@@ -19,7 +19,7 @@ import asyncio
 import io
 import json
 import logging
-import subprocess
+import subprocess  # nosec B404 -- fixed argv, no shell, ffmpeg only
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -295,7 +295,7 @@ def wrap_sound(deck: Path, clip: Clip, out: Path) -> None:
             "-movflags", "+faststart", str(out),
         ]  # fmt: skip
         try:
-            done = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
+            done = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603  # nosec B603 -- fixed argv, no shell
         except OSError as error:
             raise RuntimeError("ffmpeg is needed to wrap a sound in a video.") from error
         if done.returncode != 0:

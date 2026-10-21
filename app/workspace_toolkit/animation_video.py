@@ -27,7 +27,7 @@ import logging
 import math
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 -- fixed argv, no shell, ffmpeg only
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -1054,7 +1054,7 @@ def render_video(
         ]
         drawn = 0
         # `with` closes ffmpeg's pipes whatever happens; a failure kills it first.
-        with subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE) as process:  # noqa: S603
+        with subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE) as process:  # noqa: S603  # nosec B603 -- fixed argv, no shell; the files are our own temp files
             if process.stdin is None or process.stderr is None:
                 raise RuntimeError("ffmpeg did not start")
             try:
