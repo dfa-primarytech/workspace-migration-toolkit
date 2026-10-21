@@ -21,10 +21,12 @@ The file is untrusted: sizes and counts are bounded, and nothing is executed.
 from __future__ import annotations
 
 import asyncio
+import functools
 import io
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import subprocess  # nosec B404 -- fixed argv, no shell, ffmpeg only
@@ -1128,6 +1130,82 @@ def match_recordings(deck_name: str, names: list[str]) -> dict[int, str]:
         if match and int(match.group(1)) >= 1:
             found.setdefault(int(match.group(1)), name)
     return found
+
+
+# The hosted service records animations itself, within these limits, so a deck
+# full of them can never make a conversion run away with time or memory.
+HOSTED_MAX_SLIDES = 3
+HOSTED_SLIDE_SECONDS = 60
+HOSTED_BUDGET_SECONDS = 150
+
+
+def hosted_enabled() -> bool:
+    """On unless WMT_HOSTED_ANIMATION is set to off, and only where ffmpeg exists."""
+    if os.getenv("WMT_HOSTED_ANIMATION", "on").strip().lower() in {"0", "off", "false", "no"}:
+        return False
+    try:
+        import imageio_ffmpeg  # type: ignore[import-not-found, import-untyped, unused-ignore]
+
+        imageio_ffmpeg.get_ffmpeg_exe()
+        return True
+    except Exception:  # noqa: BLE001  # absent or broken: not available
+        return shutil.which("ffmpeg") is not None
+
+
+async def record_hosted(
+    google: Any,
+    presentation_id: str,
+    folder_id: str,
+    deck: Path,
+    *,
+    render: Any = None,
+    budget: float = HOSTED_BUDGET_SECONDS,
+) -> tuple[dict, list[dict]]:
+    """Records a deck's heaviest animations within the hosted limits; never raises."""
+    summary = {"saved": 0, "placed": 0, "failed": 0}
+    notes: list[dict] = []
+    try:
+        chosen = select_slides(deck)
+    except Exception:  # noqa: BLE001  # an unreadable deck is the conversion's business
+        return summary, notes
+    if not chosen:
+        return summary, notes
+    for number in chosen[HOSTED_MAX_SLIDES:]:
+        notes.append(
+            warning(
+                "animation_video_skipped",
+                f"Slide {number}'s animation was not recorded: the service records up to "
+                f"{HOSTED_MAX_SLIDES} slides per file.",
+                classification=C.UNSUPPORTED,
+                slideIndex=number - 1,
+            )
+        )
+    play = render or functools.partial(render_video, max_seconds=HOSTED_SLIDE_SECONDS)
+
+    def hosted_render(path: Path, number: int, out: Path) -> Any:
+        return play(path, number, out)
+
+    try:
+        async with asyncio.timeout(budget):
+            done, more = await attach(
+                google,
+                presentation_id,
+                folder_id,
+                deck,
+                chosen[:HOSTED_MAX_SLIDES],
+                render=hosted_render,
+            )
+        summary.update(done)
+        notes.extend(more)
+    except TimeoutError:
+        notes.append(
+            warning(
+                "animation_video_failed",
+                "Animations were not all recorded: it took too long.",
+                classification=C.UNSUPPORTED,
+            )
+        )
+    return summary, notes
 
 
 def select_slides(deck: Path, min_effects: int = HEAVY_EFFECTS) -> list[int]:

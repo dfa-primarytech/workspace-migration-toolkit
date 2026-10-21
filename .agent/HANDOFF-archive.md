@@ -997,3 +997,25 @@ archive rather than growing this one further.
 - Decisions: none new.
 - Next task: none claimed.
 - Warnings: the booklet is the owner's file, kept on the test host only and removed afterwards; never put its contents in issues, PRs or tests. The test image `wmt-test/app:wmf` on the test host is from this branch; `wmt-test/app:main` is main `77c46c3`.
+
+
+## Previous handoff
+
+- Agent: Claude Code (Claude Sonnet 5.5, platform/Publisher)
+- Date: 2026-10-06
+- Branch: `fix/publisher-empty-table-cells`, based on main `c6689e2`. Merged as #194 (`49ddb92`) and deployed to Cloud Run (revision 00007).
+- Objective: the school's 28-page Publisher booklet came out of Slides with tables running over each other and off the page.
+- Files changed: `publisher_slides.py` (`_blank_cell_style`, `_blank_cell`; `deleteText` added to `KNOWN` and to `check`), new `tests/platform/test_publisher_table_cells.py`.
+- Completed:
+  - Cause: 30 of 45 cells in one table were empty tick boxes. Publisher stores no font for an empty cell; Slides sets an unstyled one in 18 pt, so every row was about 31 pt tall, not the planned 20.5 pt, and a table planned at 307 pt came out near 450 pt.
+  - Fix: an empty cell is given the font and size most of its table's text uses (scaled as the text is), by putting a space in, styling it and deleting it.
+  - Tested against the real Slides API: styling an empty cell directly is refused ("The object has no text"), so that route was dropped before shipping. With the space in and out, rows render about 23 pt. Page 19 of the booklet was replayed, old plan against new, onto scratch decks (290 requests accepted): the table's rows are visibly shorter. The scratch decks and the temporary sign-in are gone.
+- Checks: 817 platform tests pass; Ruff, format, mypy and the secret scan clean.
+- Known failures: none.
+- Unresolved:
+  - Only page 19 was replayed. Pages 20, 21 and 5 (overlapping tables, a table running off the page) should improve for the same reason; they need a real conversion to confirm.
+  - Text still made 75% smaller on 11 tables (pages 5, 9, 19, 20, 21, 24, 27) and may overflow; not touched.
+  - Tables' borders are Publisher's default grid (the file stores none).
+- Decisions: none new.
+- Next task: none claimed.
+- Warnings: the booklet is the owner's file; it lived on the test host only while testing and was removed. A request Google refuses fails a whole page, so any new request kind is tried against the live API first.

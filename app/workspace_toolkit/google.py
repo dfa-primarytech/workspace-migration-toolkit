@@ -12,7 +12,7 @@ from weakref import WeakKeyDictionary
 
 import httpx
 
-from . import embedded_media, online_video
+from . import animation_video, embedded_media, online_video
 from .errors import ToolkitError
 from .model import Compatibility as C
 from .model import text_tokens, warning
@@ -925,6 +925,30 @@ async def convert(
             if any(clips.values()):
                 report["embeddedVideos"] = clips
             report["warnings"].extend(clip_notes)
+            # Heavy animations are played to a video, within fixed limits,
+            # and sounds are wrapped in a short video; neither can stop the
+            # conversion. Needs ffmpeg, so it is skipped where there is none.
+            if animation_video.hosted_enabled():
+                folder_id = report["folderUrl"].rsplit("/", 1)[-1]
+                animated, animation_notes = await animation_video.record_hosted(
+                    google, result["id"], folder_id, source
+                )
+                if any(animated.values()):
+                    report["animationVideos"] = animated
+                report["warnings"].extend(animation_notes)
+                try:
+                    heard, sound_notes = await embedded_media.place_sounds(
+                        google,
+                        result["id"],
+                        folder_id,
+                        source,
+                        skip=tuple(animation_video.select_slides(source)),
+                    )
+                except Exception:  # noqa: BLE001  # never stops the conversion
+                    heard, sound_notes = {}, []
+                if any(heard.values()):
+                    report["soundVideos"] = heard
+                report["warnings"].extend(sound_notes)
         render_report = root / "result" / "render.json"
         if render_report.exists():
             rendered_details = json.loads(render_report.read_text(encoding="utf-8"))

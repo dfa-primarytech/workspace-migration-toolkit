@@ -103,7 +103,7 @@ Nothing for staff to do here.
 
 - **A video file inside a slide** is saved in the conversion folder and put back on its
   slide, where its still picture was.
-- **A sound** cannot be kept as a sound: Google Slides cannot hold one. The migration team
+- **A sound** cannot be kept as a sound: Google Slides cannot hold one. The conversion
   wraps each in a short video (the speaker icon, with the audio) and puts that on the slide
   instead. Press it to play.
 - **A YouTube video** is put back as a YouTube video. Other online videos (Vimeo,
@@ -143,3 +143,7 @@ The embedded-media tool (`python -m workspace_toolkit.embedded_media`, needs ffm
 - `sounds DECK.pptx PRESENTATION_ID FOLDER_ID [--skip 6]` wraps each sound in a video, saves it in
   the conversion folder and puts it on the converted slide. `--skip` leaves slides alone, such as
   a slide given to an animation video. Embedded videos need no step: the conversion does them.
+
+## When the web converter does it for you
+
+The hosted converter also records the heaviest animated slides itself (up to 3 per file, up to a minute each) and puts the video on the slide, so a recording made beforehand is only needed for exact results or for more than 3 slides. It names any slide it did not record in the report.

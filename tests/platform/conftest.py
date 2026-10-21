@@ -32,3 +32,9 @@ def write_pptx(path, parts=None):
 @pytest.fixture
 def pptx(tmp_path):
     return write_pptx(tmp_path / "sample.pptx")
+
+
+@pytest.fixture(autouse=True)
+def no_hosted_recording(monkeypatch):
+    """Recording needs ffmpeg and takes time: the tests that want it switch it on."""
+    monkeypatch.setenv("WMT_HOSTED_ANIMATION", "off")
