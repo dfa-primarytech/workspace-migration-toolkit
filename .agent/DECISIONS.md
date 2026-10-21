@@ -907,7 +907,7 @@ and LibreOffice cannot play animations to video.
 
 ### 2026-10-21 (hosted): recording is part of the hosted conversion
 
-- The owner chose to build animation recording into the deployed service. It runs after the embedded videos, records at most 3 slides (60 s each, 150 s in all), wraps sounds, and every step is non-fatal. Data stays in Cloud Run London.
+- The owner chose to build animation recording into the deployed service. It runs after the embedded videos, records at most 3 slides (120 s each, 240 s in all), wraps sounds, and every step is non-fatal. Data stays in Cloud Run London.
 - ffmpeg arrives as the `imageio-ffmpeg` wheel. `WMT_HOSTED_ANIMATION=off` turns it off without a rebuild if the bill grows; the homelab offload stays an option.
 - Recordings staff made by hand are not seen by the hosted flow (drive.file cannot list sibling files), so the player's own recording is what a hosted conversion uses.
 
