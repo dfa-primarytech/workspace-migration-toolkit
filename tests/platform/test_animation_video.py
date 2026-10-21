@@ -685,3 +685,22 @@ def test_the_check_leaves_an_ordinary_click_to_reveal_slide_to_the_general_note(
 
     assert "heavy_animation" not in codes
     assert "timing" in codes
+
+
+def test_a_failed_recording_says_why_in_the_log_but_not_in_the_report(caplog):
+    def broken(deck, number, out, **kwargs):
+        raise RuntimeError("ffmpeg could not make the video: Out of memory")
+
+    with caplog.at_level("WARNING"):
+        _, notes = run_attach(Drive(), [1], render=broken)
+
+    assert "Out of memory" in caplog.text
+    assert "Out of memory" not in str(notes), "the report never carries ffmpeg's own words"
+
+
+def test_a_failed_upload_says_why_in_the_log(caplog):
+    with caplog.at_level("WARNING"):
+        run_attach(Drive(fail_upload=True), [1])
+
+    assert "animation_video_failed" in caplog.text
+    assert "upload_uncertain" in caplog.text

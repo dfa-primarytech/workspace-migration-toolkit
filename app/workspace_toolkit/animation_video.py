@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
+import logging
 import math
 import re
 import shutil
@@ -41,6 +43,8 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 from .errors import ToolkitError
 from .model import Compatibility as C
 from .model import warning
+
+logger = logging.getLogger(__name__)
 
 NS = {
     "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -1164,8 +1168,21 @@ async def attach(
                     out, f"Slide {number} animation.mp4", "video/mp4", folder_id, retry=True
                 )
                 summary["saved"] += 1
-            except (ValueError, RuntimeError, OSError, ToolkitError) as error:
+            except Exception as error:  # noqa: BLE001  # one slide never stops the rest
                 summary["failed"] += 1
+                # For whoever runs the migration: why, in the log. The report
+                # keeps a plain sentence (ffmpeg's own words stay out of it).
+                logger.warning(
+                    json.dumps(
+                        {
+                            "event": "animation_video_failed",
+                            "slide": number,
+                            "error": type(error).__name__,
+                            "code": getattr(error, "code", ""),
+                            "reason": str(getattr(error, "detail", None) or error)[:300],
+                        }
+                    )
+                )
                 reason = (
                     str(error) if isinstance(error, ValueError) else "It could not be recorded."
                 )
