@@ -53,6 +53,8 @@ A = f"{{{NS['a']}}}"
 R = f"{{{NS['r']}}}"
 EMU_PER_PT = 12700
 MAX_SECONDS = 180
+# A click-to-reveal slide has a few effects; a timed scene has dozens.
+HEAVY_EFFECTS = 20
 MAX_PIXELS = 40_000_000  # one picture, decoded
 MAX_SPRITE_PIXELS = 60_000_000
 MAX_MEDIA_BYTES = 80 * 1024 * 1024
@@ -1113,7 +1115,7 @@ def match_recordings(deck_name: str, names: list[str]) -> dict[int, str]:
     return found
 
 
-def select_slides(deck: Path, min_effects: int = 20) -> list[int]:
+def select_slides(deck: Path, min_effects: int = HEAVY_EFFECTS) -> list[int]:
     """The slides worth recording: those with this many effects or more.
 
     A click-to-reveal slide has a few; a timed scene has dozens. The simple

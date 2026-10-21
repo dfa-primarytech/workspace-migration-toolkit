@@ -12,6 +12,7 @@ from xml.etree.ElementTree import Element  # nosec B405
 
 from defusedxml import ElementTree as SafeET
 
+from .animation_video import HEAVY_EFFECTS, parse_timeline
 from .config import Settings
 from .errors import ToolkitError
 from .fonts import FontStatus, catalogue, compatibility
@@ -436,6 +437,22 @@ def _analyse(package: Package, path: Path, output: Path) -> dict:
                         classification=C.IGNORED,
                     )
                 )
+        scene = parse_timeline(root)
+        if len(scene.effects) >= HEAVY_EFFECTS:
+            sounds = f" and {len(scene.cues)} sounds" if scene.cues else ""
+            warnings.append(
+                warning(
+                    "heavy_animation",
+                    f"This slide is a timed scene: {len(scene.effects)} animation effects{sounds}. "
+                    "Google Slides cannot play it, and its pictures will be piled together. "
+                    "Record it as a video in PowerPoint (File > Export > Create a Video) before "
+                    "the migration, and keep the recording beside the deck.",
+                    slideIndex=order,
+                    effects=len(scene.effects),
+                    soundCues=len(scene.cues),
+                    classification=C.UNSUPPORTED,
+                )
+            )
         slides.append(
             {
                 "id": f"slide_{order}",

@@ -649,3 +649,39 @@ def test_the_select_command_lists_the_slides_worth_recording(tmp_path, capsys):
     av.main(["select", str(path)])
 
     assert capsys.readouterr().out.strip() == "[1]"
+
+
+# ---------------------------------------------------------------- the check report
+
+
+def checked(tmp_path, groups):
+    from workspace_toolkit.pptx import analyse
+
+    from .conftest import fixture_parts, write_pptx
+
+    parts = fixture_parts()
+    parts["ppt/slides/slide1.xml"] = slide_xml(pic("5", *BOX), groups)
+    parts["ppt/slides/_rels/slide1.xml.rels"] = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+        'Target="../media/image.png"/></Relationships>'
+    )
+    manifest = analyse(write_pptx(tmp_path / "check.pptx", parts), tmp_path / "out")
+    return [w for w in manifest["warnings"] if w.get("slideIndex") == 1]
+
+
+def test_the_check_calls_out_a_slide_that_is_a_timed_scene(tmp_path):
+    busy = click_group(*[effect("entr", i * 100, set_visible("5", 0)) for i in range(25)])
+    found = {w["code"]: w for w in checked(tmp_path, busy)}
+
+    assert "heavy_animation" in found
+    assert found["heavy_animation"]["effects"] == 25
+    assert "video" in found["heavy_animation"]["message"].lower()
+
+
+def test_the_check_leaves_an_ordinary_click_to_reveal_slide_to_the_general_note(tmp_path):
+    quiet = click_group(effect("entr", 0, set_visible("5", 0) + fade("5")))
+    codes = [w["code"] for w in checked(tmp_path, quiet)]
+
+    assert "heavy_animation" not in codes
+    assert "timing" in codes
