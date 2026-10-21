@@ -20,9 +20,11 @@ The file is untrusted: sizes and counts are bounded, and nothing is executed.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import math
 import re
+import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -35,6 +37,10 @@ from xml.etree.ElementTree import Element  # nosec B405
 
 from defusedxml import ElementTree as SafeET
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
+
+from .errors import ToolkitError
+from .model import Compatibility as C
+from .model import warning
 
 NS = {
     "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -122,14 +128,19 @@ def _join(folder: str, target: str) -> str:
     return "/".join(parts)
 
 
-def slide_part(archive: zipfile.ZipFile, number: int) -> str:
+def slide_parts(archive: zipfile.ZipFile) -> list[str]:
+    """The slide parts in the order the deck shows them."""
     presentation = SafeET.fromstring(archive.read("ppt/presentation.xml"))
     rels = _rels(archive, "ppt/presentation.xml")
-    order = [
+    return [
         rels[s.get(R + "id", "")][1]
         for s in presentation.findall("p:sldIdLst/p:sldId", NS)
         if s.get(R + "id", "") in rels
     ]
+
+
+def slide_part(archive: zipfile.ZipFile, number: int) -> str:
+    order = slide_parts(archive)
     if not 1 <= number <= len(order):
         raise ValueError(f"The deck has {len(order)} slides; there is no slide {number}.")
     return order[number - 1]
@@ -1080,23 +1091,227 @@ def _audio_inputs(
     return found
 
 
+def _pt(dimension: dict) -> float:
+    """A Slides size in points, whichever unit it is stated in."""
+    return dimension.get("magnitude", 0) / (1 if dimension.get("unit") == "PT" else EMU_PER_PT)
+
+
+def match_recordings(deck_name: str, names: list[str]) -> dict[int, str]:
+    """The recordings staff made for this deck, by slide number.
+
+    They are named after the deck and the slide: `Lesson 2 - slide 6.mp4`. The
+    deck's name is matched exactly, so one deck's recording is never taken for
+    another's, and any dash is accepted between the name and the word "slide".
+    """
+    stem = Path(deck_name).stem
+    pattern = re.compile(rf"^{re.escape(stem)}\s*[-–—]\s*slide\s+(\d+)\.mp4$", re.IGNORECASE)
+    found: dict[int, str] = {}
+    for name in sorted(names):
+        match = pattern.match(name)
+        if match and int(match.group(1)) >= 1:
+            found.setdefault(int(match.group(1)), name)
+    return found
+
+
+def select_slides(deck: Path, min_effects: int = 20) -> list[int]:
+    """The slides worth recording: those with this many effects or more.
+
+    A click-to-reveal slide has a few; a timed scene has dozens. The simple
+    ones are better kept as slides than as video.
+    """
+    chosen = []
+    with zipfile.ZipFile(deck) as archive:
+        for number, part in enumerate(slide_parts(archive), start=1):
+            timeline = parse_timeline(SafeET.fromstring(archive.read(part)))
+            if len(timeline.effects) >= min_effects:
+                chosen.append(number)
+    return chosen
+
+
+async def attach(
+    google: Any,
+    presentation_id: str,
+    folder_id: str,
+    deck: Path,
+    slides: list[int],
+    *,
+    render: Any = render_video,
+    recordings: dict[int, Path] | None = None,
+) -> tuple[dict, list[dict]]:
+    """Records each slide, saves the video in the conversion folder, and puts it on the slide.
+
+    The video replaces what the slide held: those pictures were the scene's
+    parts, piled up with nothing to play them. One slide at a time, so a slide
+    that cannot be played or placed costs only itself; a video that was saved
+    but could not be placed stays in the folder, and the slide is left alone.
+    Whoever opens the deck needs access to the video file to play it.
+    """
+    summary = {"saved": 0, "placed": 0, "failed": 0}
+    notes: list[dict] = []
+    for number in slides:
+        with tempfile.TemporaryDirectory() as work:
+            out = Path(work) / f"slide{number}.mp4"
+            try:
+                made = (recordings or {}).get(number)
+                if made is not None:
+                    # A recording staff made in PowerPoint is exact: used as it is.
+                    await asyncio.to_thread(shutil.copyfile, made, out)
+                else:
+                    await asyncio.to_thread(render, deck, number, out)
+                saved = await google.upload(
+                    out, f"Slide {number} animation.mp4", "video/mp4", folder_id, retry=True
+                )
+                summary["saved"] += 1
+            except (ValueError, RuntimeError, OSError, ToolkitError) as error:
+                summary["failed"] += 1
+                reason = (
+                    str(error) if isinstance(error, ValueError) else "It could not be recorded."
+                )
+                notes.append(
+                    warning(
+                        "animation_video_failed",
+                        f"Slide {number}'s animation was not recorded. {reason}",
+                        classification=C.UNSUPPORTED,
+                        slideIndex=number - 1,
+                    )
+                )
+                continue
+        try:
+            presentation = await google.inspect(presentation_id)
+            page = presentation["slides"][number - 1]
+            width = _pt(presentation["pageSize"]["width"])
+            height = _pt(presentation["pageSize"]["height"])
+            requests: list[dict] = [
+                {
+                    "createVideo": {
+                        "objectId": f"wmt_animation_{number}",
+                        "elementProperties": {
+                            "pageObjectId": page["objectId"],
+                            "size": {
+                                "width": {"magnitude": width, "unit": "PT"},
+                                "height": {"magnitude": height, "unit": "PT"},
+                            },
+                            "transform": {
+                                "scaleX": 1,
+                                "scaleY": 1,
+                                "translateX": 0,
+                                "translateY": 0,
+                                "unit": "PT",
+                            },
+                        },
+                        "source": "DRIVE",
+                        "id": saved["id"],
+                    }
+                }
+            ]
+            requests += [
+                {"deleteObject": {"objectId": element["objectId"]}}
+                for element in page.get("pageElements", [])
+            ]
+            await google.slides_batch(presentation_id, requests)
+        except (IndexError, KeyError, ToolkitError):
+            summary["failed"] += 1
+            notes.append(
+                warning(
+                    "animation_video_saved_only",
+                    f"Slide {number}'s animation was recorded and saved in the conversion "
+                    "folder, but could not be put on the slide. The slide is as it was.",
+                    classification=C.SUBSTITUTED,
+                    slideIndex=number - 1,
+                )
+            )
+            continue
+        summary["placed"] += 1
+        notes.append(
+            warning(
+                "animation_video_placed",
+                f"Slide {number}'s animation was recorded as a video and put on the slide in "
+                "place of its pictures. The video is saved in the conversion folder; anyone "
+                "who plays the deck needs access to it.",
+                classification=C.SUBSTITUTED,
+                slideIndex=number - 1,
+            )
+        )
+    return summary, notes
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
     import json
+    import os
 
-    parser = argparse.ArgumentParser(
-        description="Play one slide's animation to an MP4 (prototype)."
-    )
-    parser.add_argument("deck", type=Path)
-    parser.add_argument("slide", type=int)
-    parser.add_argument("output", type=Path)
-    parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--width", type=int, default=1280)
-    parser.add_argument("--max-seconds", type=float, default=MAX_SECONDS)
-    parser.add_argument(
+    parser = argparse.ArgumentParser(description="Play a slide's animation to video (prototype).")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    render_cmd = commands.add_parser("render", help="play one slide to an MP4")
+    render_cmd.add_argument("deck", type=Path)
+    render_cmd.add_argument("slide", type=int)
+    render_cmd.add_argument("output", type=Path)
+    render_cmd.add_argument("--fps", type=int, default=24)
+    render_cmd.add_argument("--width", type=int, default=1280)
+    render_cmd.add_argument("--max-seconds", type=float, default=MAX_SECONDS)
+    render_cmd.add_argument(
         "--png-at", default="", help="comma-separated seconds: save a still of each"
     )
+
+    select_cmd = commands.add_parser("select", help="list the slides worth recording")
+    select_cmd.add_argument("deck", type=Path)
+    select_cmd.add_argument("--min-effects", type=int, default=20)
+
+    attach_cmd = commands.add_parser(
+        "attach",
+        help="put a video on each animated slide of an already converted deck "
+        "(the token is read from GOOGLE_ACCESS_TOKEN)",
+    )
+    attach_cmd.add_argument("deck", type=Path, help="the original .pptx")
+    attach_cmd.add_argument("presentation", help="the converted Slides deck's id")
+    attach_cmd.add_argument("folder", help="the conversion folder's id")
+    attach_cmd.add_argument("--slides", default="auto", help="'auto' or numbers such as 6,9")
+    attach_cmd.add_argument(
+        "--recordings-dir",
+        type=Path,
+        help="a folder of recordings named like 'DECK NAME - slide 6.mp4'; used instead of playing",
+    )
     args = parser.parse_args(argv)
+
+    if args.command == "select":
+        print(json.dumps(select_slides(args.deck, args.min_effects)))
+        return
+    if args.command == "attach":
+        import httpx
+
+        from .google import Google
+
+        recordings: dict[int, Path] = {}
+        if args.recordings_dir:
+            names = [p.name for p in args.recordings_dir.iterdir() if p.is_file()]
+            recordings = {
+                n: args.recordings_dir / name
+                for n, name in match_recordings(args.deck.name, names).items()
+            }
+        wanted = (
+            select_slides(args.deck)
+            if args.slides == "auto"
+            else [int(n) for n in args.slides.split(",") if n.strip()]
+        )
+        slides = sorted(set(wanted) | set(recordings))
+
+        async def go() -> None:
+            async with httpx.AsyncClient(timeout=300) as client:
+                google = Google(os.environ["GOOGLE_ACCESS_TOKEN"], client)
+                summary, notes = await attach(
+                    google, args.presentation, args.folder, args.deck, slides, recordings=recordings
+                )
+                print(
+                    json.dumps(
+                        {"slides": slides, "usedRecordings": sorted(recordings), **summary},
+                        indent=2,
+                    )
+                )
+                print(json.dumps([n["code"] for n in notes]))
+
+        asyncio.run(go())
+        return
     if args.png_at:
         with zipfile.ZipFile(args.deck) as archive:
             part = slide_part(archive, args.slide)

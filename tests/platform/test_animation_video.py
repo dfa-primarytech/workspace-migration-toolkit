@@ -6,6 +6,7 @@ then a tiny deck is read, played at chosen moments, and the pixels are looked at
 
 from __future__ import annotations
 
+import asyncio
 import io
 import shutil
 import zipfile
@@ -421,3 +422,230 @@ def test_a_slide_plays_to_an_mp4_the_length_of_its_animation(tmp_path):
 def test_a_slide_with_no_animation_is_refused(tmp_path):
     with pytest.raises(ValueError, match="no animation"):
         av.render_video(deck(tmp_path, pic("5", *BOX), ""), 1, tmp_path / "x.mp4")
+
+
+# ---------------------------------------------------------------- putting it on the slide
+
+
+class Drive:
+    """Records what is sent to Drive and Slides."""
+
+    def __init__(self, fail_upload=False, fail_batch=False, slides=1):
+        self.uploads, self.batches = [], []
+        self.fail_upload, self.fail_batch = fail_upload, fail_batch
+        self.slides = slides
+
+    async def upload(self, path, name, mime, parent, **kwargs):
+        if self.fail_upload:
+            raise ToolkitError("upload_uncertain", "A Google upload failed.", 502)
+        self.uploads.append((name, mime, parent, path.read_bytes()))
+        return {"id": f"video{len(self.uploads)}"}
+
+    async def inspect(self, presentation_id):
+        return {
+            "pageSize": {
+                "width": {"magnitude": 12700000, "unit": "EMU"},
+                "height": {"magnitude": 7620000, "unit": "EMU"},
+            },
+            "slides": [
+                {
+                    "objectId": f"s{i}",
+                    "pageElements": [{"objectId": f"a{i}"}, {"objectId": f"b{i}"}],
+                }
+                for i in range(1, self.slides + 1)
+            ],
+        }
+
+    async def slides_batch(self, presentation_id, requests):
+        self.batches.append((presentation_id, requests))
+        if self.fail_batch:
+            raise ToolkitError("google_failed", "refused", 502)
+        return {}
+
+
+def fake_render(deck, number, out, **kwargs):
+    out.write_bytes(b"mp4 of slide %d" % number)
+    return {"seconds": 5.0, "notes": []}
+
+
+def run_attach(drive, slides, render=fake_render, deck="deck.pptx"):
+    return asyncio.run(av.attach(drive, "pres", "folder", deck, slides, render=render))
+
+
+from workspace_toolkit.errors import ToolkitError  # noqa: E402
+
+
+def test_the_video_is_saved_in_the_conversion_folder_and_put_on_the_slide():
+    drive = Drive()
+    summary, notes = run_attach(drive, [1])
+
+    assert drive.uploads == [("Slide 1 animation.mp4", "video/mp4", "folder", b"mp4 of slide 1")]
+    ((deck, requests),) = drive.batches
+    assert deck == "pres"
+    video = requests[0]["createVideo"]
+    assert video["source"] == "DRIVE"
+    assert video["id"] == "video1"
+    properties = video["elementProperties"]
+    assert properties["pageObjectId"] == "s1"
+    assert properties["size"] == {
+        "width": {"magnitude": 1000.0, "unit": "PT"},
+        "height": {"magnitude": 600.0, "unit": "PT"},
+    }
+    assert (properties["transform"]["translateX"], properties["transform"]["translateY"]) == (0, 0)
+    assert summary == {"saved": 1, "placed": 1, "failed": 0}
+    assert [n["code"] for n in notes] == ["animation_video_placed"]
+
+
+def test_the_pictures_the_video_replaces_are_removed_after_it_is_made():
+    drive = Drive()
+    run_attach(drive, [1])
+
+    kinds = [next(iter(r)) for r in drive.batches[0][1]]
+    assert kinds == ["createVideo", "deleteObject", "deleteObject"]
+    assert [r["deleteObject"]["objectId"] for r in drive.batches[0][1][1:]] == ["a1", "b1"]
+
+
+def test_each_slide_gets_its_own_video_and_its_own_batch():
+    drive = Drive(slides=3)
+    summary, _ = run_attach(drive, [1, 3])
+
+    assert [u[0] for u in drive.uploads] == ["Slide 1 animation.mp4", "Slide 3 animation.mp4"]
+    assert [b[1][0]["createVideo"]["elementProperties"]["pageObjectId"] for b in drive.batches] == [
+        "s1",
+        "s3",
+    ]
+    assert summary["placed"] == 2
+
+
+def test_a_video_that_cannot_be_put_on_the_slide_is_kept_in_the_folder_and_the_slide_left_alone():
+    drive = Drive(fail_batch=True)
+    summary, notes = run_attach(drive, [1])
+
+    assert len(drive.uploads) == 1
+    assert summary == {"saved": 1, "placed": 0, "failed": 1}
+    assert [n["code"] for n in notes] == ["animation_video_saved_only"]
+
+
+def test_a_slide_that_cannot_be_played_is_reported_and_nothing_is_sent():
+    def broken(deck, number, out, **kwargs):
+        raise ValueError("This slide has no animation to play.")
+
+    drive = Drive()
+    summary, notes = run_attach(drive, [1], render=broken)
+
+    assert (drive.uploads, drive.batches) == ([], [])
+    assert summary == {"saved": 0, "placed": 0, "failed": 1}
+    assert [n["code"] for n in notes] == ["animation_video_failed"]
+
+
+def test_a_failed_upload_stops_that_slide_but_not_the_run():
+    drive = Drive(fail_upload=True)
+    summary, notes = run_attach(drive, [1])
+
+    assert drive.batches == []
+    assert summary["failed"] == 1
+    assert [n["code"] for n in notes] == ["animation_video_failed"]
+
+
+def test_a_slide_number_the_presentation_does_not_have_is_reported():
+    drive = Drive(slides=1)
+    summary, notes = run_attach(drive, [7])
+
+    assert drive.batches == []
+    assert summary["failed"] == 1
+
+
+def test_only_slides_with_real_animation_are_picked_automatically(tmp_path):
+    busy = click_group(*[effect("entr", i * 100, set_visible("5", 0)) for i in range(25)])
+    assert av.select_slides(deck(tmp_path, pic("5", *BOX), busy)) == [1]
+
+    quiet = click_group(effect("entr", 0, set_visible("5", 0)))
+    assert av.select_slides(deck(tmp_path, pic("5", *BOX), quiet)) == []
+    assert av.select_slides(deck(tmp_path, pic("5", *BOX), ""), min_effects=1) == []
+
+
+# ---------------------------------------------------------------- recordings staff made
+
+
+def test_a_recording_staff_made_is_used_and_the_slide_is_not_played(tmp_path):
+    made = tmp_path / "Lesson 2 - slide 1.mp4"
+    made.write_bytes(b"recorded in PowerPoint")
+    played = []
+
+    def render(deck, number, out, **kwargs):
+        played.append(number)
+
+    drive = Drive()
+    summary, notes = asyncio.run(
+        av.attach(drive, "pres", "folder", "deck.pptx", [1], render=render, recordings={1: made})
+    )
+
+    assert played == [], "their recording is used as it is"
+    assert drive.uploads == [
+        ("Slide 1 animation.mp4", "video/mp4", "folder", b"recorded in PowerPoint")
+    ]
+    assert drive.batches[0][1][0]["createVideo"]["source"] == "DRIVE"
+    assert summary == {"saved": 1, "placed": 1, "failed": 0}
+    assert [n["code"] for n in notes] == ["animation_video_placed"]
+
+
+def test_a_slide_with_no_recording_is_still_played_when_asked_for():
+    drive = Drive(slides=2)
+    played = []
+
+    def render(deck, number, out, **kwargs):
+        played.append(number)
+        out.write_bytes(b"mp4")
+
+    asyncio.run(
+        av.attach(drive, "pres", "folder", "deck.pptx", [1, 2], render=render, recordings={})
+    )
+
+    assert played == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Lesson 2 - slide 6.mp4",
+        "lesson 2 - Slide 6.MP4",
+        "Lesson 2 – slide 6.mp4",
+        "Lesson 2 - slide  6.mp4",
+    ],
+)
+def test_a_recording_is_found_by_the_deck_name_and_slide_number(name):
+    assert av.match_recordings("Lesson 2.pptx", [name, "notes.txt"]) == {6: name}
+
+
+def test_only_this_decks_recordings_are_taken():
+    names = [
+        "Lesson 2 - slide 6.mp4",
+        "Lesson 20 - slide 6.mp4",
+        "Another deck - slide 6.mp4",
+        "Lesson 2 - slide 6.mov",
+        "Lesson 2 - slide six.mp4",
+        "Lesson 2 - slide 6.mp4.txt",
+        "Lesson 2 - slide 0.mp4",
+        "Lesson 2 - slide 9.mp4",
+    ]
+
+    assert av.match_recordings("Lesson 2.pptx", names) == {
+        6: "Lesson 2 - slide 6.mp4",
+        9: "Lesson 2 - slide 9.mp4",
+    }
+
+
+def test_a_deck_name_with_punctuation_is_matched_literally():
+    assert av.match_recordings("Year 7 (Maps) [v2].pptx", ["Year 7 (Maps) [v2] - slide 3.mp4"]) == {
+        3: "Year 7 (Maps) [v2] - slide 3.mp4"
+    }
+    assert av.match_recordings("A.pptx", ["AB - slide 1.mp4", "A. - slide 1.mp4"]) == {}
+
+
+def test_the_select_command_lists_the_slides_worth_recording(tmp_path, capsys):
+    busy = click_group(*[effect("entr", i * 100, set_visible("5", 0)) for i in range(25)])
+    path = deck(tmp_path, pic("5", *BOX), busy)
+
+    av.main(["select", str(path)])
+
+    assert capsys.readouterr().out.strip() == "[1]"
