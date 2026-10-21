@@ -891,3 +891,17 @@ and LibreOffice cannot play animations to video.
 - Still open: playback seen in the Slides editor, sharing the video, and whether
   any of this runs in the hosted app.
 
+### 2026-10-21 (later still): embedded video and sound are put back
+
+- An embedded video is saved to Drive beside the deck already, so the conversion
+  now puts it back with a Drive video element where its still picture was. This
+  needs no ffmpeg and runs in the hosted conversion; a refused request leaves the
+  picture and is reported.
+- The Slides API has no way to add a sound. A sound is wrapped in a short video
+  (its icon, with its audio at its trim) and that is put on the slide instead.
+  Wrapping needs ffmpeg, so it is a tool we run, not part of the hosted service.
+- A sound hidden off the slide is left alone: it played by itself, which a slide
+  cannot do. A slide given to an animation video is left to that video.
+- Verified through the app's real conversion code and Google, on a synthetic deck.
+  The playing of a wrapped sound in the Slides editor was not seen.
+

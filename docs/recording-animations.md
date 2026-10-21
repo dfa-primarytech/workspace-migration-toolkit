@@ -97,6 +97,22 @@ If there is no recording for an animated slide, it converts as before, with its
 pictures piled together, and the report says so. A recording is always better
 than the converter's own attempt.
 
+## Videos and sounds that are already in your slides
+
+Nothing for staff to do here.
+
+- **A video file inside a slide** is saved in the conversion folder and put back on its
+  slide, where its still picture was.
+- **A sound** cannot be kept as a sound: Google Slides cannot hold one. The migration team
+  wraps each in a short video (the speaker icon, with the audio) and puts that on the slide
+  instead. Press it to play.
+- **A YouTube video** is put back as a YouTube video. Other online videos (Vimeo,
+  SharePoint, OneDrive) link from their still picture.
+- A sound hidden off the slide, which played by itself, cannot be kept.
+
+As with a recording, anyone who plays the deck needs access to these video files, and
+Drive needs a few minutes before a new video plays.
+
 ## If something looks wrong
 
 | What you see | What to do |
@@ -120,3 +136,10 @@ The animation tool has three commands (`python -m workspace_toolkit.animation_vi
   in the conversion folder and puts them on the converted slides. Recordings in
   `DIR` named as above are used as they are; any other selected slide is played
   by the tool. The Google token is read from `GOOGLE_ACCESS_TOKEN`.
+
+The embedded-media tool (`python -m workspace_toolkit.embedded_media`, needs ffmpeg):
+
+- `find DECK.pptx` lists the videos and sounds that show on slides.
+- `sounds DECK.pptx PRESENTATION_ID FOLDER_ID [--skip 6]` wraps each sound in a video, saves it in
+  the conversion folder and puts it on the converted slide. `--skip` leaves slides alone, such as
+  a slide given to an animation video. Embedded videos need no step: the conversion does them.
