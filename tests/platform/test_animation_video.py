@@ -762,3 +762,51 @@ def test_a_video_with_sound_holds_only_picture_and_sound(tmp_path):
     ]
     assert summary["soundCues"] == 1
     assert [x[:11] for x in streams] == ["Video: h264", "Audio: aac "], streams
+
+
+def run_hosted(drive, monkeypatch, chosen, render=fake_render, budget=30):
+    monkeypatch.setattr(av, "select_slides", lambda deck: chosen)
+    return asyncio.run(
+        av.record_hosted(drive, "pres", "folder", "deck.pptx", render=render, budget=budget)
+    )
+
+
+def test_hosted_recording_covers_a_few_slides_and_says_which_it_skipped(monkeypatch):
+    drive = Drive(slides=6)
+    summary, notes = run_hosted(drive, monkeypatch, [1, 2, 3, 4, 5])
+
+    assert summary["saved"] == 3
+    assert [u[0] for u in drive.uploads] == [f"Slide {n} animation.mp4" for n in (1, 2, 3)]
+    skipped = [n for n in notes if n["code"] == "animation_video_skipped"]
+    assert len(skipped) == 2
+    assert "Slide 4" in skipped[0]["message"]
+
+
+def test_hosted_recording_does_nothing_for_a_deck_without_heavy_animation(monkeypatch):
+    drive = Drive()
+    assert run_hosted(drive, monkeypatch, []) == ({"saved": 0, "placed": 0, "failed": 0}, [])
+    assert drive.uploads == []
+
+
+def test_hosted_recording_gives_up_when_it_runs_out_of_time(monkeypatch):
+    def slow(deck, number, out, **kwargs):
+        import time
+
+        time.sleep(0.6)
+        out.write_bytes(b"x")
+
+    summary, notes = run_hosted(Drive(), monkeypatch, [1], render=slow, budget=0.1)
+
+    assert any(n["code"] == "animation_video_failed" for n in notes)
+
+
+def test_hosted_recording_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("WMT_HOSTED_ANIMATION", "off")
+    assert av.hosted_enabled() is False
+
+
+def test_hosted_recording_needs_ffmpeg(monkeypatch):
+    monkeypatch.delenv("WMT_HOSTED_ANIMATION", raising=False)
+    monkeypatch.setitem(__import__("sys").modules, "imageio_ffmpeg", None)
+    monkeypatch.setattr(av.shutil, "which", lambda name: None)
+    assert av.hosted_enabled() is False
