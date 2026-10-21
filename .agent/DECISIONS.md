@@ -853,3 +853,55 @@ Slides, so their picture is given the link: a click in present mode opens it.
 - Not done: embedding a video that is a file inside the deck from its Drive copy,
   and animations. Animations stay detected and ignored. Recording them as video
   needs PowerPoint itself, which is not available on the hosted service.
+
+## 2026-10-21: A prototype plays a slide's animation to video
+
+A slide that is a timed, narrated scene cannot be kept by the Google import
+(it has no animation) or by the Slides API (it cannot create any). The only
+way to keep what it does is to record it. PowerPoint cannot be used for that on
+the hosted service (Microsoft does not support unattended Office automation,
+and its licence does not allow serving other people's requests from a server),
+and LibreOffice cannot play animations to video.
+- So a prototype plays the animation itself: the timing tree becomes timed
+  effects and sound cues, Pillow draws each moment, ffmpeg encodes an MP4.
+- What it proved, on one real slide (96 effects, 12 sound cues, 77 s): it
+  matches PowerPoint's own recording closely (length, positions, timing, sound
+  level), and costs about 45 s of a 2 CPU, 2 GB container, 5.4 MB of video.
+- What it did not prove: other decks, text-heavy slides (the font stand-in and
+  text layout are rough), effects it plays as a fade, embedding the result in
+  the converted slide, or running it in the hosted app.
+- Not decided: whether it joins the conversion, runs only on the test host for
+  migrations we run ourselves, or both. PowerPoint on the owner's PC stays the
+  exact fallback for a slide the player cannot play.
+
+### 2026-10-21 (later): the video goes on the slide, from a recording or the player
+
+- A Drive video is put on the converted slide with `createVideo` (source DRIVE),
+  full slide, and the slide's pictures are removed: they were the scene's parts,
+  with nothing left to play them. Checked against the real Slides API.
+- A recording staff made in PowerPoint is exact, so it is used as it is when
+  one is found beside the deck, named `DECK - slide N.mp4` (deck name matched
+  exactly). Otherwise the tool plays the slide itself, when asked.
+- The check names a slide with 20 or more effects as a timed scene and says to
+  record it beforehand, so the work can be done before the migration.
+- A slide is never allowed to stop the rest, and a failure's reason goes to the
+  log, never the report.
+- Drive processes a new video for a few minutes; the slide shows a placeholder
+  until then. Anyone who plays the deck needs access to the video file.
+- Still open: playback seen in the Slides editor, sharing the video, and whether
+  any of this runs in the hosted app.
+
+### 2026-10-21 (later still): embedded video and sound are put back
+
+- An embedded video is saved to Drive beside the deck already, so the conversion
+  now puts it back with a Drive video element where its still picture was. This
+  needs no ffmpeg and runs in the hosted conversion; a refused request leaves the
+  picture and is reported.
+- The Slides API has no way to add a sound. A sound is wrapped in a short video
+  (its icon, with its audio at its trim) and that is put on the slide instead.
+  Wrapping needs ffmpeg, so it is a tool we run, not part of the hosted service.
+- A sound hidden off the slide is left alone: it played by itself, which a slide
+  cannot do. A slide given to an animation video is left to that video.
+- Verified through the app's real conversion code and Google, on a synthetic deck.
+  The playing of a wrapped sound in the Slides editor was not seen.
+

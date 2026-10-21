@@ -977,3 +977,23 @@ archive rather than growing this one further.
   - The 27 forms and their converted PDFs hold children's names, dates of birth and assessment data. They are in the owner's Downloads folder, not here. Never put their contents in issues, PRs or tests.
   - Tests that print a rewritten file's text must not run on those files.
   - The host test image `wmt-test/app:main` was rebuilt from main `8f45ba5` on 2026-10-02. It does not hold this branch.
+
+---
+
+- Agent: Claude Code (Claude Sonnet 5.5, platform/Publisher)
+- Date: 2026-10-06
+- Branch: `feat/publisher-wmf-pictures`, based on main `77c46c3` (#192, deployed to Cloud Run that day). Not merged.
+- Objective: a school's 28-page Publisher booklet converted to Slides badly. Its clipart was missing.
+- Files changed: new `app/workspace_toolkit/metafile.py` (a bounded WMF renderer: filled polygons, polypolygons with holes, rectangles, ellipses, solid brushes, plain pens; refuses a metafile needing text, a bitmap or an arc); `publisher_art.py` (`_open` draws a WMF); new `tests/platform/test_metafile.py` (metafiles built in code).
+- Completed:
+  - The booklet's six WMF pictures (pages 16 and 17) were `UNSUPPORTED: picture-missing`; they now convert (0 unsupported). Drawn and looked at: clipart illustrations, correct way up. A negative window extent (Publisher's own) was the bug the first run found; there is a test for it.
+  - Run through the container with this branch: 28 pages, status counts NATIVE 130, SUBSTITUTED 155, IGNORED 96, FLATTENED 2.
+- Checks: 814 platform tests pass; Ruff, format, mypy and the secret scan clean.
+- Known failures: none in the code. Not checked in Google.
+- Unresolved, all on the same booklet and all unseen in Slides:
+  - 29 tables over 12 pages. 11 had their text made 75% smaller and may still overflow (pages 5, 9, 19, 20, 21, 24, 27); 21 narrow columns were widened (pages 10, 12, 16, 17, 19 to 21, 24). Borders are Publisher's default grid, as the file stores none.
+  - 74 shapes are drawn as separate lines.
+  - What the teacher meant by "a lot of pages to redo" needs the converted deck or screenshots next to the original.
+- Decisions: none new.
+- Next task: none claimed.
+- Warnings: the booklet is the owner's file, kept on the test host only and removed afterwards; never put its contents in issues, PRs or tests. The test image `wmt-test/app:wmf` on the test host is from this branch; `wmt-test/app:main` is main `77c46c3`.
