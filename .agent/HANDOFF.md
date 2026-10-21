@@ -5,7 +5,7 @@
 - Branch: `hosted-animation-video`, based on main `1fce024`.
 - Objective: the hosted conversion records heavy animations and wraps sounds itself, so staff no longer need to run anything.
 - Files changed:
-  - `animation_video.py`: `hosted_enabled()` (on unless `WMT_HOSTED_ANIMATION=off`, and only where ffmpeg exists) and `record_hosted()` (the heaviest 3 slides, each at most 60 s of video, 150 s in all; slides beyond 3 are named in a warning; never raises).
+  - `animation_video.py`: `hosted_enabled()` (on unless `WMT_HOSTED_ANIMATION=off`, and only where ffmpeg exists) and `record_hosted()` (the heaviest 3 slides, each at most 120 s of video, 240 s in all; slides beyond 3 are named in a warning; never raises).
   - `google.convert`: after the embedded videos, records animations (`report["animationVideos"]`) and wraps sounds (`report["soundVideos"]`, skipping slides given a video). Each step is non-fatal.
   - `pyproject.toml`, both lock files: `imageio-ffmpeg==0.6.0`, whose wheel carries a static ffmpeg (about 60 MB on the image).
   - Tests: `test_hosted_animation.py` (3), five more in `test_animation_video.py`; `conftest.py` switches recording off for every other test.

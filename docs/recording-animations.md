@@ -146,4 +146,4 @@ The embedded-media tool (`python -m workspace_toolkit.embedded_media`, needs ffm
 
 ## When the web converter does it for you
 
-The hosted converter also records the heaviest animated slides itself (up to 3 per file, up to a minute each) and puts the video on the slide, so a recording made beforehand is only needed for exact results or for more than 3 slides. It names any slide it did not record in the report.
+The hosted converter also records the heaviest animated slides itself (up to 3 per file, up to two minutes each) and puts the video on the slide, so a recording made beforehand is only needed for exact results or for more than 3 slides. It names any slide it did not record in the report.

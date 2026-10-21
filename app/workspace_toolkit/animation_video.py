@@ -1135,8 +1135,8 @@ def match_recordings(deck_name: str, names: list[str]) -> dict[int, str]:
 # The hosted service records animations itself, within these limits, so a deck
 # full of them can never make a conversion run away with time or memory.
 HOSTED_MAX_SLIDES = 3
-HOSTED_SLIDE_SECONDS = 60
-HOSTED_BUDGET_SECONDS = 150
+HOSTED_SLIDE_SECONDS = 120
+HOSTED_BUDGET_SECONDS = 240
 
 
 def hosted_enabled() -> bool:
