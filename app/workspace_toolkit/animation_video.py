@@ -160,7 +160,9 @@ def _xfrm(node: Element) -> Element | None:
     return None
 
 
-def _read_node(el: Element, rels: dict, media: dict, archive: zipfile.ZipFile) -> Node | None:
+def _read_node(
+    el: Element, rels: dict, media: dict, archive: zipfile.ZipFile, load: bool = True
+) -> Node | None:
     tag = el.tag.split("}")[1]
     if tag not in ("sp", "pic", "grpSp"):
         return None
@@ -193,7 +195,7 @@ def _read_node(el: Element, rels: dict, media: dict, archive: zipfile.ZipFile) -
                 _num(ce.get("cy")),
             )
         for child in el:
-            sub = _read_node(child, rels, media, archive)
+            sub = _read_node(child, rels, media, archive, load)
             if sub:
                 node.children.append(sub)
     elif tag == "pic":
@@ -202,7 +204,8 @@ def _read_node(el: Element, rels: dict, media: dict, archive: zipfile.ZipFile) -
         if target and target in archive.namelist():
             if archive.getinfo(target).file_size <= MAX_MEDIA_BYTES:
                 node.blip = target
-                media.setdefault(target, archive.read(target))
+                if load:
+                    media.setdefault(target, archive.read(target))
         line = el.find("p:spPr/a:ln", NS)
         if line is not None and line.find("a:noFill", NS) is None:
             colour = line.find("a:solidFill/a:srgbClr", NS)
@@ -222,7 +225,8 @@ def _read_node(el: Element, rels: dict, media: dict, archive: zipfile.ZipFile) -
                 and archive.getinfo(target).file_size <= MAX_MEDIA_BYTES
             ):
                 node.audio = target
-                media.setdefault(target, archive.read(target))
+                if load:
+                    media.setdefault(target, archive.read(target))
             trim = el.find(".//p14:trim", NS)
             if trim is not None:
                 node.trim = (_num(trim.get("st")), _num(trim.get("end")))
@@ -251,7 +255,8 @@ def _read_node(el: Element, rels: dict, media: dict, archive: zipfile.ZipFile) -
     return node
 
 
-def read_scene(archive: zipfile.ZipFile, part: str) -> Scene:
+def read_scene(archive: zipfile.ZipFile, part: str, load_media: bool = True) -> Scene:
+    """The slide's shapes. `load_media=False` leaves out the pictures' and clips' bytes."""
     presentation = SafeET.fromstring(archive.read("ppt/presentation.xml"))
     size = presentation.find("p:sldSz", NS)
     root = SafeET.fromstring(archive.read(part))
@@ -260,7 +265,7 @@ def read_scene(archive: zipfile.ZipFile, part: str) -> Scene:
     nodes = []
     tree = root.find("p:cSld/p:spTree", NS)
     for child in tree if tree is not None else []:
-        node = _read_node(child, rels, media, archive)
+        node = _read_node(child, rels, media, archive, load_media)
         if node:
             nodes.append(node)
     return Scene(

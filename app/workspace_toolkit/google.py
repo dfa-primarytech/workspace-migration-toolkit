@@ -12,7 +12,7 @@ from weakref import WeakKeyDictionary
 
 import httpx
 
-from . import online_video
+from . import embedded_media, online_video
 from .errors import ToolkitError
 from .model import Compatibility as C
 from .model import text_tokens, warning
@@ -915,6 +915,16 @@ async def convert(
         if any(videos.values()):
             report["onlineVideos"] = videos
         report["warnings"].extend(video_notes)
+        # An embedded video was saved to the folder above; put it back on its
+        # slide from that copy. Sounds are not: that needs ffmpeg (see the tool).
+        source = root / "source.pptx"
+        if source.exists():
+            clips, clip_notes = await embedded_media.place_videos(
+                google, result["id"], source, embedded_media.saved_by_part(manifest, report)
+            )
+            if any(clips.values()):
+                report["embeddedVideos"] = clips
+            report["warnings"].extend(clip_notes)
         render_report = root / "result" / "render.json"
         if render_report.exists():
             rendered_details = json.loads(render_report.read_text(encoding="utf-8"))
