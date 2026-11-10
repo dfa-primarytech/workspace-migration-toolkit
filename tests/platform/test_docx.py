@@ -650,6 +650,7 @@ def test_fallback_duplicates_are_not_counted_as_separate_objects(tmp_path):
         "picturesShrunk": 0,
         "rowsProtected": 0,
         "ink": 0,
+        "arrows": 0,
         "legacyPictures": 0,
         "unsupported": {},
     }
