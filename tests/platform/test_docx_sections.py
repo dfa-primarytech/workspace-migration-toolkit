@@ -302,7 +302,7 @@ def test_several_boxes_on_the_section_break_paragraph_all_stay_inside_it(tmp_pat
     not a contrived one.
     """
     body = (
-        section_break_with(box(), box(x=3000000), box(y=2000000))
+        section_break_with(box(), box(y=2000000), box(y=4000000))
         + text("Second section")
         + final_section(A4_LANDSCAPE)
     )

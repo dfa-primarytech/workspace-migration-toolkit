@@ -170,6 +170,7 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
         )
 
     _mark_backing_pictures(items)
+    _in_page_order(items)
 
     unsupported: dict[str, int] = {}
     report: dict[str, Any] = {
@@ -194,9 +195,17 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
     body = root.find(q("w", "body"))
     first_paragraph = body.find(q("w", "p")) if body is not None else None
     panels, absorbed = _panels_in_page_boxes(items, sections, first_paragraph)
+    partner = _side_by_side(items, sections, absorbed)
+    paired: set[int] = set()
     for item in items:
-        if id(item) in absorbed:
-            continue  # carried into the page-sized box it sits in
+        if id(item) in absorbed or id(item) in paired:
+            continue  # carried into a page-sized box, or already in a pair
+        if id(item) in partner:
+            other = partner[id(item)]
+            if _replace_pair(parent_of, item, other, ids, placed, sections):
+                paired.add(id(other))
+                report["textboxes"] += 2
+                continue
         if item.kind == "unsupported":
             # Never delete what we cannot convert -- leave it for the importer.
             unsupported[item.label] = unsupported.get(item.label, 0) + 1
@@ -228,6 +237,39 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
                 report["picturesInlined"] += 1
             report["pictures"] += 1
     return report
+
+
+def _in_page_order(items: list[Anchored]) -> None:
+    """Puts the boxes anchored in one paragraph in the order they sit on the page.
+
+    Word writes them in the order they were drawn, which need not be the order
+    they read in: a flowchart drawn bottom-up would otherwise come out upside
+    down. Top to bottom, then left to right, and only when every box in the
+    paragraph has a vertical offset in the same frame to compare; otherwise they
+    keep the order they were written in.
+    """
+    groups: dict[int, list[int]] = {}
+    for index, item in enumerate(items):
+        if item.kind == "textbox" and item.paragraph is not None:
+            groups.setdefault(id(item.paragraph), []).append(index)
+
+    def across(item: Anchored) -> int:
+        # Only to tell left from right: an alignment has no offset to compare.
+        h = item.h or {}
+        if h.get("mode") == "offset":
+            return int(h["emu"])
+        return {"left": 0, "center": 10**8, "right": 2 * 10**8}.get(h.get("align", ""), 0)
+
+    for slots in groups.values():
+        verticals = [items[i].v for i in slots]
+        if len(slots) < 2 or any(not v or v.get("mode") != "offset" for v in verticals):
+            continue
+        if len({v["frame"] for v in verticals if v}) != 1:
+            continue
+        ordered = sorted(slots, key=lambda i: (items[i].v["emu"], across(items[i])))  # type: ignore[index]
+        chosen = [items[i] for i in ordered]
+        for slot, item in zip(slots, chosen, strict=True):
+            items[slot] = item
 
 
 def _inline_picture(parent_of: dict, item: Anchored, ids: Ids) -> bool:
@@ -498,6 +540,150 @@ def _replace_textbox(
     # Inserted straight after the paragraph, every box in it would land in
     # front of the one before and the page would read backwards. Boxes from
     # one paragraph keep the order they were written in.
+    _insert_table(parent_of, container, paragraph, table, placed)
+    return True
+
+
+def _text_width_dxa(sections: Sections, item: Anchored) -> int:
+    geometry = page_geometry(sections.of(item.anchor))
+    page, left, right = geometry["width"], geometry["left"], geometry["right"]
+    if page is None or left is None or right is None:
+        return 9000
+    return max(1, (page - left - right) // 635)
+
+
+def _left_edge(item: Anchored, width_emu: int) -> int | None:
+    """Where a box starts, from the left margin, or None when that is unknown."""
+    h = item.h
+    if not h or not item.extent:
+        return None
+    if h.get("mode") == "offset":
+        return int(h["emu"])
+    if h.get("mode") == "align":
+        return {"left": 0, "right": width_emu - item.extent["cx"]}.get(h.get("align", ""))
+    return None
+
+
+def _side_by_side(
+    items: list[Anchored], sections: Sections, absorbed: set[int]
+) -> dict[int, Anchored]:
+    """Pairs of boxes that share a band of the page, left one mapped to right one.
+
+    Docs cannot float a box, so boxes laid out beside each other would be
+    stacked and run to several pages. Two boxes anchored in one paragraph, one
+    wholly left of the other and overlapping it vertically, are kept beside
+    each other. Only neighbours in reading order are paired, and each box at
+    most once.
+    """
+    groups: dict[int, list[Anchored]] = {}
+    for item in items:
+        if item.kind == "textbox" and item.paragraph is not None and id(item) not in absorbed:
+            groups.setdefault(id(item.paragraph), []).append(item)
+    pairs: dict[int, Anchored] = {}
+    for group in groups.values():
+        index = 0
+        while index + 1 < len(group):
+            first, second = group[index], group[index + 1]
+            if _beside(first, second, sections):
+                pairs[id(first)] = second
+                index += 2
+            else:
+                index += 1
+    return pairs
+
+
+def _beside(first: Anchored, second: Anchored, sections: Sections) -> bool:
+    if not (first.v and second.v and first.extent and second.extent):
+        return False
+    if first.v.get("mode") != "offset" or second.v.get("mode") != "offset":
+        return False
+    if first.v.get("frame") != second.v.get("frame"):
+        return False
+    if first.v["emu"] + first.extent["cy"] <= second.v["emu"]:
+        return False  # the second starts below the first ends
+    width = _text_width_dxa(sections, first) * 635
+    left, right = _left_edge(first, width), _left_edge(second, width)
+    if left is None or right is None:
+        return False
+    return left + first.extent["cx"] <= right
+
+
+def _replace_pair(
+    parent_of: dict,
+    first: Anchored,
+    second: Anchored,
+    ids: Ids,
+    placed: dict[Element, Element],
+    sections: Sections,
+) -> bool:
+    """Two boxes that sit beside each other become two cells of one borderless table."""
+    paragraph = first.paragraph
+    if paragraph is None or second.paragraph is not paragraph:
+        return False
+    if not (first.extent and second.extent):
+        return False
+    container = parent_of.get(paragraph)
+    if container is None:
+        return False
+    room = _text_width_dxa(sections, first)
+    gap = 120
+    widths = [to_dxa(first.extent["cx"]), to_dxa(second.extent["cx"])]
+    if sum(widths) + gap > room:
+        scale = (room - gap) / sum(widths)
+        widths = [max(1, int(w * scale)) for w in widths]
+    left_table = build_table(first, ids, fit=widths[0])
+    right_table = build_table(second, ids, fit=widths[1])
+    if left_table is None or right_table is None:
+        return False
+    tables = [left_table, right_table]
+    _detach(first.drawing, first.anchor)
+    _detach(second.drawing, second.anchor)
+
+    layout = Element(q("w", "tbl"))
+    properties = SubElement(layout, q("w", "tblPr"))
+    SubElement(properties, q("w", "tblW")).attrib.update(
+        {q("w", "w"): str(sum(widths) + gap), q("w", "type"): "dxa"}
+    )
+    borders = SubElement(properties, q("w", "tblBorders"))
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        SubElement(borders, q("w", side)).attrib.update(
+            {
+                q("w", "val"): "none",
+                q("w", "sz"): "0",
+                q("w", "space"): "0",
+                q("w", "color"): "auto",
+            }
+        )
+    margins = SubElement(properties, q("w", "tblCellMar"))
+    for side in ("top", "left", "bottom", "right"):
+        SubElement(margins, q("w", side)).attrib.update({q("w", "w"): "0", q("w", "type"): "dxa"})
+    SubElement(properties, q("w", "tblLook")).set(q("w", "val"), "0000")
+    columns = [widths[0] + gap, widths[1]]
+    grid = SubElement(layout, q("w", "tblGrid"))
+    for column in columns:
+        SubElement(grid, q("w", "gridCol")).set(q("w", "w"), str(column))
+    row = SubElement(layout, q("w", "tr"))
+    for column, table in zip(columns, tables, strict=True):
+        cell = SubElement(row, q("w", "tc"))
+        cell_properties = SubElement(cell, q("w", "tcPr"))
+        SubElement(cell_properties, q("w", "tcW")).attrib.update(
+            {q("w", "w"): str(column), q("w", "type"): "dxa"}
+        )
+        SubElement(cell_properties, q("w", "vAlign")).set(q("w", "val"), "top")
+        cell.append(table)
+        cell.append(new_paragraph(is_rtl(paragraph)))
+    _insert_table(parent_of, container, paragraph, layout, placed)
+    return True
+
+
+def _insert_table(
+    parent_of: dict,
+    container: Element,
+    paragraph: Element,
+    table: Element,
+    placed: dict[Element, Element] | None,
+) -> None:
+    """Puts the table a box became after the paragraph it was anchored in."""
     after = (placed or {}).get(paragraph, paragraph)
     index = list(container).index(after)
     # A paragraph carrying <w:sectPr> *ends* its section. Inserting after it
@@ -515,7 +701,6 @@ def _replace_textbox(
     parent_of.update(parents(table))
     _keep_tables_apart(container, at, rtl=is_rtl(paragraph))
     _end_with_paragraph(container, rtl=is_rtl(paragraph))
-    return True
 
 
 def _last_block(container: Element) -> Element | None:
