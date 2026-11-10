@@ -1,5 +1,18 @@
 # Handoff
 
+- Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
+- Date: 2026-11-10
+- Branch: `docx-flowchart-boxes`, based on main `b15b382`.
+- Objective: a one-page Word flowchart (13 text boxes and arrows, anchored to paragraphs) converted to three pages with its boxes in the wrong order.
+- Files changed: `docs.py` -- `_in_page_order` puts boxes anchored in one paragraph top to bottom, then left to right (they were in the order drawn); `_side_by_side`/`_replace_pair` keep two boxes that share a band of the page beside each other, as two cells of a borderless table, instead of stacking them. `test_docx_page_textbox.py` (5 new), `test_docx_sections.py` (one test's boxes moved apart so they do not pair).
+- Checks: platform tests pass; Ruff, format, mypy clean.
+- Unresolved: not yet confirmed in Google; the flow arrows are still floating shapes that Docs keeps unchanged (they no longer sit by their boxes); Word cannot open the converted file (empty drawing shells), so Word is no proxy here.
+- Next task: none claimed.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code (Claude Sonnet 5.5, platform/PPTX)
 - Date: 2026-10-21
 - Branch: `hosted-animation-video`, based on main `1fce024`.
@@ -47,29 +60,5 @@
   - The test deck is the owner's and shows people. It was only on the test host and in the scratch folder, and is deleted. Two converted test decks ("WMT animation test ... (delete me)") are left in the owner's Drive on purpose, for the owner to check playback, then delete.
   - A request Google refuses fails a whole batch, so a new request kind is tried against the live API first: this one was.
   - Windows on this PC blocks newly created virtual-environment python executables; tests were run on the base Python 3.14 with the packages on its path.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code (Claude Sonnet 5.5, platform/PPTX)
-- Date: 2026-10-20
-- Branch: `feat/pptx-youtube-videos`, based on main `49ddb92`. Merged as #195 (`924cf4e`) and deployed to Cloud Run (revision 00008).
-- Objective: an online video in a PowerPoint deck (the owner's "Insert Online Video" case) was lost in the conversion with no word. Map YouTube natively.
-- Files changed: new `app/workspace_toolkit/online_video.py` (`classify` reads a video address: provider, YouTube id, start time; `apply` puts videos back after the import); `pptx.py` (`_online_video`: a `p:pic` whose `a:videoFile` link is an external video relationship gets `onlineVideo` and an `online_video` warning); `google.py` (`slides_batch`; `convert` calls `online_video.apply` after the checks and records `onlineVideos` in the report); new `tests/platform/test_online_video.py` (34 tests).
-- Completed:
-  - Before: only embedded video files were handled; an online video's link was skipped, and Google's import kept the still picture and dropped the link, with nothing reported.
-  - Now: a YouTube video is added with the Slides `createVideo` request (source YOUTUBE) at the still picture's place and size, the picture removed, and a start time set from `start=` or `t=`. Other providers (Vimeo, SharePoint, OneDrive, SlideShare) cannot play in Slides, so the still picture gets the link (`updateImageProperties`). Each video is its own batch, so a refused one costs only that video, and a failure is reported, never raised.
-  - Tested against the real Slides API on a synthetic deck (one YouTube, one Vimeo, one logo): `createVideo` accepted, the right picture replaced, the logo kept, the Vimeo picture linked. Then on the owner's own PowerPoint file: found, replaced, and Google drew the video's thumbnail in place. The test decks, folder and sign-in were deleted and revoked.
-- Checks: 851 platform tests pass; Ruff, format, mypy and the secret scan clean.
-- Known failures: none.
-- Unresolved:
-  - Only a YouTube address is mapped. A video embedded in the deck as a file is still saved to Drive with its still picture left. The same `createVideo` (source DRIVE) could embed that Drive copy; not tried (viewers would need access).
-  - Animations are not touched: detected and reported as ignored. Ideas costed in the conversation: build-up slides for click-to-reveal effects; an internal PowerPoint-to-MP4 job.
-- Decisions: DECISIONS 2026-10-20.
-- Next task: none claimed.
-- Warnings:
-  - This Windows PC blocks newly created virtual-environment `python.exe` files. Tests were run on the base Python 3.14 with a temporary `.pth` in its site-packages (the worker subprocess needs it); remove `wmt-dev-temp.pth` there.
-  - A request Google refuses fails a whole batch, so a new request kind is tried against the live API first: this one was.
 
 ---

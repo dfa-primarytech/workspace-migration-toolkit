@@ -128,6 +128,90 @@ def test_two_boxes_in_one_paragraph_keep_the_order_they_were_written_in():
     assert order == ["FIRST", "SECOND"], order
 
 
+def test_boxes_in_one_paragraph_read_in_the_order_they_sit_on_the_page():
+    # Written bottom first, as Word does when boxes were drawn out of order.
+    def at(label, top, left):
+        return run(
+            box(text(label)),
+            h=("column", offset(left)),
+            v=("paragraph", offset(top)),
+            cx=2000000,
+            cy=500000,
+        )
+
+    lower = at("LOWER", 3000000, 0)
+    right = at("RIGHT", 1000000, 500000)  # overlaps LEFT: not beside it
+    left = at("LEFT", 1000000, 0)
+    root = parse_xml(document(para(lower, right, left) + PAGE_PARAGRAPH))
+    transform(root)
+
+    order = [words(t).strip() for t in body_tables(root)]
+    assert order == ["LEFT", "RIGHT", "LOWER"], order
+
+
+def side_by_side(label, top, left, height=800000, width=2000000, frame="column"):
+    return run(
+        box(text(label)),
+        h=(frame, offset(left)),
+        v=("paragraph", offset(top)),
+        cx=width,
+        cy=height,
+    )
+
+
+def test_boxes_side_by_side_on_the_page_stay_side_by_side():
+    # LEFT and RIGHT share a band of the page; LOWER is below both.
+    root = parse_xml(
+        document(
+            para(
+                side_by_side("LEFT", 1000000, 0),
+                side_by_side("RIGHT", 1200000, 3000000),
+                side_by_side("LOWER", 3000000, 0),
+            )
+            + PAGE_PARAGRAPH
+        )
+    )
+    transform(root)
+
+    layout, lower = body_tables(root)
+    cells = layout.findall(q("w", "tr") + "/" + q("w", "tc"))
+    assert [words(c).strip() for c in cells] == ["LEFT", "RIGHT"]
+    assert all(c.find(q("w", "tbl")) is not None for c in cells), "each box is still a box"
+    assert words(lower).strip() == "LOWER"
+    assert layout.find(q("w", "tblPr") + "/" + q("w", "tblpPr")) is None
+
+
+def test_boxes_that_overlap_on_the_page_are_not_put_side_by_side():
+    root = parse_xml(
+        document(
+            para(
+                side_by_side("A", 1000000, 0),
+                side_by_side("B", 1200000, 1000000),
+            )
+            + PAGE_PARAGRAPH
+        )
+    )
+    transform(root)
+
+    assert [words(t).strip() for t in body_tables(root)] == ["A", "B"]
+
+
+def test_a_side_by_side_pair_never_overflows_the_text_width():
+    root = parse_xml(
+        document(
+            para(
+                side_by_side("LEFT", 1000000, 0, width=3500000),
+                side_by_side("RIGHT", 1000000, 4000000, width=3500000),
+            )
+            + PAGE_PARAGRAPH
+        )
+    )
+    transform(root)
+
+    (layout,) = body_tables(root)
+    assert grid_total(layout) <= 9026
+
+
 # --- a box inside a page-sized box ---------------------------------------
 
 BLACK = "<a:solidFill><a:srgbClr val='000000'/></a:solidFill>"
