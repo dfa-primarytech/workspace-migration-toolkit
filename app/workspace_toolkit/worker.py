@@ -17,6 +17,7 @@ from .pptx import analyse as analyse_pptx
 from .pptx import render_path as render_pptx
 from .publisher import analyse as analyse_pub
 from .publisher import render_path as render_pub
+from .rtf import analyse as analyse_rtf
 from .xlsx import analyse as analyse_xlsx
 
 # Deliberately not importing the pipelines registry: that pulls in the Google
@@ -25,6 +26,7 @@ ANALYSERS: dict[str, Callable[..., object]] = {
     "pptx": analyse_pptx,
     "docx": analyse_docx,
     "doc": analyse_doc,
+    "rtf": analyse_rtf,
     "pub": analyse_pub,
     "xlsx": analyse_xlsx,
     "xlsm": analyse_xlsx,
