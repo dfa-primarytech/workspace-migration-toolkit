@@ -343,3 +343,18 @@ node --check app/workspace_toolkit/static/app.js
 
 GitHub Actions runs these checks plus a Linux Docker build and health smoke test.
 It does not deploy.
+
+## Older .doc files and password-protected files
+
+- A Word 97-2003 `.doc` is accepted. Nothing repairs its layout: Google's own
+  import makes the document (`doc.py`), and the report says so (`doc_not_repaired`).
+- A file locked with a password (`.doc`, `.docx`, `.pptx`, `.xlsx`, `.xlsm`) is
+  unlocked first by `protected.py`, inside the analysis worker. The server answers
+  `password_required` (or `wrong_password`, with status 422); the page then asks
+  for the password on that file's own row and sends it again in the
+  `X-File-Password` header (URL-encoded). The worker receives it on standard
+  input only. It is used once and is never stored, logged, put in a report or
+  put in a command line; the unlocked copy lives only in the job's folder.
+- Uses `msoffcrypto-tool`; tested against files saved by Word (RC4 CryptoAPI for
+  `.doc`). Other protection schemes report `protection_unsupported`.
+

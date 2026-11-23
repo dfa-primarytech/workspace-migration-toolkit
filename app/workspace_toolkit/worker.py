@@ -5,7 +5,9 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from . import protected
 from .config import Settings
+from .doc import analyse as analyse_doc
 from .docs import render_path
 from .docx import analyse as analyse_docx
 from .errors import ToolkitError
@@ -22,6 +24,7 @@ from .xlsx import analyse as analyse_xlsx
 ANALYSERS: dict[str, Callable[..., object]] = {
     "pptx": analyse_pptx,
     "docx": analyse_docx,
+    "doc": analyse_doc,
     "pub": analyse_pub,
     "xlsx": analyse_xlsx,
     "xlsm": analyse_xlsx,
@@ -62,6 +65,15 @@ def main() -> None:
                 settings.worker_memory_for(source.stat().st_size),
             )
             limit("RLIMIT_CPU", settings.parser_timeout + 2)
+        # A protected Office file is opened first, with the password the app
+        # passes on standard input (never on the command line or in the
+        # environment). What follows sees an ordinary file.
+        if "password" in flags:
+            password = sys.stdin.buffer.read().decode("utf-8", "replace") or None
+        else:
+            password = None
+        if fmt in {"doc", "docx", "pptx", "xlsx", "xlsm"}:
+            protected.unlock(source, password, settings)
         ANALYSERS[fmt](source, output, settings)
         if fmt == "docx":
             # Rewriting happens here too: it is the same bounded, credential-free

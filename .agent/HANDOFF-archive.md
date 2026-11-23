@@ -1113,6 +1113,7 @@ archive rather than growing this one further.
 
 ---
 
+
 ## Previous handoff
 
 - Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
@@ -1123,3 +1124,16 @@ archive rather than growing this one further.
 - Checks: platform tests pass; Ruff, format, mypy clean.
 - Unresolved: not yet confirmed in Google; the page count may still be 2 (box heights and spacing); a diagonal connector becomes a plain down arrow.
 - Next task: none claimed.
+
+---
+
+## Previous handoff
+
+- Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
+- Date: 2026-11-23
+- Branch: `docx-flow-inline`, based on main `f6cb3c8`.
+- Objective: the flowchart, reconverted on revision 00014, had the right order, side-by-side pairs and blue arrows, but the first box (a floating table) sat below its arrow and the last row spilled to a second page.
+- Files changed: `docs.py` -- a box drawn in a paragraph with other boxes or flow arrows is built in the text (not floating) at the text width, so the arrow lines and pairs keep their place. A lone box still floats. Two tests added.
+- Checks: 934 platform tests pass; Ruff, format, mypy clean.
+- Unresolved: not yet confirmed in Google; the page count may still be 2 (box heights and the blank lines between rows).
+- Next task: `.doc` support (see the owner's plan), starting with Google's native import for `.doc` and a password step; the owner's ticket sample files were not yet received.

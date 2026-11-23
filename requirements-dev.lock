@@ -30,8 +30,10 @@ license-expression==30.4.4
 markdown-it-py==4.2.0
 mdurl==0.1.2
 msgpack==1.2.3
+msoffcrypto-tool==6.1.0
 mypy==2.3.1
 mypy_extensions==1.1.0
+olefile==0.47
 packageurl-python==0.17.6
 packaging==26.3
 pathspec==1.1.1

@@ -12,12 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import docs, docx, google, pptx, publisher, publisher_convert, sheets, xlsx
+from . import doc, docs, docx, google, pptx, publisher, publisher_convert, sheets, xlsx
 from .config import Settings
 from .errors import ToolkitError
-from .package import DOCX, PPTX, PUB, XLSM, XLSX, Format
+from .package import DOC, DOCX, PPTX, PUB, XLSM, XLSX, Format
 
-SUPPORTED = ".pptx, .docx, .pub, .xlsx and .xlsm"
+SUPPORTED = ".pptx, .docx, .doc, .pub, .xlsx and .xlsm"
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,14 @@ PIPELINES: dict[str, Pipeline] = {
         kind="document",
         destination="Google Docs",
         # For the optional blank-page repair after import (#54).
+        needs_settings=True,
+    ),
+    ".doc": Pipeline(
+        fmt=DOC,
+        analysis_report=doc.analysis_report,
+        convert=doc.convert,
+        kind="document",
+        destination="Google Docs",
         needs_settings=True,
     ),
     ".pub": Pipeline(
