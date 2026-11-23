@@ -315,6 +315,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and pipeline.fmt.key in {"pptx", "docx"}
         )
         zone = time_zone(request.headers.get("x-time-zone"))
+        # For a password-protected file: used once by the analysis worker and
+        # never stored, logged or put in a report.
+        password = unquote(request.headers.get("x-file-password", ""))[:256] or None
         if drive_file_id and not settings.picker_ready:
             raise ToolkitError(
                 "picker_unavailable", "Adding a file from Drive is not available.", 503
@@ -393,6 +396,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 pipeline.fmt,
                                 compress_pictures=smaller,
                                 check_only=not do_convert,
+                                password=password,
                             )
                             # What Google receives: for a deck, without its video.
                             sent = root / "result" / ("converted" + pipeline.fmt.suffix)
