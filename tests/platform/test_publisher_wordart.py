@@ -10,8 +10,9 @@ from __future__ import annotations
 import struct
 
 from workspace_toolkit.publisher_art import Prepared
-from workspace_toolkit.publisher_slides import check, plan
-from workspace_toolkit.publisher_wordart import placed, read
+from workspace_toolkit.publisher_slides import check, plan, wordart_size
+from workspace_toolkit.publisher_wordart import WordArt, placed, read
+from workspace_toolkit.units import Frame
 
 from .test_publisher_crop import container, drawing, record
 from .test_publisher_slides import document, element, report, requests
@@ -115,3 +116,15 @@ def test_the_plan_writes_wordart_as_text_instead_of_its_outline(tmp_path):
     assert lines["el_1"]["status"] == "SUBSTITUTED"
     assert {n["code"] for n in lines["el_1"]["notes"]} >= {"wordart-text", "font-substituted"}
     assert lines["el_2"]["notes"][0]["code"] == "wordart-outline"
+
+
+def test_wordart_in_a_font_slides_lacks_is_sized_to_stay_on_one_line():
+    # A wide, short box: height alone would allow about 70 pt, and "Henry Moore"
+    # at 70 pt would wrap onto a second line over the box below it.
+    art = WordArt("Henry Moore", "Arial Black", None, True, False, "#9bbb59", "#ffffff")
+    frame = Frame.from_bounds(264, 63, 319, 88)
+
+    size = wordart_size(art, ["Henry Moore"], None, frame)
+
+    assert size * len("Henry Moore") * 0.6 <= 319, "the words fit the box's width"
+    assert size < 60
