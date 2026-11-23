@@ -269,6 +269,26 @@ def test_a_page_without_arrows_keeps_blank_spacers():
     assert spacers(root) == [""]
 
 
+def test_a_box_drawn_with_a_flow_arrow_stays_in_the_text_rather_than_floating():
+    root = parse_xml(
+        document(
+            para(side_by_side("TOP", 1000000, 0, width=5000000), arrow_between()) + PAGE_PARAGRAPH
+        )
+    )
+    transform(root)
+
+    (box_table,) = body_tables(root)
+    assert box_table.find(q("w", "tblPr") + "/" + q("w", "tblpPr")) is None
+
+
+def test_a_lone_box_still_floats_where_it_was_drawn():
+    root = parse_xml(document(para(side_by_side("ALONE", 1000000, 0)) + PAGE_PARAGRAPH))
+    transform(root)
+
+    (box_table,) = body_tables(root)
+    assert box_table.find(q("w", "tblPr") + "/" + q("w", "tblpPr")) is not None
+
+
 # --- a box inside a page-sized box ---------------------------------------
 
 BLACK = "<a:solidFill><a:srgbClr val='000000'/></a:solidFill>"
