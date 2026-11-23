@@ -60,7 +60,7 @@ from .publisher_fit import (
 )
 from .publisher_fit import height as laid_height
 from .publisher_inline import MARK, Inline
-from .publisher_wrap import Obstacle, wrap
+from .publisher_wrap import GAP, Obstacle, wrap
 from .units import Frame, length_points, percentage, size
 
 PICTURE = "wmt-picture:"
@@ -307,6 +307,36 @@ def _with_room(paragraph: dict, room: float) -> dict:
     above = length_points(props.get("fo:margin-top")) or 0.0
     props["fo:margin-top"] = f"{above + room:.4f}pt"
     paragraph["sourceProperties"] = props
+    return paragraph
+
+
+PADDING = 3  # spaces in a row at the start of a line that are taken as an author's indent
+
+
+def _unpadded(paragraph: dict) -> dict | None:
+    """The paragraph without the spaces typed before and after its words, or None
+    when it does not start with a run of them. Every run keeps its own style."""
+    pieces = paragraph_text(paragraph)
+    whole = "".join(text for text, _ in pieces)
+    if len(whole) - len(whole.lstrip(" ")) < PADDING:
+        return None
+    paragraph = copy.deepcopy(paragraph)
+    runs = paragraph.get("runs", [])
+    texts = [text for text, _ in pieces]
+    leading = True
+    for number, text in enumerate(texts):
+        if leading:
+            text = text.lstrip(" ")
+            leading = not text
+        texts[number] = text
+    for number in range(len(texts) - 1, -1, -1):
+        trimmed = texts[number].rstrip(" ")
+        texts[number] = trimmed
+        if trimmed:
+            break
+    for run, text in zip(runs, texts, strict=True):
+        run["items"] = []
+        run["text"] = text
     return paragraph
 
 
@@ -1170,12 +1200,16 @@ class PageBuilder:
                 limit = min(limit, min(ys))  # something below it
         return max(frame.height, limit - top - TABLE_GAP)
 
-    def in_front_of(self, element: dict) -> list[Obstacle]:
-        """Pictures and shapes drawn over a text frame: Publisher wraps text around them."""
+    def in_front_of(self, element: dict, any_depth: bool = False) -> list[Obstacle]:
+        """Pictures and shapes drawn over a text frame: Publisher wraps text around them.
+
+        `any_depth` also takes those drawn behind it, which is where a picture
+        under a table's text is, and the text is as much in its way."""
         out = []
         for other in self.page.get("elements", []):
             if (
-                other["zIndex"] <= element["zIndex"]
+                (other["zIndex"] <= element["zIndex"] and not any_depth)
+                or other["id"] == element["id"]
                 or not other.get("visible", True)
                 or other.get("type") not in {"image", "shape"}
                 or is_border_tile(other)
@@ -1531,6 +1565,54 @@ class PageBuilder:
             fields.insert(0, "fontFamily")
         return blank, fields
 
+    def _clear_of_pictures(
+        self,
+        element: dict,
+        frame: Frame,
+        texts: dict[tuple[int, int], list[dict]],
+        cells: dict[tuple[int, int], dict],
+        widths: list[float],
+        minimums: list[float],
+    ) -> None:
+        """Indents a cell's text past a picture drawn over its left side.
+
+        An author keeps text clear of such a picture by typing spaces in front
+        of each line. Slides draws spaces narrower than Publisher's face did, so
+        the text came out under the picture; the spaces become an indent instead.
+        """
+        obstacles = self.in_front_of(element, any_depth=True)
+        if not obstacles:
+            return
+        left = frame.cx - frame.width / 2
+        top = frame.cy - frame.height / 2
+        rows = max(len(minimums), 1)
+        for (row_index, column), paragraphs in texts.items():
+            cell = cells[(row_index, column)]
+            x0 = left + sum(widths[:column])
+            wide = sum(widths[column : column + cell.get("columnSpan", 1)])
+            y0 = top + sum(minimums[:row_index])
+            high = minimums[row_index] or frame.height / rows
+            need = 0.0
+            for o in obstacles:
+                over = min(o.bottom, y0 + high) - max(o.top, y0)
+                if (
+                    o.left >= x0 - 2
+                    and o.right <= x0 + wide * 0.75
+                    and over >= 0.5 * (o.bottom - o.top) > 0
+                ):
+                    need = max(need, o.right + GAP - (x0 + INSET_X))
+            if need <= 0:
+                continue
+            for index, paragraph in enumerate(paragraphs):
+                moved = _unpadded(paragraph)
+                if moved is None:
+                    continue
+                props = dict(moved.get("sourceProperties") or {})
+                have = length_points(props.get("fo:margin-left")) or 0.0
+                props["fo:margin-left"] = f"{max(have, need):.4f}pt"
+                moved["sourceProperties"] = props
+                paragraphs[index] = moved
+
     def _table_layout(
         self, element: dict, frame: Frame, rows: list, columns: list, minimums: list[float]
     ) -> TableLayout:
@@ -1567,6 +1649,8 @@ class PageBuilder:
 
         def span(row_index: int, column: int) -> float:
             return sum(widths[column : column + cells[(row_index, column)].get("columnSpan", 1)])
+
+        self._clear_of_pictures(element, frame, texts, cells, widths, minimums)
 
         def text_height(
             paragraphs: list[dict], width: float, spacing: float | None, scale: float
