@@ -58,3 +58,5 @@ job-output/
 # Native parser build output
 native/pub-parser/build/
 .mcp.json
+# Two synthetic Word files the .doc tests need (no personal information).
+!tests/platform/data/*.doc
