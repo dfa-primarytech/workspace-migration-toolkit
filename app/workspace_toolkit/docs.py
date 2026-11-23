@@ -178,6 +178,7 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
         "pictures": 0,
         "picturesInlined": 0,
         "ink": 0,
+        "arrows": 0,
         "unsupported": unsupported,
         # Placed by the inside or outside margin, which is on one side on odd
         # pages and the other on even ones: kept where it always went, and
@@ -197,9 +198,14 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
     panels, absorbed = _panels_in_page_boxes(items, sections, first_paragraph)
     partner = _side_by_side(items, sections, absorbed)
     paired: set[int] = set()
+    arrows = _flow_arrows(items)
     for item in items:
         if id(item) in absorbed or id(item) in paired:
             continue  # carried into a page-sized box, or already in a pair
+        if id(item) in arrows:
+            _detach(item.drawing, item.anchor)
+            report["arrows"] += 1
+            continue
         if id(item) in partner:
             other = partner[id(item)]
             if _replace_pair(parent_of, item, other, ids, placed, sections):
@@ -225,6 +231,8 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
                 for panel in inside:
                     if _replace_textbox(parent_of, panel, ids, placed):
                         report["textboxes"] += 1
+    if arrows:
+        _mark_flow(parent_of, [item for item in items if id(item) in arrows])
     # Pictures last, against the tree as the text boxes left it: a picture
     # floating inside a box has just moved into the cell the box became, and
     # the map taken before would still place it in the box, not the cell (#146).
@@ -542,6 +550,72 @@ def _replace_textbox(
     # one paragraph keep the order they were written in.
     _insert_table(parent_of, container, paragraph, table, placed)
     return True
+
+
+ARROW_SHAPES = {
+    "downArrow",
+    "upArrow",
+    "rightArrow",
+    "leftArrow",
+    "bentArrow",
+    "curvedDownArrow",
+    "straightConnector1",
+    "bentConnector3",
+}
+
+
+def _flow_arrows(items: list[Anchored]) -> set[int]:
+    """Arrows and connectors drawn among text boxes: the flow between them.
+
+    Docs cannot hold the shape, and left floating it lands over the text of
+    whatever box the stacked page puts there. Only a shape with no text of its
+    own, anchored in a paragraph that also holds text boxes that become tables.
+    """
+    boxed = {
+        id(item.paragraph)
+        for item in items
+        if item.kind == "textbox" and item.paragraph is not None
+    }
+    found: set[int] = set()
+    for item in items:
+        if item.kind != "unsupported" or item.paragraph is None:
+            continue
+        if id(item.paragraph) not in boxed:
+            continue
+        geometry = item.anchor.find(".//" + q("a", "prstGeom"))
+        if geometry is not None and geometry.get("prst") in ARROW_SHAPES:
+            found.add(id(item))
+    return found
+
+
+def _mark_flow(parent_of: dict, arrows: list[Anchored]) -> None:
+    """Shows the flow as a small arrow in the blank line between one box and the next."""
+    containers: dict[int, Element] = {}
+    for item in arrows:
+        container = parent_of.get(item.paragraph)
+        if container is not None:
+            containers[id(container)] = container
+    for container in containers.values():
+        blocks = list(container)
+        for index in range(1, len(blocks) - 1):
+            line = blocks[index]
+            if local(line.tag) != "p" or local(blocks[index - 1].tag) != "tbl":
+                continue
+            if local(blocks[index + 1].tag) != "tbl" or any(t.text for t in line.iter(q("w", "t"))):
+                continue
+            for run in line.findall(q("w", "r")):
+                line.remove(run)
+            properties = line.find(q("w", "pPr"))
+            if properties is None:
+                properties = Element(q("w", "pPr"))
+                line.insert(0, properties)
+            SubElement(properties, q("w", "spacing")).attrib.update(
+                {q("w", "before"): "0", q("w", "after"): "0"}
+            )
+            SubElement(properties, q("w", "jc")).set(q("w", "val"), "center")
+            run = SubElement(line, q("w", "r"))
+            SubElement(SubElement(run, q("w", "rPr")), q("w", "color")).set(q("w", "val"), "5B9BD5")
+            SubElement(run, q("w", "t")).text = "\u25bc"
 
 
 def _text_width_dxa(sections: Sections, item: Anchored) -> int:
