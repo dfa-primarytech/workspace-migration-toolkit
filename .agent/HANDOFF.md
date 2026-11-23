@@ -1,5 +1,19 @@
 # Handoff
 
+- Agent: Claude Code (Claude Sonnet 5.5, platform/Publisher)
+- Date: 2026-11-23
+- Branch: `publisher-bulk-fixes`, based on main `82ee663`.
+- Objective: four faults found checking a 23-file Publisher bulk run (ticket 658694): numbered lists showing 1. on every item, text under pictures, WordArt titles wrapping over boxes, a heading cut off at the page top, tick boxes drifting off their lines.
+- Files changed: `publisher_slides.py` -- empty list paragraphs between items of one list are folded into space below the item (`_folded`), so numbering continues; a text frame starting above the page is moved to its top edge (`_onto_page`, note `text-above-page`); WordArt is sized to its width too, with an estimate for faces that cannot be measured; `text_requests` takes `above`. `publisher_wrap.py` -- pictures are cleared with a 14 pt vertical tolerance and an 8 pt gap, a picture in the middle of a line takes text on the side with more room (limit 75 percent of the line), and a line beside a small box is moved down to it (`_aligned`, at most 40 pt, only if the text still fits at the same size). Tests added in the lists, wrap, slides and wordart files.
+- Checked live (through the app's own code on the homelab, four files re-converted): numbering 1 to 6, the date visible, titles on one line clear of their boxes, the Rating picture no longer overprints its line, the tick boxes nearer their lines.
+- Checks: 944 platform tests pass; Ruff, format, mypy clean.
+- Unresolved: a line beside a picture can still touch it (INDUSTRIES B TEXT, item 6), probably because the fonts Slides draws unknown families in differ from the Arial assumed (the exported PDF showed a serif face); the tick boxes are closer but not exact; a line just below the Rating picture now also wraps narrower than needed. No originals could be rendered (no Publisher), so fidelity was judged from the parsed layout.
+- Next task: `.doc` support, once the ticket sample files arrive.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
 - Date: 2026-11-23
 - Branch: `docx-flow-inline`, based on main `f6cb3c8`.
@@ -20,19 +34,6 @@
 - Files changed: `docs.py` -- `_flow_arrows`/`_mark_flow`: arrow and connector shapes anchored in a paragraph with text boxes are removed and shown as a small blue arrow in the blank line between one box (or pair) and the next; counted as `arrows` in the conversion report. The arrows between the two boxes of a pair are not kept. Tests added; one exact-report test gains `arrows: 0`.
 - Checks: platform tests pass; Ruff, format, mypy clean.
 - Unresolved: not yet confirmed in Google; the page count may still be 2 (box heights and spacing); a diagonal connector becomes a plain down arrow.
-- Next task: none claimed.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
-- Date: 2026-11-10
-- Branch: `docx-flowchart-boxes`, based on main `b15b382`.
-- Objective: a one-page Word flowchart (13 text boxes and arrows, anchored to paragraphs) converted to three pages with its boxes in the wrong order.
-- Files changed: `docs.py` -- `_in_page_order` puts boxes anchored in one paragraph top to bottom, then left to right (they were in the order drawn); `_side_by_side`/`_replace_pair` keep two boxes that share a band of the page beside each other, as two cells of a borderless table, instead of stacking them. `test_docx_page_textbox.py` (5 new), `test_docx_sections.py` (one test's boxes moved apart so they do not pair).
-- Checks: platform tests pass; Ruff, format, mypy clean.
-- Unresolved: not yet confirmed in Google; the flow arrows are still floating shapes that Docs keeps unchanged (they no longer sit by their boxes); Word cannot open the converted file (empty drawing shells), so Word is no proxy here.
 - Next task: none claimed.
 
 ---

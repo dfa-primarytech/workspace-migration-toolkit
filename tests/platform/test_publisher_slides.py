@@ -387,6 +387,23 @@ def test_an_empty_text_box_is_still_placed():
     assert requests(result, "createShape") and not requests(result, "insertText")
 
 
+def test_a_text_frame_hanging_off_the_top_of_the_page_is_brought_onto_it():
+    heading = text_box("el_1", 0, (30, -19, 300, 134), paragraph(run("Monday 25th March")))
+    result = planned(document([heading]))
+
+    (shape,) = requests(result, "createShape")
+    top = min(y for _, y in drawn_corners(shape))
+    assert top >= 0, "the first line is no longer cut off by the page"
+    assert "text-above-page" in [w["code"] for w in result.report["warnings"]]
+
+
+def test_a_frame_wholly_above_the_page_is_left_alone():
+    gone = text_box("el_1", 0, (30, -60, 300, 40), paragraph(run("Off the page")))
+    result = planned(document([gone]))
+
+    assert "text-above-page" not in [w["code"] for w in result.report["warnings"]]
+
+
 # ------------------------------------------------------------------ pictures
 
 
