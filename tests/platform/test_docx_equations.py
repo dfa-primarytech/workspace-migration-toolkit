@@ -317,3 +317,30 @@ def test_the_warning_does_not_carry_the_equation_itself(tmp_path):
     assert set(equation_warning) <= {"code", "message", "equationCount", "classification"}, (
         f"unexpected keys in the warning: {sorted(equation_warning)}"
     )
+
+
+# -------------------------------------------------------- boxed equations
+#
+# Google Docs writes every equation it exports wrapped in `<m:box>`, and
+# Google's own importer answers an upload containing one with HTTP 500, so the
+# whole file fails to convert (found on a ticket's maths worksheet). The box
+# adds nothing -- it only groups -- so it is unwrapped, nested ones included.
+
+BOXED = (
+    f"<m:oMath xmlns:m='{MATH_NS}'><m:box><m:e>"
+    "<m:r><m:t>16-y</m:t></m:r>"
+    "<m:d><m:dPr><m:begChr m:val='('/><m:endChr m:val=')'/></m:dPr>"
+    "<m:e><m:box><m:e><m:r><m:t>4+</m:t></m:r></m:e></m:box></m:e></m:d>"
+    "</m:e></m:box></m:oMath>"
+)
+
+
+def test_a_box_around_an_equation_is_unwrapped_so_google_can_import_it(tmp_path):
+    root, _ = transform_body(tmp_path, f"<w:p>{BOXED}</w:p>" + SECTION)
+
+    assert root.find(".//" + qm("box")) is None, "a box was left in"
+    texts = [t.text for t in root.iter(qm("t"))]
+    assert texts == ["16-y", "4+"], "the equation's text or its order changed"
+    bracket = root.find(".//" + qm("d"))
+    assert bracket is not None and bracket.find(qm("e")) is not None, "the brackets were lost"
+    assert [t.text for t in bracket.iter(qm("t"))] == ["4+"]

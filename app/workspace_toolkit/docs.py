@@ -2582,6 +2582,32 @@ def _gained_picture(cell: Element, holders: set[Element]) -> bool:
     )
 
 
+def unwrap_equation_boxes(root: Element) -> int:
+    """Takes the `<m:box>` wrapper off equations, which Google cannot import.
+
+    Google Docs writes every equation it exports as `<m:box><m:e>...</m:e></m:box>`,
+    and Google's own importer answers a file containing one with HTTP 500, so the
+    whole document fails to convert. The box is only a grouping with no
+    appearance of its own here, so its contents take its place, nested boxes
+    (inside brackets, superscripts) included.
+    """
+    box, content = q("m", "box"), q("m", "e")
+    boxes = list(root.iter(box))
+    if not boxes:
+        return 0
+    parents = {child: parent for parent in root.iter() for child in parent}
+    # Last first, so a box inside another is gone before the one around it.
+    for found in reversed(boxes):
+        parent = parents[found]
+        at = list(parent).index(found)
+        inner = [grandchild for part in found.findall(content) for grandchild in part]
+        parent.remove(found)
+        for offset, grandchild in enumerate(inner):
+            parent.insert(at + offset, grandchild)
+            parents[grandchild] = parent
+    return len(boxes)
+
+
 def transform(root: Element, ids: Ids | None = None, fallback: Element | None = None) -> dict:
     """Applies every pass, in the order they depend on each other.
 
@@ -2589,6 +2615,7 @@ def transform(root: Element, ids: Ids | None = None, fallback: Element | None = 
     the main document's last section.
     """
     ids = ids or Ids()
+    unwrap_equation_boxes(root)
     # Before anything moves: which blank lines are the author's own.
     already_empty = empty_paragraphs(root)
     # Which cells already held a picture, so we can tell which ones gain one.

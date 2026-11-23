@@ -85,26 +85,50 @@ async def convert(
     settings: Settings | None = None,
 ) -> dict:
     """Uploads the file for Google to import as a document."""
+    return await import_document(
+        root,
+        manifest,
+        google,
+        progress,
+        original_name,
+        source="source.doc",
+        mime=DOC_MIME,
+        describe=analysis_report,
+    )
+
+
+async def import_document(
+    root: Path,
+    manifest: dict,
+    google,
+    progress: dict | None,
+    original_name: str,
+    *,
+    source: str,
+    mime: str,
+    describe,
+) -> dict:
+    """Hands `root/source` to Google to import as a Google Doc (shared with .rtf)."""
     # imported here to avoid a cycle
     from .google import DOCS_MIME, DRIVE, SEPARATOR, clean_name
 
     name = clean_name(original_name)
     output_name = f"{name}{SEPARATOR}converted" if name else "Converted document"
     report = progress if progress is not None else {}
-    report.update(analysis_report(manifest))
+    report.update(describe(manifest))
     report.update(status="converting", outputs=[], assetOutputs=[])
     try:
         formats = await google.request("GET", DRIVE + "/about", params={"fields": "importFormats"})
-        if DOCS_MIME not in formats.get("importFormats", {}).get(DOC_MIME, []):
+        if DOCS_MIME not in formats.get("importFormats", {}).get(mime, []):
             raise ToolkitError(
                 "conversion_unavailable",
-                "Google does not currently offer .doc conversion for this account.",
+                "Google does not currently offer this conversion for this account.",
                 422,
             )
         folder = await google.folder(output_name)
         report["folderUrl"] = "https://drive.google.com/drive/folders/" + folder
         uploaded = await google.upload(
-            root / "source.doc", output_name, DOC_MIME, folder, convert=True, target=DOCS_MIME
+            root / source, output_name, mime, folder, convert=True, target=DOCS_MIME
         )
         report["outputs"].append({"kind": "document", "id": uploaded["id"]})
         report["documentId"] = uploaded["id"]
