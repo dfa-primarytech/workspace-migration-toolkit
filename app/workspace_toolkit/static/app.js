@@ -13,7 +13,11 @@ async function request(url, options = {}) {
   });
   // A proxy's 413 or a plain-text server error is not JSON; show our own words, not a parse error.
   const body = await response.json().catch(() => null);
-  if (!response.ok || !body) throw new Error(body?.error?.message || 'The request failed. Please try again.');
+  if (!response.ok || !body) {
+    const error = new Error(body?.error?.message || 'The request failed. Please try again.');
+    error.code = body?.error?.code;
+    throw error;
+  }
   return body;
 }
 function busy(value) { for (const id of ['file','pick-drive','convert','smaller','logout']) $(id).disabled = value; }
@@ -117,6 +121,9 @@ function send(src) {
   if ($('smaller').checked) headers['X-Compress-Pictures'] = '1';
   // A converted Sheet keeps the person's own time zone, so TODAY() is their day.
   try { const zone = Intl.DateTimeFormat().resolvedOptions().timeZone; if (zone) headers['X-Time-Zone'] = zone; } catch {}
+  // A protected file's password, asked for on its own row when the server says
+  // it needs one. Sent for this request only; the server never stores it.
+  if (src.password) headers['X-File-Password'] = encodeURIComponent(src.password);
   if (src.driveId) {
     headers['Content-Type'] = 'application/octet-stream';
     headers['X-Drive-File-Id'] = src.driveId;
@@ -126,7 +133,7 @@ function send(src) {
   return request('/api/convert', {method: 'POST', headers, body: src.file});
 }
 async function convertAll() {
-  const queue = chosen.filter(src => !refusal(src));
+  const queue = chosen.filter(src => !refusal(src) && !src.done);
   let done = 0, failed = 0;
   busy(true);
   try {
@@ -151,6 +158,7 @@ async function convertAll() {
           src.row.replaceChildren((report.stoppedBecause || 'Not converted.') + ' ', ...(folder ? [folder] : []));
         } else {
           done += 1;
+          src.done = true;
           src.row.replaceChildren(...[open, folder].filter(Boolean).flatMap((a, i) => i ? [' · ', a] : [a]));
           // The one note shown on screen (DECISIONS.md, 2026-10-01): a
           // workbook's macros, which someone may need to approve in Google.
@@ -163,12 +171,27 @@ async function convertAll() {
         }
       } catch (error) {
         failed += 1;
-        src.row.replaceChildren('Couldn’t convert: ' + error.message);
+        if (error.code === 'password_required' || error.code === 'wrong_password') {
+          // Ask for the password on this file's own row, then Convert again.
+          src.needsPassword = true;
+          const field = document.createElement('input');
+          field.type = 'password'; field.autocomplete = 'off'; field.className = 'password';
+          field.setAttribute('aria-label', 'Password for ' + src.name);
+          field.addEventListener('input', () => { src.password = field.value; });
+          src.row.replaceChildren(error.message + ' ', field);
+          field.focus();
+        } else {
+          src.row.replaceChildren('Couldn’t convert: ' + error.message);
+        }
       }
     }
-    $('convert').hidden = true;
+    const waiting = chosen.filter(src => src.needsPassword && !src.done);
+    $('convert').hidden = !waiting.length;
+    $('convert').textContent = 'Convert again';
     $('smaller-choice').hidden = true;
-    $('status').textContent = failed
+    $('status').textContent = waiting.length
+      ? 'Type the password for each protected file, then press Convert again.'
+      : failed
       ? `${done} converted, ${failed} couldn’t be.`
       : done > 1 ? `All ${done} files converted.` : 'Converted.';
   } finally { busy(false); }

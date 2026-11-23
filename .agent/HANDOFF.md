@@ -1,5 +1,18 @@
 # Handoff
 
+- Agent: Claude Code (Claude Sonnet 5.5, platform)
+- Date: 2026-11-23
+- Branch: `doc-support`, based on main `243bdf4`.
+- Objective: accept legacy `.doc` files and password-protected Office files (ticket 660358 and others).
+- Files changed: new `doc.py` (checks a `.doc` is a Word document; converts by uploading it for Google's own import; reports `doc_not_repaired`) and `protected.py` (unlocks a protected `.doc`/`.docx`/`.pptx`/`.xlsx`/`.xlsm` with msoffcrypto-tool, in the worker). `package.py` (DOC format), `pipelines.py`, `worker.py` (password read from stdin, unlock before analysing), `jobs.preflight(password=)`, `web.py` (`X-File-Password` header, up to 256 characters), `static/app.js` + `index.html` + `style.css` (a password field appears on a protected file's row, then Convert again). `pyproject.toml` and both locks: `msoffcrypto-tool==6.1.0`, `olefile==0.47`. Tests: `test_doc_support.py` (16, including through the app with the real worker) and two synthetic Word fixtures in `tests/platform/data` (personal information removed; the password is in the test).
+- Checks: 960 platform tests pass; Ruff, format, mypy clean. `check_secrets` could not run locally (no detect-secrets); the test password carries the allowlist pragma.
+- Unresolved: not yet run through live Google; only RC4-protected `.doc` tested (Word's default); the four protected `.doc` files from the ticket have an unknown password, so they were not run; a protected file in a Drive-picked batch is retried by choosing it again.
+- Next task: none claimed.
+
+---
+
+## Previous handoff
+
 - Agent: Claude Code (Claude Sonnet 5.5, platform/Publisher)
 - Date: 2026-11-23
 - Branch: `publisher-bulk-fixes`, based on main `82ee663`.
@@ -22,18 +35,5 @@
 - Checks: 934 platform tests pass; Ruff, format, mypy clean.
 - Unresolved: not yet confirmed in Google; the page count may still be 2 (box heights and the blank lines between rows).
 - Next task: `.doc` support (see the owner's plan), starting with Google's native import for `.doc` and a password step; the owner's ticket sample files were not yet received.
-
----
-
-## Previous handoff
-
-- Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
-- Date: 2026-11-10
-- Branch: `docx-flow-arrows`, based on main `624d1b5`.
-- Objective: after the flowchart fix (#201, live as revision 00013: right order, boxes side by side), the converted file was still 2 pages and its six flow arrows floated over the text of the boxes.
-- Files changed: `docs.py` -- `_flow_arrows`/`_mark_flow`: arrow and connector shapes anchored in a paragraph with text boxes are removed and shown as a small blue arrow in the blank line between one box (or pair) and the next; counted as `arrows` in the conversion report. The arrows between the two boxes of a pair are not kept. Tests added; one exact-report test gains `arrows: 0`.
-- Checks: platform tests pass; Ruff, format, mypy clean.
-- Unresolved: not yet confirmed in Google; the page count may still be 2 (box heights and spacing); a diagonal connector becomes a plain down arrow.
-- Next task: none claimed.
 
 ---

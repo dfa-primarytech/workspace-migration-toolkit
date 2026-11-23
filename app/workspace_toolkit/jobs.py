@@ -48,6 +48,7 @@ async def preflight(
     *,
     compress_pictures: bool = False,
     check_only: bool = False,
+    password: str | None = None,
 ) -> dict:
     output = root / "result"
     output.mkdir()
@@ -77,6 +78,10 @@ async def preflight(
         fmt.key,
         *(["compress-pictures"] if compress_pictures else []),
         *(["check-only"] if check_only else []),
+        # The password goes to the worker on standard input only: not in its
+        # arguments, which any process on the machine can list.
+        *(["password"] if password else []),
+        stdin=asyncio.subprocess.PIPE if password else None,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         env={
@@ -87,6 +92,14 @@ async def preflight(
         # Its own process group, so stopping it stops what it started too.
         start_new_session=sys.platform != "win32",
     )
+    if password and process.stdin is not None:
+        try:
+            process.stdin.write(password.encode("utf-8"))
+            await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # it stopped before reading: its own error says why
+        finally:
+            process.stdin.close()
     try:
         await asyncio.wait_for(process.wait(), timeout=timeout)
     except TimeoutError:

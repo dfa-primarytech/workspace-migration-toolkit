@@ -105,6 +105,18 @@ PUB = Format(
     aliases=("application/vnd.ms-publisher",),
 )
 
+# A legacy Word 97-2003 file: also an OLE compound file, not an OOXML package.
+DOC = Format(
+    key="doc",
+    suffix=".doc",
+    mime="application/msword",
+    main_part="",
+    main_mime="",
+    noun="document",
+    chooser="a Word .doc file",
+    aliases=("application/x-msword", "application/vnd.ms-word"),
+)
+
 FORMATS = {fmt.suffix: fmt for fmt in (PPTX, DOCX, XLSX, XLSM)}
 
 
