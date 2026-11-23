@@ -117,6 +117,18 @@ DOC = Format(
     aliases=("application/x-msword", "application/vnd.ms-word"),
 )
 
+# Rich Text Format: plain text with markup, not a package of any kind.
+RTF = Format(
+    key="rtf",
+    suffix=".rtf",
+    mime="application/rtf",
+    main_part="",
+    main_mime="",
+    noun="document",
+    chooser="a Rich Text Format .rtf file",
+    aliases=("text/rtf", "application/x-rtf", "text/richtext"),
+)
+
 FORMATS = {fmt.suffix: fmt for fmt in (PPTX, DOCX, XLSX, XLSM)}
 
 

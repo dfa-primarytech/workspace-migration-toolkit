@@ -911,3 +911,8 @@ and LibreOffice cannot play animations to video.
 - ffmpeg arrives as the `imageio-ffmpeg` wheel. `WMT_HOSTED_ANIMATION=off` turns it off without a rebuild if the bill grows; the homelab offload stays an option.
 - Recordings staff made by hand are not seen by the hosted flow (drive.file cannot list sibling files), so the player's own recording is what a hosted conversion uses.
 
+## 2026-11-23: `.rtf` is imported by Google; boxed equations are unwrapped
+
+- A Rich Text Format file is handled like a legacy `.doc`: checked, then imported by Google's own converter with no layout repair, and reported as such (`rtf_not_repaired`). A sample worksheet with pictures, a Venn diagram and fractions imported cleanly, so a converter of our own (LibreOffice in the image) is not worth its weight yet.
+- Google's importer fails with HTTP 500 on an equation wrapped in `<m:box>`, which Google Docs itself writes for every equation it exports. The converter unwraps the box (it only groups) before upload, so such files convert instead of failing whole.
+

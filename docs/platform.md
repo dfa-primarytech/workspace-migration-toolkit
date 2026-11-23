@@ -344,8 +344,9 @@ node --check app/workspace_toolkit/static/app.js
 GitHub Actions runs these checks plus a Linux Docker build and health smoke test.
 It does not deploy.
 
-## Older .doc files and password-protected files
+## Older .doc and .rtf files, and password-protected files
 
+- A Rich Text Format `.rtf` is accepted the same way (`rtf.py`, report `rtf_not_repaired`).
 - A Word 97-2003 `.doc` is accepted. Nothing repairs its layout: Google's own
   import makes the document (`doc.py`), and the report says so (`doc_not_repaired`).
 - A file locked with a password (`.doc`, `.docx`, `.pptx`, `.xlsx`, `.xlsm`) is
