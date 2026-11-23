@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
-from workspace_toolkit.publisher_slides import KNOWN, list_requests, paragraph_style
+from workspace_toolkit.publisher_slides import (
+    KNOWN,
+    _laid,
+    list_requests,
+    paragraph_style,
+)
 
 from .test_publisher_slides import document, paragraph, planned, requests, text_box
 from .test_publisher_slides import run as text_run
@@ -157,3 +162,48 @@ def test_a_list_paragraphs_leading_tabs_are_left_out_before_ranges_are_counted()
         for r in requests(result, "updateParagraphStyle")
     ]
     assert paragraphs == [(0, 5), (6, 12), (13, 19)]
+
+
+def whole(text: str, **props: object) -> dict:
+    """A paragraph as the parser writes it, with a run of one size."""
+    names = {k.replace("_", ":", 1).replace("_", "-"): v for k, v in props.items()}
+    return {
+        "style": {},
+        "sourceProperties": names,
+        "runs": [{"items": [{"kind": "text", "value": text}], "style": {"fontSizePoints": 14}}],
+    }
+
+
+def ordered(text: str) -> dict:
+    return whole(
+        text,
+        librevenge_list_type="ordered",
+        librevenge_numbering_type="0",
+        librevenge_numbering_delimiter=str(2 << 16),
+    )
+
+
+def test_blank_lines_between_numbered_items_do_not_restart_the_numbering():
+    # Publisher writes a numbered item, then an empty numbered paragraph as the
+    # gap, and carries on counting. A list split at each gap shows 1. 1. 1.
+    paragraphs, laid = _laid(
+        [ordered("Tourism"), ordered(""), ordered("Oil"), ordered(""), ordered("Farming")]
+    )
+
+    assert ["".join(t for t, _ in p) for p in laid] == ["Tourism", "Oil", "Farming"]
+    requests, _ = list_requests(WHERE, paragraphs, laid)
+    assert ranges(requests) == [(0, 19, "NUMBERED_DIGIT_ALPHA_ROMAN")], "one list, not three"
+
+
+def test_the_gap_is_kept_as_space_below_the_item_before_it():
+    paragraphs, _ = _laid([ordered("Tourism"), ordered(""), ordered("Oil")])
+
+    style, fields, _ = paragraph_style(paragraphs[0])
+    assert style["spaceBelow"]["magnitude"] > 10
+    assert "spaceBelow" in fields
+
+
+def test_a_blank_line_after_the_last_item_is_not_folded():
+    paragraphs, laid = _laid([ordered("Tourism"), ordered(""), whole("After")])
+
+    assert ["".join(t for t, _ in p) for p in laid] == ["Tourism", "", "After"]

@@ -438,7 +438,55 @@ def _without_leading_tabs(pieces: list[tuple[str, dict]]) -> list[tuple[str, dic
     return out
 
 
+def _folded(paragraphs: list[dict]) -> list[dict]:
+    """Takes the empty list paragraphs out from between items of one list.
+
+    Publisher writes a gap in a numbered list as an empty paragraph that is
+    itself part of the list, and carries on counting after it. Slides numbers
+    an empty paragraph, or ends the list at it so the next item starts again at
+    1. The gap is kept as space below the item before it instead.
+    """
+    out: list[dict] = []
+    index = 0
+    while index < len(paragraphs):
+        paragraph = paragraphs[index]
+        out.append(paragraph)
+        index += 1
+        if not _list_of(paragraph) or not "".join(t for t, _ in paragraph_text(paragraph)):
+            continue
+        end = index
+        while (
+            end < len(paragraphs)
+            and _list_of(paragraphs[end])
+            and not "".join(t for t, _ in paragraph_text(paragraphs[end]))
+        ):
+            end += 1
+        following = paragraphs[end] if end < len(paragraphs) else None
+        if end == index or following is None or _list_of(following) is None:
+            continue
+        if not "".join(t for t, _ in paragraph_text(following)):
+            continue
+        gap = sum(_line(gap_paragraph) for gap_paragraph in paragraphs[index:end])
+        props = dict(paragraph.get("sourceProperties") or {})
+        props["fo:margin-bottom"] = (
+            f"{(length_points(props.get('fo:margin-bottom')) or 0.0) + gap}pt"
+        )
+        out[-1] = {**paragraph, "sourceProperties": props}
+        index = end
+    return out
+
+
+def _line(paragraph: dict) -> float:
+    """The height of an empty paragraph: one line of its own size."""
+    for run in paragraph.get("runs", []):
+        size = (run.get("style") or {}).get("fontSizePoints")
+        if size:
+            return round(float(size) * 1.2, 2)
+    return 14.0
+
+
 def _laid(paragraphs: list[dict]) -> tuple[list[dict], list[list[tuple[str, dict]]]]:
+    paragraphs = _folded(paragraphs)
     laid = [
         _without_leading_tabs(pieces) if _list_of(p) else pieces
         for p, pieces in ((p, paragraph_text(p)) for p in paragraphs)
@@ -498,6 +546,7 @@ def text_requests(
     cell: dict | None = None,
     fitted: Fit | None = None,
     extra: dict[int, tuple[float, float]] | None = None,
+    above: dict[int, float] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Insert the text, then style each run and paragraph by its range.
 
@@ -549,6 +598,12 @@ def text_requests(
         added = (extra or {}).get(number)
         if added:
             _indent(style, fields, *added)
+        lift = (above or {}).get(number)
+        if lift:
+            current = style.get("spaceAbove", {}).get("magnitude", 0.0)
+            style["spaceAbove"] = {"magnitude": round(current + lift, 4), "unit": "PT"}
+            if "spaceAbove" not in fields:
+                fields.append("spaceAbove")
         if fields:
             end = position if position > start else min(start + 1, total)
             requests.append(
@@ -911,8 +966,15 @@ def wordart_size(art, lines: list[str], family: str | None, frame: Frame) -> flo
     if family and measurable(family):
         one = Style(family, 1.0, art.bold, art.italic)
         widest = max(sum(advance(ch, one, 1.0) for ch in line) for line in lines)
-        if widest:
-            wide = (frame.width - 2 * INSET_X) * SAFETY / widest
+    else:
+        # A family that cannot be measured: letters average a little over half
+        # an em, wider in bold. Better a little small than wrapped onto a
+        # second line and over what is below it.
+        widest = max(len(line) for line in lines) * (0.68 if art.bold else 0.6)
+    if art.font and any(word in art.font.lower() for word in ("black", "heavy", "extra bold")):
+        widest *= 1.25  # drawn in a face wider than the one it was measured in
+    if widest:
+        wide = (frame.width - 2 * INSET_X) * SAFETY / widest
     size = min(tall, wide, art.size or float("inf"))
     return max(6.0, int(size * 2) / 2)
 
@@ -1038,6 +1100,7 @@ class PageBuilder:
             self.fonts,
             fitted=fitted,
             extra=wrapped.extra if wrapped else None,
+            above=wrapped.above if wrapped else None,
         )
         self.requests += text
         if fitted:
@@ -1583,7 +1646,9 @@ class PageBuilder:
         lines = [line for line in (clean(part) for part in art.text.split("\n")) if line]
         object_id = oid(element["id"])
         family = resolve_font(art.font, self.fonts) if art.font else None
-        size = wordart_size(art, lines, family, frame)
+        # Measured in the family Slides will draw it in, which for one it
+        # lacks is Arial, so its width is known.
+        size = wordart_size(art, lines, measured_as(art.font, self.fonts), frame)
         text = "\n".join(lines)
         style: dict = {
             "fontSize": {"magnitude": size, "unit": "PT"},
@@ -1809,11 +1874,45 @@ def probable_master(pages: list[dict]) -> set[str]:
     return {p[s] for p in per_page for s in shared}
 
 
+def _onto_page(page: dict, warnings: list[dict]) -> dict:
+    """Brings a text frame that starts above the page down to its top edge.
+
+    Publisher lets a frame hang off the page; a heading in it is then cut off at
+    the page's edge. The frame keeps its bottom and loses the part above.
+    """
+    moved = 0
+    elements = []
+    for element in page.get("elements", []):
+        bounds = element.get("bounds") or {}
+        top, height = bounds.get("y"), bounds.get("height")
+        if (
+            element.get("type") == "text"
+            and not element.get("rotationDegrees")
+            and top is not None
+            and height is not None
+            and top < 0 <= top + height - 20
+        ):
+            element = {**element, "bounds": {**bounds, "y": 0.0, "height": height + top}}
+            moved += 1
+        elements.append(element)
+    if not moved:
+        return page
+    warnings.append(
+        note(
+            "text-above-page",
+            f"{moved} text frame{'s' if moved > 1 else ''} started above the top of the page, "
+            "so it was moved down to the page edge to keep its first line visible.",
+        )
+    )
+    return {**page, "elements": elements}
+
+
 def plan(document: dict, prepared: Prepared, *, title: str, delete: Iterable[str] = ()) -> Plan:
     pages = [p for p in document.get("pages", []) if p.get("kind", "page") == "page"]
     if not pages:
         raise ValueError("the document has no pages")
     warnings: list[dict] = []
+    pages = [_onto_page(page, warnings) for page in pages]
     first = pages[0]
     width, height = first.get("width"), first.get("height")
     if not width or not height:

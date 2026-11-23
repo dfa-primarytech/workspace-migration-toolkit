@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from workspace_toolkit.publisher_fit import INSET_X, Para, Style
 from workspace_toolkit.publisher_slides import check, plan
-from workspace_toolkit.publisher_wrap import GAP, Obstacle, wrap
+from workspace_toolkit.publisher_wrap import GAP, Obstacle, _level, wrap
 
 from .test_publisher_slides import document, paragraph, pictures, report, requests, run, text_box
 from .test_publisher_slides import image as picture
@@ -85,3 +85,42 @@ def test_the_plan_indents_beside_pictures_in_front_and_ignores_those_behind(tmp_
     )
     codes = [n["code"] for n in report(result)["el_2"]["notes"]]
     assert "text-wrapped" in codes
+
+
+def test_a_paragraph_just_off_a_picture_is_still_kept_clear_of_it():
+    # Slides lays text a few points from where it was measured; a line left
+    # under a picture is lost, a line indented a little too much is not.
+    frog = Obstacle("frog", 300, 100, 395, 200)
+    assert _level(205.0, 220.0, frog), "starts 5 pt below the picture"
+    assert _level(80.0, 108.0, frog), "ends 8 pt into the picture"
+    assert not _level(230.0, 250.0, frog), "a line clear below it"
+
+
+def test_lines_beside_a_column_of_small_boxes_are_brought_level_with_them():
+    # Tick boxes drawn 32 pt apart beside lines that are 14 pt apart: each line
+    # is moved down to its box instead of drifting off it.
+    paras = [para("Using less triangles.") for _ in range(3)]
+    boxes = [Obstacle(f"tick{n}", 25, 40 + 32 * n, 56, 58 + 32 * n) for n in range(3)]
+    result = wrap(paras, BOX, boxes)
+
+    assert result is not None and result.above, "the lines were moved"
+    assert result.above[0] > 10 and result.above[1] > 10
+    assert all(0 < lift <= 40 for lift in result.above.values())
+
+
+def test_a_picture_is_never_treated_as_a_row_to_line_up_with():
+    paras = [para() for _ in range(6)]
+    result = wrap(paras, BOX, [Obstacle("photo", 300, 30, 395, 250)])
+
+    assert result is not None and result.above == {}
+
+
+def test_a_picture_in_the_middle_of_the_line_is_wrapped_on_the_side_with_room():
+    # About 60% of the line from the picture's left edge to the box's right: the
+    # text keeps to the left of it rather than running underneath.
+    paras = [para() for _ in range(8)]
+    middle = Obstacle("rating", 150, 100, 330, 140)
+    result = wrap(paras, BOX, [middle])
+
+    assert result is not None and result.around == ["rating"] and result.under == []
+    assert any(end > 0 and start == 0 for start, end in result.extra.values())

@@ -1099,6 +1099,7 @@ archive rather than growing this one further.
 
 ---
 
+
 ## Previous handoff
 
 - Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
@@ -1108,4 +1109,17 @@ archive rather than growing this one further.
 - Files changed: `docs.py` -- `_in_page_order` puts boxes anchored in one paragraph top to bottom, then left to right (they were in the order drawn); `_side_by_side`/`_replace_pair` keep two boxes that share a band of the page beside each other, as two cells of a borderless table, instead of stacking them. `test_docx_page_textbox.py` (5 new), `test_docx_sections.py` (one test's boxes moved apart so they do not pair).
 - Checks: platform tests pass; Ruff, format, mypy clean.
 - Unresolved: not yet confirmed in Google; the flow arrows are still floating shapes that Docs keeps unchanged (they no longer sit by their boxes); Word cannot open the converted file (empty drawing shells), so Word is no proxy here.
+- Next task: none claimed.
+
+---
+
+## Previous handoff
+
+- Agent: Claude Code (Claude Sonnet 5.5, platform/DOCX)
+- Date: 2026-11-10
+- Branch: `docx-flow-arrows`, based on main `624d1b5`.
+- Objective: after the flowchart fix (#201, live as revision 00013: right order, boxes side by side), the converted file was still 2 pages and its six flow arrows floated over the text of the boxes.
+- Files changed: `docs.py` -- `_flow_arrows`/`_mark_flow`: arrow and connector shapes anchored in a paragraph with text boxes are removed and shown as a small blue arrow in the blank line between one box (or pair) and the next; counted as `arrows` in the conversion report. The arrows between the two boxes of a pair are not kept. Tests added; one exact-report test gains `arrows: 0`.
+- Checks: platform tests pass; Ruff, format, mypy clean.
+- Unresolved: not yet confirmed in Google; the page count may still be 2 (box heights and spacing); a diagonal connector becomes a plain down arrow.
 - Next task: none claimed.

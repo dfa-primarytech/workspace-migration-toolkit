@@ -28,8 +28,13 @@ from dataclasses import dataclass, field, replace
 
 from .publisher_fit import INSET_X, INSET_Y, Fit, Para, fit, layout
 
-GAP = 3.6  # points between text and a picture it wraps around
-MAX_SHARE = 0.6  # of the line: a picture needing more is not wrapped around
+GAP = 8.0  # points between text and a picture it wraps around
+# Slides lays a paragraph a few points off where it was measured, more the
+# further down the box it is, so a paragraph within this much of a picture's
+# top or bottom is treated as level with it: a line indented too much costs
+# little, a line left under a picture is lost.
+LEVEL_SLACK = 14.0
+MAX_SHARE = 0.75  # of the line: a picture needing more is not wrapped around
 ROUNDS = 5
 
 
@@ -50,6 +55,7 @@ class Wrapped:
     fitted: Fit | None
     around: list[str] = field(default_factory=list)  # obstacles the text keeps clear of
     under: list[str] = field(default_factory=list)  # obstacles too wide to keep clear of
+    above: dict[int, float] = field(default_factory=dict)  # paragraph → space added above it
 
 
 def _indented(paras: list[Para], extra: dict[int, tuple[float, float]]) -> list[Para]:
@@ -92,16 +98,19 @@ def wrap(
     x, y, width, height = box
     inner_left, inner_right = x + INSET_X, x + width - INSET_X
     line = inner_right - inner_left
-    middle = (inner_left + inner_right) / 2
     sides: list[tuple[Obstacle, float, float]] = []
     wide: list[Obstacle] = []
     for o in obstacles:
         if o.right <= inner_left or o.left >= inner_right or o.bottom <= y or o.top >= y + height:
             continue  # not over this text
-        if (o.left + o.right) / 2 >= middle:
-            start, end = 0.0, max(0.0, inner_right - o.left + GAP)
+        # The text goes on the side with more room, which for a picture in the
+        # middle of the line is not always the side its centre is on.
+        on_right = max(0.0, inner_right - o.left + GAP)
+        on_left = max(0.0, o.right - inner_left + GAP)
+        if on_right <= on_left:
+            start, end = 0.0, on_right
         else:
-            start, end = max(0.0, o.right - inner_left + GAP), 0.0
+            start, end = on_left, 0.0
         if max(start, end) > line * MAX_SHARE:
             wide.append(o)
         else:
@@ -156,9 +165,73 @@ def wrap(
     )
     beside = [o.element_id for o, _, _ in sides if any(_level(t, b, o) for t, b in where)]
     over = [o.element_id for o in wide if any(_level(t, b, o) for t, b in where)]
-    return Wrapped(extra, fitted, beside, over)
+    lifts = _aligned(paras, extra, [o for o, _, _ in sides], line, fitted, y + INSET_Y)
+    if lifts:
+        with_space = _spaced(_indented(paras, extra), lifts)
+        again = fit(with_space, width, height)
+        # Only if the text still fits as it did: the rows are not worth smaller type.
+        if again is not None and fitted is not None and again.scale >= fitted.scale:
+            fitted = again
+        else:
+            lifts = {}
+    return Wrapped(extra, fitted, beside, over, lifts)
+
+
+def _spaced(paras: list[Para], lifts: dict[int, float]) -> list[Para]:
+    return [
+        replace(para, space_above=para.space_above + lifts.get(index, 0.0))
+        for index, para in enumerate(paras)
+    ]
+
+
+MAX_LIFT = 40.0  # points of space added above one line to bring it level with its box
+SMALL = 1.8  # a box this many lines tall or less is a tick box or a label, not a picture
+
+
+def _aligned(
+    paras: list[Para],
+    extra: dict[int, tuple[float, float]],
+    obstacles: list[Obstacle],
+    line: float,
+    fitted: Fit | None,
+    top: float,
+) -> dict[int, float]:
+    """Space above each line that sits beside a small box, to put it level with the box.
+
+    Publisher moves a line down to clear a box it wraps around; boxes drawn
+    one under another a little further apart than the lines are (tick boxes
+    down the side of a list) leave their lines drifting off them in Slides.
+    Each box takes one line, and a line is moved by at most MAX_LIFT.
+    """
+    lifts: dict[int, float] = {}
+    used: set[str] = set()
+    spacing = fitted.line_spacing if fitted else None
+    scale = fitted.scale if fitted else 1.0
+    for index in range(len(paras)):
+        laid = _spaced(_indented(paras, extra), lifts)
+        where = spans(laid, line, spacing, scale, top)
+        start, end = where[index]
+        height = end - start - laid[index].space_above
+        level = sorted(
+            (
+                o
+                for o in obstacles
+                if o.element_id not in used and _level(start + laid[index].space_above, end, o)
+            ),
+            key=lambda o: o.top,
+        )
+        if not level or height <= 0:
+            continue
+        o = level[0]
+        if o.bottom - o.top > SMALL * height:
+            continue
+        used.add(o.element_id)  # one line to a box
+        gap = o.top - (start + laid[index].space_above)
+        if 2.0 < gap <= MAX_LIFT:
+            lifts[index] = round(gap, 1)
+    return lifts
 
 
 def _level(top: float, bottom: float, o: Obstacle) -> bool:
     """Whether a paragraph from `top` to `bottom` is level with the obstacle."""
-    return top < o.bottom + GAP and bottom > o.top - GAP
+    return top < o.bottom + LEVEL_SLACK and bottom > o.top - LEVEL_SLACK
