@@ -1045,6 +1045,7 @@ archive rather than growing this one further.
 
 ---
 
+
 ## Previous handoff
 
 - Agent: Claude Code (Claude Sonnet 5.5, platform/PPTX)
@@ -1078,3 +1079,19 @@ archive rather than growing this one further.
   - A request Google refuses fails a whole batch, so a new request kind is tried against the live API first: this one was.
   - Windows on this PC blocks newly created virtual-environment python executables; tests were run on the base Python 3.14 with the packages on its path.
 
+---
+
+## Previous handoff
+
+- Agent: Claude Code (Claude Sonnet 5.5, platform/PPTX)
+- Date: 2026-10-21
+- Branch: `hosted-animation-video`, based on main `1fce024`.
+- Objective: the hosted conversion records heavy animations and wraps sounds itself, so staff no longer need to run anything.
+- Files changed:
+  - `animation_video.py`: `hosted_enabled()` (on unless `WMT_HOSTED_ANIMATION=off`, and only where ffmpeg exists) and `record_hosted()` (the heaviest 3 slides, each at most 120 s of video, 240 s in all; slides beyond 3 are named in a warning; never raises).
+  - `google.convert`: after the embedded videos, records animations (`report["animationVideos"]`) and wraps sounds (`report["soundVideos"]`, skipping slides given a video). Each step is non-fatal.
+  - `pyproject.toml`, both lock files: `imageio-ffmpeg==0.6.0`, whose wheel carries a static ffmpeg (about 60 MB on the image).
+  - Tests: `test_hosted_animation.py` (3), five more in `test_animation_video.py`; `conftest.py` switches recording off for every other test.
+- Checks: 926 platform tests pass; Ruff, format, mypy clean.
+- Unresolved: not yet run against live Google through the deployed service; the Docker build with ffmpeg not yet checked; the wrapped-sound and animation videos are private to their owner (viewers need access); the cost of recording lands on Cloud Run (about 45 s of 2 vCPU for a 77 s slide), kept bounded by the caps above. `WMT_HOSTED_ANIMATION=off` is the switch if the bill needs it.
+- Next task: none claimed.

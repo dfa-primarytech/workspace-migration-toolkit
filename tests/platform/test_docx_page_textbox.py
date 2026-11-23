@@ -212,6 +212,63 @@ def test_a_side_by_side_pair_never_overflows_the_text_width():
     assert grid_total(layout) <= 9026
 
 
+ARROW = (
+    '<a:graphic><a:graphicData uri="x"><wps:wsp><wps:spPr>'
+    '<a:prstGeom prst="{shape}"/></wps:spPr></wps:wsp></a:graphicData></a:graphic>'
+)
+
+
+def arrow_between(shape="downArrow"):
+    return run(
+        ARROW.format(shape=shape),
+        h=("column", offset(0)),
+        v=("paragraph", offset(2000000)),
+        cx=300000,
+        cy=300000,
+    )
+
+
+def spacers(root):
+    """The text of each paragraph that sits directly between two tables."""
+    body = list(root.find(q("w", "body")))
+    return [
+        words(body[i]).strip()
+        for i in range(1, len(body) - 1)
+        if local(body[i].tag) == "p"
+        and local(body[i - 1].tag) == "tbl"
+        and local(body[i + 1].tag) == "tbl"
+    ]
+
+
+def test_a_flow_arrow_becomes_an_arrow_between_the_boxes_it_joined():
+    root = parse_xml(
+        document(
+            para(
+                side_by_side("UPPER", 1000000, 0),
+                arrow_between(),
+                side_by_side("LOWER", 3000000, 0),
+            )
+            + PAGE_PARAGRAPH
+        )
+    )
+    transform(root)
+
+    assert spacers(root) == ["▼"]
+    assert not list(root.iter(q("wp", "anchor"))), "the floating arrow is gone"
+
+
+def test_a_page_without_arrows_keeps_blank_spacers():
+    root = parse_xml(
+        document(
+            para(side_by_side("UPPER", 1000000, 0), side_by_side("LOWER", 3000000, 0))
+            + PAGE_PARAGRAPH
+        )
+    )
+    transform(root)
+
+    assert spacers(root) == [""]
+
+
 # --- a box inside a page-sized box ---------------------------------------
 
 BLACK = "<a:solidFill><a:srgbClr val='000000'/></a:solidFill>"
