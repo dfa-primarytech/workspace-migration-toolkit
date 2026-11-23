@@ -199,6 +199,18 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
     partner = _side_by_side(items, sections, absorbed)
     paired: set[int] = set()
     arrows = _flow_arrows(items)
+    # A box drawn with others, or with the arrows between them, is part of a
+    # flow: it stays in the text so the arrow lines and pairs keep their place.
+    # A floating one would be placed by Docs on its own, apart from them.
+    flowing = {
+        paragraph
+        for paragraph, count in Counter(
+            id(item.paragraph)
+            for item in items
+            if (item.kind == "textbox" or id(item) in arrows) and item.paragraph is not None
+        ).items()
+        if count > 1
+    }
     for item in items:
         if id(item) in absorbed or id(item) in paired:
             continue  # carried into a page-sized box, or already in a pair
@@ -223,7 +235,16 @@ def replace_anchors(root: Element, ids: Ids, fallback: Element | None = None) ->
             # four text boxes were converted, when four empty boxes were
             # skipped, describes work that did not happen.
             inside = panels.get(id(item), [])
-            if _replace_textbox(parent_of, item, ids, placed, inside, sections, first_paragraph):
+            if _replace_textbox(
+                parent_of,
+                item,
+                ids,
+                placed,
+                inside,
+                sections,
+                first_paragraph,
+                inline=id(item.paragraph) in flowing,
+            ):
                 report["textboxes"] += 1 + len(inside)
             else:
                 # The page-sized box held nothing, so its panels are boxes in
@@ -530,6 +551,7 @@ def _replace_textbox(
     inside: list[Anchored] | None = None,
     sections: Sections | None = None,
     first_paragraph: Element | None = None,
+    inline: bool = False,
 ) -> bool:
     paragraph = item.paragraph
     _detach(item.drawing, item.anchor)
@@ -538,7 +560,11 @@ def _replace_textbox(
     container = parent_of.get(paragraph)
     if container is None:
         return False
-    table = build_table(item, ids)
+    if inline and sections is not None and item.extent:
+        room = _text_width_dxa(sections, item)
+        table = build_table(item, ids, fit=room, indent=0)
+    else:
+        table = build_table(item, ids)
     if table is None:
         # An empty box, or one with no content to move. Nothing was converted,
         # and the report must not claim otherwise.
