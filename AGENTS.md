@@ -16,3 +16,6 @@ BACKLOG.md. Append architectural decisions to DECISIONS.md; record superseding
 entries rather than rewriting old decisions. Handoff must include agent, date,
 branch/commit, objective, changed files, work completed, checks/results, known
 failures, unresolved questions, decisions, next task and warnings.
+When a change alters what staff see or which files convert, add an entry to
+app/workspace_toolkit/patch_notes.py in the same pull request (plain words, newest first):
+it is the public /whats-new page.
