@@ -10,7 +10,7 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 
@@ -22,6 +22,7 @@ from .jobs import preflight, workspace
 from .model import Compatibility as C
 from .model import warning
 from .package import validate_upload_name
+from .patch_notes import render as patch_notes_page
 from .pipelines import describe, resolve
 
 logger = logging.getLogger("workspace_toolkit")
@@ -197,6 +198,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/privacy")
     async def privacy():
         return FileResponse(STATIC / "privacy.html")
+
+    # What has changed, for staff checking whether their problem was fixed.
+    @app.get("/whats-new")
+    async def whats_new():
+        return HTMLResponse(patch_notes_page())
 
     @app.get("/api/session")
     async def session(request: Request):

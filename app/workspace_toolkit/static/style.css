@@ -36,3 +36,9 @@ li{margin-bottom:8px}
 .policy li { margin: .4rem 0; }
 
 .password { margin-left: .5rem; padding: .25rem .5rem; max-width: 14rem; }
+
+.notes { list-style: none; padding: 0; }
+.notes li { margin: .6rem 0; }
+.kind { display: inline-block; min-width: 3.4rem; padding: .05rem .5rem; margin-right: .35rem; border-radius: .6rem; font-size: .75rem; font-weight: 600; text-align: center; background: #e8eaed; color: #202124; }
+.kind.new { background: #d2e3fc; color: #174ea6; }
+.kind.fixed { background: #ceead6; color: #0d652d; }
