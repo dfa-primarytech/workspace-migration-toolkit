@@ -31,7 +31,11 @@ for patch in "$HERE"/patches/*.patch; do
   echo "applying $(basename "$patch")"
   patch -p1 --fuzz=0 < "$patch"
 done
+# -include cstdint: 0.1.4 uses int64_t in several files (Coordinate.h among
+# them) without including <cstdint>. Older GCC got it transitively; GCC 14+
+# (GitHub's current ubuntu runner) does not. Forcing the include covers every
+# file, so no header-by-header patch is needed as compilers tighten.
 ./configure --prefix="$PREFIX" --disable-static --disable-tools --without-docs \
-  --disable-werror CXXFLAGS="-O2 -g0"
+  --disable-werror CXXFLAGS="-O2 -g0 -include cstdint"
 make -j"$(nproc)"
 make install
